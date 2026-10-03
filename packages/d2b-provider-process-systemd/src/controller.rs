@@ -11,7 +11,10 @@ use d2b_process_conformance::{
 use crate::{SystemdProcessProvider, lifecycle::SystemdProviderConfig};
 
 /// One typed reconcile request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// `Eq` is not derived: a `LaunchTicket` now carries a resolved execution
+// plan, which is compared for identity but is not a total-equality type, and
+// this action enum is only ever compared, never used as a key.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SystemdReconcileAction<'a> {
     /// Start a new transient unit through the effect port.
     Start(&'a LaunchTicket),

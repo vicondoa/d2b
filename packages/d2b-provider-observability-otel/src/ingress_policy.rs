@@ -13,6 +13,10 @@ use crate::metric_policy::{
     validate_resource_attributes,
 };
 use d2b_contracts_provider::v3::{TelemetryFrame, TelemetrySignal};
+use d2b_contracts_resource::v3::{
+    AdmissionStage, BindingAuthorization, BindingEvidence, BindingKey, BindingKind,
+    BindingRefusal, FreshnessTuple, RefusalReason, ResourceRef,
+};
 
 /// Maximum frame bytes accepted before policy evaluation.
 pub const MAX_INGRESS_FRAME_BYTES: usize = d2b_contracts_provider::v3::MAX_TELEMETRY_FRAME_BYTES;
@@ -107,6 +111,416 @@ pub enum IngressOutcome {
     /// The stream was quarantined after a policy failure.
     Quarantined,
 }
+
+/// The typed source relationship one telemetry delivery rides on.
+///
+/// Telemetry is a consumer, never an authority: a frame reaches the collector
+/// over a relationship a source provider already admitted. The closed set
+/// names the three primitive binding kinds this Provider consumes, so no
+/// other resource can carry a delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DeliverySource {
+    /// The exact `Endpoint` the producer may submit to.
+    Endpoint,
+    /// The `Network` whose fabric the producer's egress rides.
+    Network,
+    /// The `Credential` the exporter authenticates with.
+    Credential,
+}
+
+impl DeliverySource {
+    /// Every delivery source, in contract order.
+    pub const ALL: [Self; 3] = [Self::Endpoint, Self::Network, Self::Credential];
+
+    /// The binding kind this source is admitted as.
+    const fn kind(self) -> BindingKind {
+        match self {
+            Self::Endpoint => BindingKind::Endpoint,
+            Self::Network => BindingKind::Network,
+            Self::Credential => BindingKind::Credential,
+        }
+    }
+
+    /// The stable lower-kebab name used in diagnostics.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Endpoint => "endpoint",
+            Self::Network => "network",
+            Self::Credential => "credential",
+        }
+    }
+}
+
+/// One refused telemetry delivery, naming the resource and the enforcing
+/// stage.
+///
+/// The refusal is a stage plus a field-free reason; the resource travels
+/// beside it, never inside it. No frame content, label value, socket path, or
+/// credential byte is reachable from here (R42).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryRefusal {
+    resource: ResourceRef,
+    source: DeliverySource,
+    refusal: BindingRefusal,
+}
+
+impl DeliveryRefusal {
+    /// Construct a refusal for one relationship.
+    pub const fn new(
+        resource: ResourceRef,
+        source: DeliverySource,
+        refusal: BindingRefusal,
+    ) -> Self {
+        Self {
+            resource,
+            source,
+            refusal,
+        }
+    }
+
+    /// Borrow the exact relationship that was refused.
+    pub const fn resource(&self) -> &ResourceRef {
+        &self.resource
+    }
+
+    /// Return the refused delivery source.
+    pub const fn source(&self) -> DeliverySource {
+        self.source
+    }
+
+    /// Borrow the typed refusal carrying the stage and reason.
+    pub const fn refusal(&self) -> &BindingRefusal {
+        &self.refusal
+    }
+
+    /// Return the enforcing stage.
+    pub const fn stage(&self) -> AdmissionStage {
+        self.refusal.stage()
+    }
+
+    /// Return the typed reason.
+    pub const fn reason(&self) -> RefusalReason {
+        self.refusal.reason()
+    }
+}
+
+/// The stable lower-kebab spelling of an enforcing stage.
+///
+/// The contract's own serializations are the source; this only renders the
+/// value an operator reads, so a diagnostic names the stage in the same
+/// vocabulary the wire and the refusal reason use.
+const fn stage_spelling(stage: AdmissionStage) -> &'static str {
+    match stage {
+        AdmissionStage::Normalize => "normalize",
+        AdmissionStage::Authorize => "authorize",
+        AdmissionStage::Admit => "admit",
+        AdmissionStage::Reserve => "reserve",
+        AdmissionStage::Prepare => "prepare",
+        AdmissionStage::Activate => "activate",
+        AdmissionStage::Revoke => "revoke",
+        AdmissionStage::Drain => "drain",
+        AdmissionStage::Release => "release",
+        AdmissionStage::Recover => "recover",
+    }
+}
+
+/// The stable lower-kebab spelling of a typed refusal reason.
+const fn reason_spelling(reason: RefusalReason) -> &'static str {
+    match reason {
+        RefusalReason::PolicySelectionNotAuthorized => "policy-selection-not-authorized",
+        RefusalReason::RequiredNamespaceNotAdmitted => "required-namespace-not-admitted",
+        RefusalReason::RequiredCapabilityOutsideCeiling => "required-capability-outside-ceiling",
+        RefusalReason::RestrictionWeakened => "restriction-weakened",
+        RefusalReason::IdentityNotAuthorized => "identity-not-authorized",
+        RefusalReason::MandatoryFacetUnsupported => "mandatory-facet-unsupported",
+        RefusalReason::SeccompIncompatible => "seccomp-incompatible",
+        RefusalReason::LimitExceedsCeiling => "limit-exceeds-ceiling",
+        RefusalReason::EmergencyReductionActive => "emergency-reduction-active",
+        RefusalReason::TargetSupportMissing => "target-support-missing",
+        RefusalReason::ConflictingDeclaration => "conflicting-declaration",
+        RefusalReason::SourcePolicyRefused => "source-policy-refused",
+        RefusalReason::StaleAuthority => "stale-authority",
+        RefusalReason::StoreIncarnationMismatch => "store-incarnation-mismatch",
+        RefusalReason::UnprovenEffect => "unproven-effect",
+        RefusalReason::UntrustedImplementation => "untrusted-implementation",
+    }
+}
+
+impl core::fmt::Display for DeliveryRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            formatter,
+            "telemetry {} binding for {} refused at {} ({})",
+            self.source.as_str(),
+            self.resource.to_canonical_string(),
+            stage_spelling(self.stage()),
+            reason_spelling(self.reason())
+        )
+    }
+}
+
+impl std::error::Error for DeliveryRefusal {}
+
+/// The admitted relationships one telemetry route's delivery rides on.
+///
+/// A route holds the [`BindingEvidence`] a source provider minted. It has no
+/// constructor from desired fields, a resource name, a socket path, or a
+/// service-catalog row, so no observability-side value can manufacture
+/// delivery authority: `BindingEvidence` is only reachable from an admission
+/// `admit_binding_request` produced, which itself requires the authorization
+/// grant, the source's own scoped decision, and the selected realization's
+/// declared support.
+///
+/// The route is pinned to the one transport the endpoint owner admitted the
+/// relationship over, so a frame presented on any other transport is refused:
+/// stopping one relationship never silently resumes another.
+///
+/// Revocation is a lifecycle transition, not a flag a caller clears. Once a
+/// relationship stops admitting new use, or its admitted dependencies stop
+/// matching observed evidence, the route refuses delivery outright.
+#[derive(Debug, Clone)]
+pub struct DeliveryRoute {
+    resource: ResourceRef,
+    ingress: Ingress,
+    evidence: BTreeMap<DeliverySource, BindingEvidence>,
+    revoked: BTreeSet<DeliverySource>,
+}
+
+impl DeliveryRoute {
+    /// Construct a route from the evidence a source provider admitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`DeliveryRefusal`] at `Admit` with
+    /// [`RefusalReason::SourcePolicyRefused`] when the evidence's binding is
+    /// not the delivery source's own kind, and one at `Authorize` with
+    /// [`RefusalReason::IdentityNotAuthorized`] when no endpoint relationship
+    /// is present, because a route with no admitted endpoint is a route with
+    /// no delivery.
+    pub fn new(
+        resource: ResourceRef,
+        ingress: Ingress,
+        evidence: impl IntoIterator<Item = (DeliverySource, BindingEvidence)>,
+    ) -> Result<Self, DeliveryRefusal> {
+        let mut admitted = BTreeMap::new();
+        for (source, evidence) in evidence {
+            if evidence.key().kind() != source.kind() {
+                return Err(DeliveryRefusal::new(
+                    resource.clone(),
+                    source,
+                    BindingRefusal::new(AdmissionStage::Admit, RefusalReason::SourcePolicyRefused),
+                ));
+            }
+            admitted.insert(source, evidence);
+        }
+        if !admitted.contains_key(&DeliverySource::Endpoint) {
+            return Err(DeliveryRefusal::new(
+                resource,
+                DeliverySource::Endpoint,
+                BindingRefusal::new(AdmissionStage::Authorize, RefusalReason::IdentityNotAuthorized),
+            ));
+        }
+        Ok(Self {
+            resource,
+            ingress,
+            evidence: admitted,
+            revoked: BTreeSet::new(),
+        })
+    }
+
+    /// Construct a route whose endpoint relationship is already admitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same refusals as [`DeliveryRoute::new`]: the endpoint
+    /// evidence must be an admitted `EndpointBinding`, and any network or
+    /// credential relationship must match its own kind.
+    pub fn for_endpoint(
+        resource: ResourceRef,
+        ingress: Ingress,
+        endpoint: BindingEvidence,
+    ) -> Result<Self, DeliveryRefusal> {
+        Self::new(resource, ingress, [(DeliverySource::Endpoint, endpoint)])
+    }
+
+    /// Return the exact resource this route delivers for.
+    pub const fn resource(&self) -> &ResourceRef {
+        &self.resource
+    }
+
+    /// The one transport this route's delivery is admitted over.
+    pub const fn ingress(&self) -> Ingress {
+        self.ingress
+    }
+
+    /// Borrow the admitted evidence for one delivery source.
+    pub fn evidence(&self, source: DeliverySource) -> Option<&BindingEvidence> {
+        self.evidence.get(&source)
+    }
+
+    /// The credential relationship this route authenticates with.
+    pub fn credential(&self) -> Option<&BindingEvidence> {
+        self.evidence(DeliverySource::Credential)
+    }
+
+    /// The network relationship this route's egress rides.
+    pub fn network(&self) -> Option<&BindingEvidence> {
+        self.evidence(DeliverySource::Network)
+    }
+
+    /// The endpoint binding key this route delivers over.
+    pub fn endpoint_key(&self) -> Option<&BindingKey> {
+        self.evidence(DeliverySource::Endpoint)
+            .map(BindingEvidence::key)
+    }
+
+    /// Revoke one relationship's delivery.
+    ///
+    /// The relationship stays revoked for as long as the route lives: the
+    /// route keeps naming the source it lost rather than forgetting it, so a
+    /// revocation of any one relationship stops delivery instead of quietly
+    /// narrowing the fence to whatever is left. It is not re-derived from a
+    /// different source.
+    pub fn revoke(&mut self, source: DeliverySource) {
+        self.evidence.remove(&source);
+        self.revoked.insert(source);
+    }
+
+    /// The sources whose delivery was revoked.
+    pub fn revoked_sources(&self) -> impl Iterator<Item = DeliverySource> + '_ {
+        self.revoked.iter().copied()
+    }
+
+    /// Refuse a frame presented on a transport this route is not admitted
+    /// over.
+    ///
+    /// This is the fallback refusal: a stopped relationship stays stopped, and
+    /// re-presenting the same producer elsewhere is refused at `Admit` rather
+    /// than silently routed somewhere delivery still works.
+    pub fn channel_refusal(&self, ingress: Ingress) -> Option<DeliveryRefusal> {
+        (ingress != self.ingress).then(|| {
+            DeliveryRefusal::new(
+                self.resource.clone(),
+                DeliverySource::Endpoint,
+                BindingRefusal::new(AdmissionStage::Admit, RefusalReason::SourcePolicyRefused),
+            )
+        })
+    }
+
+    /// Whether every admitted relationship still admits new use against the
+    /// observed dependency evidence.
+    ///
+    /// A relationship whose lifecycle left `admits_new_use`, or whose
+    /// dependencies no longer match observed evidence, fails the check: cached
+    /// readiness cannot remint access.
+    pub fn admits_new_use(&self, observed: &[FreshnessTuple]) -> bool {
+        self.refusal(observed).is_none()
+    }
+
+    /// The stage and reason this route refuses delivery, if it refuses.
+    ///
+    /// A route with no admitted endpoint is refused at `Authorize`; a
+    /// relationship that stopped admitting new use is refused at `Revoke`; a
+    /// relationship whose dependencies moved is refused at `Reserve`.
+    pub fn refusal(&self, observed: &[FreshnessTuple]) -> Option<DeliveryRefusal> {
+        // A revoked source is checked before the survivors, so revoking any
+        // one relationship stops the route rather than leaving it delivering
+        // over whatever admission is still held.
+        if let Some(source) = self.revoked.iter().next().copied() {
+            return Some(DeliveryRefusal::new(
+                self.resource.clone(),
+                source,
+                BindingRefusal::new(AdmissionStage::Revoke, RefusalReason::StaleAuthority),
+            ));
+        }
+        let Some(endpoint) = self.evidence.get(&DeliverySource::Endpoint) else {
+            return Some(DeliveryRefusal::new(
+                self.resource.clone(),
+                DeliverySource::Endpoint,
+                BindingRefusal::new(AdmissionStage::Authorize, RefusalReason::IdentityNotAuthorized),
+            ));
+        };
+        if !endpoint.state().admits_new_use() {
+            return Some(DeliveryRefusal::new(
+                self.resource.clone(),
+                DeliverySource::Endpoint,
+                BindingRefusal::new(AdmissionStage::Revoke, RefusalReason::StaleAuthority),
+            ));
+        }
+        if !endpoint.is_current(observed) {
+            return Some(DeliveryRefusal::new(
+                self.resource.clone(),
+                DeliverySource::Endpoint,
+                BindingRefusal::new(AdmissionStage::Reserve, RefusalReason::UnprovenEffect),
+            ));
+        }
+        for (source, evidence) in &self.evidence {
+            if !evidence.state().admits_new_use() {
+                return Some(DeliveryRefusal::new(
+                    self.resource.clone(),
+                    *source,
+                    BindingRefusal::new(AdmissionStage::Revoke, RefusalReason::StaleAuthority),
+                ));
+            }
+            if !evidence.is_current(observed) {
+                return Some(DeliveryRefusal::new(
+                    self.resource.clone(),
+                    *source,
+                    BindingRefusal::new(AdmissionStage::Reserve, RefusalReason::UnprovenEffect),
+                ));
+            }
+        }
+        None
+    }
+
+    /// The closed, redacted status projection this route publishes.
+    ///
+    /// It names the resource, the source, the enforcing stage, and the
+    /// reason. It carries no frame content, no socket path, and no credential
+    /// byte.
+    pub fn status(&self, observed: &[FreshnessTuple]) -> DeliveryStatus {
+        match self.refusal(observed) {
+            None => DeliveryStatus {
+                resource: self.resource.to_canonical_string(),
+                source: DeliverySource::Endpoint.as_str().to_owned(),
+                stage: None,
+                reason: None,
+                admitting: true,
+            },
+            Some(refusal) => DeliveryStatus {
+                resource: refusal.resource.to_canonical_string(),
+                source: refusal.source.as_str().to_owned(),
+                stage: Some(refusal.stage()),
+                reason: Some(refusal.reason()),
+                admitting: false,
+            },
+        }
+    }
+}
+
+/// The bounded, redacted delivery status one route publishes.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryStatus {
+    /// The exact resource the route delivers for.
+    pub resource: String,
+    /// The refused or admitted delivery source.
+    pub source: String,
+    /// The enforcing stage, when the route refuses.
+    pub stage: Option<AdmissionStage>,
+    /// The typed reason, when the route refuses.
+    pub reason: Option<RefusalReason>,
+    /// Whether the route still admits new delivery.
+    pub admitting: bool,
+}
+
+/// The authorization evidence a delivery route is admitted against.
+///
+/// This is the shared contract's own type under the name the observability
+/// Provider uses, so a route's authority is visibly the same
+/// [`BindingAuthorization`] every other primitive binding is admitted with and
+/// cannot be substituted for a local boolean.
+pub type DeliveryAuthorization = BindingAuthorization;
 
 /// Clock used for injected quarantine expiry tests.
 pub trait IngressClock: Send + Sync {
@@ -275,58 +689,87 @@ impl Default for IngressPolicyGate {
 
 impl IngressPolicyGate {
     /// Admit one raw shared frame before any queue mutation or eviction.
+    ///
+    /// The transport is not a parameter: the route carries the one transport
+    /// its endpoint owner admitted the relationship over, so a caller cannot
+    /// present a frame on a channel the route was never admitted for.
+    ///
+    /// # Errors
+    ///
+    /// Returns the route's [`DeliveryRefusal`] when any admitted relationship
+    /// no longer admits new use against `observed`. Delivery stops there: the
+    /// frame is not re-presented on another transport.
     pub fn admit_raw(
         &mut self,
-        ingress: Ingress,
+        route: &DeliveryRoute,
+        observed: &[FreshnessTuple],
         connection_id: u64,
         bytes: &[u8],
-    ) -> (IngressOutcome, IngressErrorClass) {
+    ) -> Result<(IngressOutcome, IngressErrorClass), DeliveryRefusal> {
+        if let Some(refusal) = route.refusal(observed) {
+            return Err(refusal);
+        }
+        let ingress = route.ingress();
         self.prune_expired();
         if bytes.len() > MAX_INGRESS_FRAME_BYTES {
-            return self.reject(ingress, connection_id, IngressErrorClass::Oversize);
+            return Ok(self.reject(ingress, connection_id, IngressErrorClass::Oversize));
         }
         let frame = match d2b_contracts_provider::v3::validate_raw_frame(bytes) {
             Ok(frame) => frame,
-            Err(_) => return self.reject(ingress, connection_id, IngressErrorClass::Malformed),
+            Err(_) => {
+                return Ok(self.reject(ingress, connection_id, IngressErrorClass::Malformed));
+            }
         };
-        self.admit_parsed_inner(ingress, connection_id, &frame, bytes.len())
+        self.admit_parsed_inner(route, observed, connection_id, &frame, bytes.len())
     }
 
     /// Admit one previously parsed and validated shared frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns the route's [`DeliveryRefusal`] under the same conditions as
+    /// [`IngressPolicyGate::admit_raw`].
     pub fn admit_parsed(
         &mut self,
-        ingress: Ingress,
+        route: &DeliveryRoute,
+        observed: &[FreshnessTuple],
         connection_id: u64,
         frame: &TelemetryFrame,
         encoded_bytes: usize,
-    ) -> (IngressOutcome, IngressErrorClass) {
+    ) -> Result<(IngressOutcome, IngressErrorClass), DeliveryRefusal> {
+        if let Some(refusal) = route.refusal(observed) {
+            return Err(refusal);
+        }
         self.prune_expired();
-        self.admit_parsed_inner(ingress, connection_id, frame, encoded_bytes)
+        self.admit_parsed_inner(route, observed, connection_id, frame, encoded_bytes)
     }
 
     fn admit_parsed_inner(
         &mut self,
-        ingress: Ingress,
+        route: &DeliveryRoute,
+        observed: &[FreshnessTuple],
         connection_id: u64,
         frame: &TelemetryFrame,
         encoded_bytes: usize,
-    ) -> (IngressOutcome, IngressErrorClass) {
+    ) -> Result<(IngressOutcome, IngressErrorClass), DeliveryRefusal> {
+        let ingress = route.ingress();
         if encoded_bytes > MAX_INGRESS_FRAME_BYTES {
-            return self.reject(ingress, connection_id, IngressErrorClass::Oversize);
+            return Ok(self.reject(ingress, connection_id, IngressErrorClass::Oversize));
         }
         if frame.signal == TelemetrySignal::Metric {
             let Some(metric) = metric_frame_from_raw(frame, encoded_bytes) else {
-                return self.reject(ingress, connection_id, IngressErrorClass::Malformed);
+                return Ok(self.reject(ingress, connection_id, IngressErrorClass::Malformed));
             };
             return self.admit_for_connection(
-                ingress,
+                route,
+                observed,
                 connection_id,
                 &metric,
                 &IdentityCanaries::default(),
                 true,
             );
         }
-        (IngressOutcome::Accepted, IngressErrorClass::None)
+        Ok((IngressOutcome::Accepted, IngressErrorClass::None))
     }
 
     /// Construct a policy gate with an injected clock.
@@ -360,14 +803,20 @@ impl IngressPolicyGate {
     }
 
     /// Admit a complete frame before queue/capacity accounting.
+    ///
+    /// # Errors
+    ///
+    /// Returns the route's [`DeliveryRefusal`] under the same conditions as
+    /// [`IngressPolicyGate::admit_raw`].
     pub fn admit(
         &mut self,
-        ingress: Ingress,
+        route: &DeliveryRoute,
+        observed: &[FreshnessTuple],
         frame: &MetricFrame,
         canaries: &IdentityCanaries,
         capacity_available: bool,
-    ) -> (IngressOutcome, IngressErrorClass) {
-        self.admit_for_connection(ingress, 0, frame, canaries, capacity_available)
+    ) -> Result<(IngressOutcome, IngressErrorClass), DeliveryRefusal> {
+        self.admit_for_connection(route, observed, 0, frame, canaries, capacity_available)
     }
 
     /// Admit a frame for one opaque stream connection.
@@ -377,14 +826,26 @@ impl IngressPolicyGate {
     /// no-identity scope. Stream callers should provide their own bounded
     /// opaque connection id so one noisy producer cannot quarantine or fill
     /// the series budget of its peers.
+    ///
+    /// # Errors
+    ///
+    /// Returns the route's [`DeliveryRefusal`] when the relationship no longer
+    /// admits new use, or when the transport the frame is presented on is not
+    /// the one the route is admitted over. A revoked route refuses on every
+    /// transport rather than falling back to one that still works.
     pub fn admit_for_connection(
         &mut self,
-        ingress: Ingress,
+        route: &DeliveryRoute,
+        observed: &[FreshnessTuple],
         connection_id: u64,
         frame: &MetricFrame,
         canaries: &IdentityCanaries,
         capacity_available: bool,
-    ) -> (IngressOutcome, IngressErrorClass) {
+    ) -> Result<(IngressOutcome, IngressErrorClass), DeliveryRefusal> {
+        if let Some(refusal) = route.refusal(observed) {
+            return Err(refusal);
+        }
+        let ingress = route.ingress();
         self.prune_expired();
         if self
             .connections
@@ -396,7 +857,7 @@ impl IngressPolicyGate {
                         .is_some_and(|until| self.clock.now_ms() < until)
             })
         {
-            return (IngressOutcome::Quarantined, IngressErrorClass::Malformed);
+            return Ok((IngressOutcome::Quarantined, IngressErrorClass::Malformed));
         }
         // The size is measured once at the frame's decode boundary
         // (admit_raw/admit_parsed) and threaded through `encoded_bytes`;
@@ -408,24 +869,24 @@ impl IngressPolicyGate {
             frame.encoded_bytes
         };
         if encoded_bytes > MAX_INGRESS_FRAME_BYTES {
-            return self.reject(ingress, connection_id, IngressErrorClass::Oversize);
+            return Ok(self.reject(ingress, connection_id, IngressErrorClass::Oversize));
         }
         if !valid_resource_attributes(&frame.resource_attributes) {
-            return self.reject(ingress, connection_id, IngressErrorClass::Malformed);
+            return Ok(self.reject(ingress, connection_id, IngressErrorClass::Malformed));
         }
         if frame.points.is_empty() || frame.points.len() > MAX_POINTS_PER_FRAME {
-            return self.reject(ingress, connection_id, IngressErrorClass::Malformed);
+            return Ok(self.reject(ingress, connection_id, IngressErrorClass::Malformed));
         }
         for point in &frame.points {
             if !point.value.is_finite() {
-                return self.reject(ingress, connection_id, IngressErrorClass::Malformed);
+                return Ok(self.reject(ingress, connection_id, IngressErrorClass::Malformed));
             }
             if let Err(error) = validate_data_point(&point.descriptor, &point.labels, canaries) {
-                return self.reject(ingress, connection_id, map_policy_error(error));
+                return Ok(self.reject(ingress, connection_id, map_policy_error(error)));
             }
         }
         if !capacity_available {
-            return (IngressOutcome::Rejected, IngressErrorClass::None);
+            return Ok((IngressOutcome::Rejected, IngressErrorClass::None));
         }
         let incoming = frame
             .points
@@ -451,7 +912,7 @@ impl IngressPolicyGate {
             || producer_series_count.saturating_add(producer_new_series)
                 > self.max_series_per_producer
         {
-            return (IngressOutcome::Rejected, IngressErrorClass::None);
+            return Ok((IngressOutcome::Rejected, IngressErrorClass::None));
         }
         let now = self.clock.now_ms();
         for series in incoming {
@@ -466,7 +927,7 @@ impl IngressPolicyGate {
                 state.shared_last_seen_ms = Some(now);
             }
         }
-        (IngressOutcome::Accepted, IngressErrorClass::None)
+        Ok((IngressOutcome::Accepted, IngressErrorClass::None))
     }
 
     /// Number of retained provider metric series.
@@ -785,6 +1246,23 @@ mod tests {
         }
     }
 
+    fn route_for(ingress: Ingress) -> DeliveryRoute {
+        DeliveryRoute::for_endpoint(
+            ResourceRef::parse("Endpoint/ingest").expect("canonical Endpoint"),
+            ingress,
+            crate::route_fixtures::admitted_endpoint_evidence(),
+        )
+        .expect("the admitted endpoint relationship is a route")
+    }
+
+    fn route() -> DeliveryRoute {
+        route_for(Ingress::EmitterUnix)
+    }
+
+    fn observed() -> Vec<FreshnessTuple> {
+        crate::route_fixtures::observed_for_all(&[&crate::route_fixtures::admitted_endpoint_evidence()])
+    }
+
     fn frame(key: &str, value: &str) -> MetricFrame {
         let (descriptor, labels) = if key == "outcome" {
             (
@@ -870,13 +1348,17 @@ mod tests {
         let invalid = frame("vm", "work");
         let outcome = (0..3)
             .map(|_| {
-                gate.admit_for_connection(
-                    Ingress::ImportStream,
+                gate
+                    .admit_for_connection(
+                    &route_for(Ingress::ImportStream),
+                    &observed(),
+                    
                     7,
                     &invalid,
                     &IdentityCanaries::default(),
                     true,
                 )
+                .expect("the live route admits")
             })
             .last()
             .unwrap();
@@ -891,8 +1373,10 @@ mod tests {
         let mut gate = IngressPolicyGate::with_clock(clock.clone());
         let invalid = frame("vm", "work");
         for _ in 0..QUARANTINE_VIOLATION_THRESHOLD {
-            let _ = gate.admit_for_connection(
-                Ingress::ImportStream,
+            let _ = gate
+                .admit_for_connection(
+                &route_for(Ingress::ImportStream),
+                &observed(),
                 9,
                 &invalid,
                 &IdentityCanaries::default(),
@@ -930,7 +1414,7 @@ mod tests {
             }))
             .expect("metric frame");
             assert_eq!(
-                gate.admit_raw(Ingress::EmitterUnix, 0, &bytes).0,
+                gate.admit_raw(&route(), &observed(), 0, &bytes).expect("the live route admits").0,
                 IngressOutcome::Accepted
             );
         }
@@ -948,7 +1432,7 @@ mod tests {
         }))
         .expect("over-cap frame");
         assert_eq!(
-            gate.admit_raw(Ingress::EmitterUnix, 0, &bytes),
+            gate.admit_raw(&route(), &observed(), 0, &bytes).expect("the live route admits"),
             (IngressOutcome::Rejected, IngressErrorClass::None)
         );
         assert_eq!(gate.series_count(), 2);
@@ -983,7 +1467,7 @@ mod tests {
             } else {
                 IngressOutcome::Rejected
             };
-            assert_eq!(gate.admit_raw(Ingress::EmitterUnix, 0, &bytes).0, expected);
+            assert_eq!(gate.admit_raw(&route(), &observed(), 0, &bytes).expect("the live route admits").0, expected);
         }
         assert_eq!(gate.series_count(), 1);
     }
@@ -1007,7 +1491,7 @@ mod tests {
         }))
         .expect("valid metric frame");
         assert_eq!(
-            gate.admit_raw(Ingress::EmitterUnix, 0, &valid),
+            gate.admit_raw(&route(), &observed(), 0, &valid).expect("the live route admits"),
             (IngressOutcome::Accepted, IngressErrorClass::None)
         );
 
@@ -1021,7 +1505,7 @@ mod tests {
         }))
         .expect("incomplete metric frame");
         assert_eq!(
-            gate.admit_raw(Ingress::EmitterUnix, 0, &missing),
+            gate.admit_raw(&route(), &observed(), 0, &missing).expect("the live route admits"),
             (IngressOutcome::Rejected, IngressErrorClass::Malformed)
         );
         let noncanonical_value = serde_json::to_vec(&serde_json::json!({
@@ -1038,7 +1522,7 @@ mod tests {
         }))
         .expect("noncanonical metric value");
         assert_eq!(
-            gate.admit_raw(Ingress::EmitterUnix, 0, &noncanonical_value),
+            gate.admit_raw(&route(), &observed(), 0, &noncanonical_value).expect("the live route admits"),
             (IngressOutcome::Rejected, IngressErrorClass::Malformed)
         );
         assert_eq!(gate.series_count(), 1);
@@ -1058,7 +1542,7 @@ mod tests {
             }))
             .expect("unknown metric frame");
             assert_eq!(
-                gate.admit_raw(Ingress::EmitterUnix, 0, &bytes),
+                gate.admit_raw(&route(), &observed(), 0, &bytes).expect("the live route admits"),
                 (IngressOutcome::Rejected, IngressErrorClass::Malformed)
             );
         }
@@ -1074,26 +1558,32 @@ mod tests {
         );
         for zone in [1, 2] {
             assert_eq!(
-                gate.admit_for_connection(
-                    Ingress::ImportStream,
+                gate
+                    .admit_for_connection(
+                    &route_for(Ingress::ImportStream),
+                    &observed(),
+                    
                     1,
                     &frame_for_zone(zone),
-                    &IdentityCanaries::default(),
-                    true
+                    &IdentityCanaries::default(),                true,
                 )
+                .expect("the live route admits")
                 .0,
                 IngressOutcome::Accepted
             );
         }
         assert_eq!(gate.series_count(), 2);
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::ImportStream,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::ImportStream),
+                &observed(),
                 2,
                 &frame_for_zone(3),
                 &IdentityCanaries::default(),
                 true
-            ),
+            )
+            .expect("the live route admits"),
             (IngressOutcome::Rejected, IngressErrorClass::None)
         );
         assert_eq!(gate.series_count(), 2);
@@ -1107,24 +1597,29 @@ mod tests {
             1,
         );
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::ImportStream,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::ImportStream),
+                &observed(),
                 1,
                 &frame_for_zone(1),
-                &IdentityCanaries::default(),
-                true
+                &IdentityCanaries::default(),            true,
             )
+            .expect("the live route admits")
             .0,
             IngressOutcome::Accepted
         );
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::ImportStream,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::ImportStream),
+                &observed(),
                 1,
                 &frame_for_zone(2),
                 &IdentityCanaries::default(),
                 true
-            ),
+            )
+            .expect("the live route admits"),
             (IngressOutcome::Rejected, IngressErrorClass::None)
         );
         assert_eq!(gate.series_count(), 1);
@@ -1140,13 +1635,16 @@ mod tests {
         let shared = frame("outcome", "accepted");
         for connection_id in [1, 2] {
             assert_eq!(
-                gate.admit_for_connection(
-                    Ingress::ImportStream,
+                gate
+                    .admit_for_connection(
+                    &route_for(Ingress::ImportStream),
+                    &observed(),
+                    
                     connection_id,
                     &shared,
-                    &IdentityCanaries::default(),
-                    true
+                    &IdentityCanaries::default(),                true,
                 )
+                .expect("the live route admits")
                 .0,
                 IngressOutcome::Accepted
             );
@@ -1156,13 +1654,15 @@ mod tests {
         gate.reset_connection(Ingress::ImportStream, 1);
         assert_eq!(gate.series_count(), 1);
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::ImportStream,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::ImportStream),
+                &observed(),
                 1,
                 &api_frame(0, 0, 0),
-                &IdentityCanaries::default(),
-                true
+                &IdentityCanaries::default(),            true,
             )
+            .expect("the live route admits")
             .0,
             IngressOutcome::Accepted
         );
@@ -1179,25 +1679,29 @@ mod tests {
         let mut gate = IngressPolicyGate::with_clock_and_limits(clock.clone(), 2, 2);
         let shared = frame("outcome", "accepted");
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::ImportStream,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::ImportStream),
+                &observed(),
                 1,
                 &shared,
-                &IdentityCanaries::default(),
-                true
+                &IdentityCanaries::default(),            true,
             )
+            .expect("the live route admits")
             .0,
             IngressOutcome::Accepted
         );
         clock.0.store(1_000, Ordering::Relaxed);
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::ImportStream,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::ImportStream),
+                &observed(),
                 2,
                 &shared,
-                &IdentityCanaries::default(),
-                true
+                &IdentityCanaries::default(),            true,
             )
+            .expect("the live route admits")
             .0,
             IngressOutcome::Accepted
         );
@@ -1235,13 +1739,16 @@ mod tests {
         );
         for zone in [1, 2] {
             assert_eq!(
-                gate.admit_for_connection(
-                    Ingress::EmitterUnix,
+                gate
+                    .admit_for_connection(
+                    &route_for(Ingress::EmitterUnix),
+                    &observed(),
+                    
                     0,
                     &frame_for_zone(zone),
-                    &IdentityCanaries::default(),
-                    true
+                    &IdentityCanaries::default(),                true,
                 )
+                .expect("the live route admits")
                 .0,
                 IngressOutcome::Accepted
             );
@@ -1260,35 +1767,42 @@ mod tests {
         let third = api_frame(0, 0, 2);
 
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::EmitterUnix,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::EmitterUnix),
+                &observed(),
                 0,
                 &first,
-                &IdentityCanaries::default(),
-                true
+                &IdentityCanaries::default(),            true,
             )
+            .expect("the live route admits")
             .0,
             IngressOutcome::Accepted
         );
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::EmitterUnix,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::EmitterUnix),
+                &observed(),
                 0,
                 &second,
-                &IdentityCanaries::default(),
-                true
+                &IdentityCanaries::default(),            true,
             )
+            .expect("the live route admits")
             .0,
             IngressOutcome::Accepted
         );
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::EmitterUnix,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::EmitterUnix),
+                &observed(),
                 0,
                 &third,
                 &IdentityCanaries::default(),
                 true
-            ),
+            )
+            .expect("the live route admits"),
             (IngressOutcome::Rejected, IngressErrorClass::None)
         );
         clock.0.store(
@@ -1297,13 +1811,16 @@ mod tests {
         );
         assert_eq!(gate.series_count(), 2);
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::EmitterUnix,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::EmitterUnix),
+                &observed(),
                 0,
                 &third,
                 &IdentityCanaries::default(),
                 true
-            ),
+            )
+            .expect("the live route admits"),
             (IngressOutcome::Rejected, IngressErrorClass::None)
         );
 
@@ -1313,13 +1830,15 @@ mod tests {
         gate.prune_expired();
         assert_eq!(gate.series_count(), 0);
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::EmitterUnix,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::EmitterUnix),
+                &observed(),
                 0,
                 &third,
-                &IdentityCanaries::default(),
-                true
+                &IdentityCanaries::default(),            true,
             )
+            .expect("the live route admits")
             .0,
             IngressOutcome::Accepted
         );
@@ -1327,13 +1846,15 @@ mod tests {
         gate.reset_connection(Ingress::ImportStream, 7);
         assert_eq!(gate.series_count(), 1);
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::ImportStream,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::ImportStream),
+                &observed(),
                 7,
                 &first,
-                &IdentityCanaries::default(),
-                true
+                &IdentityCanaries::default(),            true,
             )
+            .expect("the live route admits")
             .0,
             IngressOutcome::Accepted
         );
@@ -1374,36 +1895,44 @@ mod tests {
 
         for frame in frames.iter().take(MAX_SERIES_PER_PRODUCER) {
             assert_eq!(
-                gate.admit_for_connection(
-                    Ingress::ImportStream,
+                gate
+                    .admit_for_connection(
+                    &route_for(Ingress::ImportStream),
+                    &observed(),
+                    
                     1,
                     frame,
-                    &IdentityCanaries::default(),
-                    true
+                    &IdentityCanaries::default(),                true,
                 )
+                .expect("the live route admits")
                 .0,
                 IngressOutcome::Accepted
             );
         }
         let starved_frame = &frames[MAX_SERIES_PER_PRODUCER];
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::ImportStream,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::ImportStream),
+                &observed(),
                 1,
                 starved_frame,
                 &IdentityCanaries::default(),
                 true
-            ),
+            )
+            .expect("the live route admits"),
             (IngressOutcome::Rejected, IngressErrorClass::None)
         );
         assert_eq!(
-            gate.admit_for_connection(
-                Ingress::ImportStream,
+            gate
+                .admit_for_connection(
+                &route_for(Ingress::ImportStream),
+                &observed(),
                 2,
                 starved_frame,
-                &IdentityCanaries::default(),
-                true
+                &IdentityCanaries::default(),            true,
             )
+            .expect("the live route admits")
             .0,
             IngressOutcome::Accepted
         );

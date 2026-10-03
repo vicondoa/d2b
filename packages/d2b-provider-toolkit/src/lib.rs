@@ -13,7 +13,9 @@
 //! The layout is the framework:
 //!
 //! - [`declaration`] - the declaration vocabulary every provider publishes,
-//!   plus the canonical manifest and root-schema emitters.
+//!   the unified [`declaration::provider::ProviderDeclaration`] that binds one
+//!   provider's serializable facets to its local constructors and functions,
+//!   and the canonical manifest, projection, and root-schema emitters.
 //! - [`base`] - [`ProviderBase`], [`run`]/[`run_guest`], and the lifecycle
 //!   driver behind them.
 //! - [`server`] - the authenticated service loop: frame codec, bounded
@@ -71,6 +73,7 @@ pub mod audit;
 mod base;
 pub mod credential;
 pub mod declaration;
+pub mod hosting;
 pub mod operations;
 pub mod plane;
 pub mod server;
@@ -110,11 +113,16 @@ pub use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, Cancellation,
     ComponentSessionDriver, StreamEvent, StreamId,
 };
+pub use declaration::provider::{
+    DeclarationIdentities, ProviderDeclaration as UnifiedProviderDeclaration,
+    ProviderDeclarationError,
+};
 pub use declaration::{
-    AllowedSources, Cardinality, ChildCreation, ChildCustody, DriverDescriptor, IsolationPosture,
-    MethodFdContract, OperationDef, OperationHandler, PlaneAdapter, PrincipalName,
-    ProviderDeclaration, SelfBinding, ServiceDecl, ServiceMethod, StartupStep, StorageRoot,
-    WellKnownType,
+    AllowedSources, Cardinality, ChildCreation, ChildCustody, DriverDescriptor,
+    IsolationPosture, MethodFdContract, OperationDef, OperationHandler, PlaneAdapter,
+    PrincipalName, ProviderDeclaration, ProviderImplementationBindings, SelfBinding, ServiceDecl,
+    ServiceMethod, StartupStep, StorageRoot, WellKnownType, emit_canonical,
+    emit_declaration_canonical, validate_for_installation, verify_canonical,
 };
 pub use operations::{
     OperationCtx, OperationEnvelope, OperationFailure, OperationResult, ValidatedPayload,

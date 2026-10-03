@@ -20,6 +20,7 @@ test-support = []
 [dependencies]
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
+d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
 getrandom = "0.2"
 serde = { workspace = true }
 tracing = "0.1"

@@ -31,6 +31,7 @@ mod provider;
 mod sandbox;
 mod status;
 mod terminal;
+mod plan;
 mod ticket;
 
 pub mod suite;
@@ -46,6 +47,12 @@ pub use launch_identity::{LaunchIdentity, LaunchIdentityError};
 pub use port::{AdoptionCandidate, LaunchedProcess, ProcessLaunchEffectPort, StopClass};
 pub use provider::{AdoptionOutcome, ProcessProvider, ProcessProviderProfile};
 pub use sandbox::{CompiledSandbox, SandboxCompiler, SandboxPlan, StopProof, validate_stop_proof};
+pub use plan::{
+    BindingPreparation, ProcessEvidenceComponent, ProcessLaunchArguments, ProcessLaunchEvidence,
+    ProcessLaunchRelease, ProcessLaunchScope, ProcessPlanRefusal, ProcessPlanRefusalReason,
+    ProcessPlanRequest, ProcessPlanStage, ProcessPlanValues, ProcessResourceRequest,
+    ProcessSubject, PreparedBinding, ResolvedProcessPlan, resolve_process_plan,
+};
 pub use status::{
     AdoptionCondition, ExitClass, ExitObservation, ProcessPhaseClass, ProcessStatusReport,
 };

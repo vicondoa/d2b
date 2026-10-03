@@ -206,6 +206,14 @@ pub enum ZoneLinkError {
     RouteAdmissionDedupIdentityMismatch,
     /// Recovery attempted to replace an already populated committed set.
     RouteAdmissionDedupConflict,
+    /// The link's fixed cross-Zone share scope does not carry this route verb.
+    ///
+    /// A consuming Zone may use the share it leased and nothing else: it may
+    /// not attach to a remote resource, relay the share to a third Zone, or
+    /// re-advertise the export. Refusing by verb is what keeps a relay from
+    /// turning into an advertisement and laundering the source Zone's
+    /// authority.
+    ShareScopeRefusesVerb,
 }
 
 impl ZoneLinkError {
@@ -238,6 +246,7 @@ impl ZoneLinkError {
             Self::RouteAdmissionDedupVersionMismatch => "route-admission-dedup-version-mismatch",
             Self::RouteAdmissionDedupIdentityMismatch => "route-admission-dedup-identity-mismatch",
             Self::RouteAdmissionDedupConflict => "route-admission-dedup-conflict",
+            Self::ShareScopeRefusesVerb => "zonelink-share-scope-refuses-verb",
         }
     }
 }

@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use d2b_contracts_resource::v3::process::{EphemeralProcessSpec, ProcessSpec};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
-use d2b_process_conformance::{AdoptionCandidate, ProcessIdentityDigest, ProcessStatusReport};
+use d2b_process_conformance::{
+    AdoptionCandidate, ProcessIdentityDigest, ProcessStatusReport, ProcessSubject, ResolvedProcessPlan,
+};
 use d2b_resource_runtime::context::ResourceContext;
 
 use crate::identity::{ProcessFamilySpec, ProcessResourceIdentity};
@@ -27,6 +29,27 @@ use crate::worker_launch::DeviceWorkerLaunch;
 /// `Arc<dyn ProcessDriverEffects>` so one factory serves every Process row.
 #[async_trait::async_trait]
 pub trait ProcessDriverEffects: Send + Sync + 'static {
+    /// Resolve the one plan this row launches against.
+    ///
+    /// Both Process lifetimes call this before any launch or adoption, and
+    /// both receive the same answer: `Ok(None)` means the effect owner has not
+    /// resolved a plan for this row and the pre-plan ticket path applies, which
+    /// U34 removes with the rest of the ticket authority. `Ok(Some(plan))` is a
+    /// plan the broker admitted from its own accepted graph, and the driver
+    /// launches against it instead of the row's own posture.
+    ///
+    /// The default is `Ok(None)` rather than a refusal so an effect owner that
+    /// has not been converted keeps serving the rows it already serves; an
+    /// owner that resolves plans returns them, and an owner that cannot is
+    /// visible in the result rather than hidden behind a fabricated plan.
+    async fn prepare(
+        &self,
+        _identity: &ProcessResourceIdentity,
+        _subject: &ProcessSubject,
+    ) -> Result<Option<ResolvedProcessPlan>, String> {
+        Ok(None)
+    }
+
     /// Launch through the signed provider-ticket path.
     async fn launch(
         &self,

@@ -1,0 +1,5 @@
+{
+  "crate": "d2b-provider-guest-cloud-hypervisor",
+  "provider": "runtime-cloud-hypervisor",
+  "services": []
+}

@@ -34,12 +34,81 @@
 //! count must fit in 32 bits (satisfied until year 2106). The full mapping
 //! lands with U8; this module only pins the budget.
 
+use d2b_contracts_resource::v3::authority::{DesiredRevision, RevisionError, ZoneDesiredSequence};
+
 /// The module declared name.
 pub const MODULE_NAME: &str = "revision";
 
 /// Maximum revisions per daemon epoch under the U8 wire mapping: the
 /// sequence must fit in the low 32 bits of the u64 `ZoneRevision`.
 pub const WIRE_SEQUENCE_BUDGET: u64 = 1 << 32;
+
+// ---------------------------------------------------------------------------
+// Durable desired counters (U5, KTD5)
+// ---------------------------------------------------------------------------
+
+/// The largest counter value the durable store persists.
+///
+/// Desired revisions and the Zone desired sequence are stored as SQLite
+/// integers, whose signed 64-bit range is the persisted ceiling. The ceiling
+/// is lower than [`u64::MAX`] on purpose: a counter that cannot be written
+/// back fails closed instead of wrapping into a revision that looks older
+/// than what it replaced.
+pub const MAX_PERSISTED_DESIRED_COUNTER: u64 = i64::MAX as u64;
+
+/// Advance a durable row's desired revision.
+///
+/// Every committed desired mutation goes through this, so an exhausted
+/// counter refuses the mutation instead of committing an unorderable
+/// revision.
+pub fn next_desired_revision(previous: DesiredRevision) -> Result<DesiredRevision, RevisionError> {
+    let next = previous.try_next()?;
+    if next.get() > MAX_PERSISTED_DESIRED_COUNTER {
+        return Err(RevisionError::Exhausted);
+    }
+    Ok(next)
+}
+
+/// Advance the durable per-Zone desired sequence.
+pub fn next_zone_sequence(
+    previous: ZoneDesiredSequence,
+) -> Result<ZoneDesiredSequence, RevisionError> {
+    let next = previous.try_next()?;
+    if next.get() > MAX_PERSISTED_DESIRED_COUNTER {
+        return Err(RevisionError::Exhausted);
+    }
+    Ok(next)
+}
+
+/// Decode one persisted counter column.
+///
+/// A stored value that cannot be a counter at all (a negative column) is
+/// refused instead of reinterpreted: an authority change ordered against a
+/// counter the store cannot account for has no meaning, and refusing keeps
+/// the failure visible rather than folding it into an unrelated revision.
+pub const fn decode_persisted_counter(stored: i64) -> Option<u64> {
+    if stored < 0 { None } else { Some(stored as u64) }
+}
+
+/// Rebuild a durable row's desired revision from a persisted counter.
+///
+/// `DesiredRevision` publishes no raw-value constructor, so a stored counter
+/// is read back through the type's own `Deserialize` impl - the one public
+/// path from an integer to the revision - and a value the contract rejects
+/// decodes to nothing rather than to a nearby revision.
+pub fn desired_revision_from_counter(value: u64) -> Option<DesiredRevision> {
+    serde_json::from_value(serde_json::Value::from(value)).ok()
+}
+
+/// Rebuild the durable Zone desired sequence from a persisted counter.
+pub fn zone_sequence_from_counter(value: u64) -> Option<ZoneDesiredSequence> {
+    serde_json::from_value(serde_json::Value::from(value)).ok()
+}
+
+/// Encode one counter for persistence.
+pub const fn encode_persisted_counter(value: u64) -> Option<i64> {
+    if value > MAX_PERSISTED_DESIRED_COUNTER { None } else { Some(value as i64) }
+}
 
 /// A watch-cursor revision: daemon epoch plus per-epoch sequence.
 ///

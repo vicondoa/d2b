@@ -13,7 +13,10 @@ use d2b_contracts_provider::v3::semantic_services::{
     },
 };
 use d2b_contracts_resource::v3::ExecutionDomain;
-use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, StoreIncarnation, ZoneId};
+
+use crate::arbitration::AdmittedDeviceClaim;
+use crate::firewall::{UsbipClaimPort, UsbipEffectError};
 
 const USBIP_PROVIDER_REF: &str = "Provider/device-usbip";
 
@@ -219,6 +222,9 @@ pub struct ServiceLifecycle {
     physical: Option<PhysicalAuthorityLease>,
     relay: Option<ServiceRelayLease>,
     binding: Option<OwnedBusBinding>,
+    claim: Option<AdmittedDeviceClaim>,
+    relay_helper: Option<ResourceRef>,
+    claim_store: Option<StoreIncarnation>,
 }
 
 impl ServiceLifecycle {
@@ -231,6 +237,9 @@ impl ServiceLifecycle {
             physical: None,
             relay: None,
             binding: None,
+            claim: None,
+            relay_helper: None,
+            claim_store: None,
         }
     }
 
@@ -363,6 +372,114 @@ impl ServiceLifecycle {
         self.phase = ServicePhase::Closed;
         Ok(())
     }
+
+    /// Accept the one `Device` claim this Service realizes, in the Zone the
+    /// Service row lives in.
+    ///
+    /// The claim is not an authority this Service takes: the `Device` source
+    /// arbitrated it and owns the reservation. What is refused here is a claim
+    /// for another Zone, for another backing `Device`, for a relationship that
+    /// is not a USB Service's own device claim, or a second claim while
+    /// another one is still retained - so a Service cannot quietly swap the
+    /// physical device under a live relay.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServiceLifecycleError::WrongZone`] when the claim belongs to
+    /// another Zone and [`ServiceLifecycleError::PhysicalAuthorityConflict`]
+    /// when the claim is not this Service's declared relationship or replaces
+    /// a retained one.
+    pub fn admit_claim(
+        &mut self,
+        zone: &ZoneId,
+        device_ref: &ResourceRef,
+        store: &StoreIncarnation,
+        helper: &ResourceRef,
+        claim: &AdmittedDeviceClaim,
+    ) -> Result<(), ServiceLifecycleError> {
+        if claim.epoch() != Some(store) {
+            tracing::warn!(
+                service = %self.service_uid.to_canonical_string(),
+                reason = "claim was admitted under another store incarnation",
+                "usbip service claim refused: stale authority",
+            );
+            return Err(ServiceLifecycleError::PhysicalAuthorityConflict);
+        }
+        if claim
+            .verify_service_claim(zone, device_ref)
+            .is_err_and(|refusal| refusal.stage() == d2b_contracts_resource::v3::AdmissionStage::Admit)
+        {
+            tracing::warn!(
+                service = %self.service_uid.to_canonical_string(),
+                reason = "claim is not this service's declared device relationship",
+                "usbip service claim refused: source policy",
+            );
+            return Err(ServiceLifecycleError::PhysicalAuthorityConflict);
+        }
+        if self
+            .claim
+            .as_ref()
+            .is_some_and(|current| current != claim)
+        {
+            tracing::warn!(
+                service = %self.service_uid.to_canonical_string(),
+                reason = "another device claim is still retained",
+                "usbip service claim refused: conflicting relationship",
+            );
+            return Err(ServiceLifecycleError::PhysicalAuthorityConflict);
+        }
+        if !claim.admits_new_use() {
+            tracing::warn!(
+                service = %self.service_uid.to_canonical_string(),
+                reason = "claim is revoking, draining, or unproven",
+                "usbip service claim refused: stale authority",
+            );
+            return Err(ServiceLifecycleError::PhysicalAuthorityConflict);
+        }
+        self.claim = Some(claim.clone());
+        self.relay_helper = Some(helper.clone());
+        self.claim_store = Some(store.clone());
+        // The admitted claim is the bound device: the `Device` source already
+        // arbitrated it, so Bindings may be admitted against it.
+        self.phase = ServicePhase::Bound;
+        Ok(())
+    }
+
+    /// Borrow the admitted `Device` claim this Service realizes.
+    pub const fn claim(&self) -> Option<&AdmittedDeviceClaim> {
+        self.claim.as_ref()
+    }
+
+    /// Borrow the helper whose bounded leg realizes the retained claim.
+    pub const fn relay_helper(&self) -> Option<&ResourceRef> {
+        self.relay_helper.as_ref()
+    }
+
+    /// The store incarnation the retained claim was admitted under.
+    pub const fn claim_store(&self) -> Option<&StoreIncarnation> {
+        self.claim_store.as_ref()
+    }
+
+    /// Stop the relay leg and hand the relationship back.
+    ///
+    /// This is the Service-owned half of the converted drain; the Binding half
+    /// runs first through [`UsbipSupervisor::finalize_claim`]. Retained state
+    /// is left intact on failure so a retry cannot release a reservation whose
+    /// effects are still live.
+    fn release_claim<P: UsbipClaimPort>(&mut self, port: &mut P) -> Result<(), UsbipEffectError> {
+        let Some(claim) = self.claim.clone() else {
+            return Ok(());
+        };
+        if let Some(helper) = self.relay_helper.clone() {
+            port.stop_relay_leg(&claim, &helper)?;
+        }
+        port.release_claim(&claim)?;
+        self.claim = None;
+        self.relay_helper = None;
+        self.claim_store = None;
+        self.phase = ServicePhase::Closed;
+        Ok(())
+    }
 }
 
 impl core::fmt::Debug for ServiceLifecycle {
@@ -373,6 +490,7 @@ impl core::fmt::Debug for ServiceLifecycle {
             .field("has_physical_authority", &self.physical.is_some())
             .field("has_relay_authority", &self.relay.is_some())
             .field("has_owned_bus_binding", &self.binding.is_some())
+            .field("has_claim", &self.claim.is_some())
             .finish()
     }
 }
@@ -1005,6 +1123,48 @@ impl UsbipSupervisor {
             SupervisorFinalizeError::Service(error)
         })
     }
+
+    /// Drain every Binding, then stop the relay leg, then hand the `Device`
+    /// claim back.
+    ///
+    /// This is the converted supervisor drain and its order is the contract:
+    ///
+    /// 1. each Binding closes its Guest Endpoint, then its attach Process,
+    ///    then its private proxy, then its Service slot;
+    /// 2. the relay leg is stopped while the source reservation is still held;
+    /// 3. the claim is released, which is the source's reservation to give up.
+    ///
+    /// A step that does not confirm leaves the retained state intact and stops
+    /// the drain, so the reservation is never handed back while a proxy can
+    /// still reach the backing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SupervisorFinalizeError::Binding`] when a Binding effect has
+    /// not closed and [`SupervisorFinalizeError::Claim`] when the relay leg
+    /// stop or the source release did not confirm.
+    pub fn finalize_claim<P>(&mut self, port: &mut P) -> Result<(), SupervisorFinalizeError>
+    where
+        P: BindingPort + UsbipClaimPort,
+    {
+        self.service.phase = ServicePhase::DrainingBindings;
+        for binding in &mut self.bindings {
+            binding.finalize(port).map_err(|error| {
+                tracing::warn!(
+                    error = %error,
+                    "usbip binding finalize failed during supervisor claim drain",
+                );
+                SupervisorFinalizeError::Binding(error)
+            })?;
+        }
+        self.service.release_claim(port).map_err(|error| {
+            tracing::warn!(
+                error = %error,
+                "usbip claim release failed during supervisor claim drain",
+            );
+            SupervisorFinalizeError::Claim(error)
+        })
+    }
 }
 
 impl core::fmt::Debug for UsbipSupervisor {
@@ -1024,6 +1184,8 @@ pub enum SupervisorFinalizeError {
     Binding(BindingLifecycleError),
     /// A Service effect or authority release has not safely closed.
     Service(ServiceLifecycleError),
+    /// The relay leg stop or the `Device` claim release has not confirmed.
+    Claim(UsbipEffectError),
 }
 
 impl SupervisorFinalizeError {
@@ -1032,6 +1194,7 @@ impl SupervisorFinalizeError {
         match self {
             Self::Binding(error) => error.code(),
             Self::Service(error) => error.code(),
+            Self::Claim(error) => error.code(),
         }
     }
 }

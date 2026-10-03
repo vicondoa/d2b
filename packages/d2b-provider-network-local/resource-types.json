@@ -3,14 +3,67 @@
   "types": [
     {
       "resourceType": "Network",
-      "allowedSources": ["builtin", "startup"],
-      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
-      "execution": ["host"],
+      "allowedSources": [
+        "builtin",
+        "startup"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch",
+        "create",
+        "update-spec",
+        "update-status",
+        "update-metadata",
+        "update-finalizers",
+        "delete"
+      ],
+      "execution": [
+        "host"
+      ],
       "exportable": false,
-      "reads": ["Host", "Guest", "Volume", "Process", "User"]
+      "reads": [
+        "Host",
+        "Guest",
+        "Volume",
+        "Process",
+        "User",
+        "Zone"
+      ]
+    },
+    {
+      "resourceType": "NetworkBinding",
+      "allowedSources": [
+        "builtin",
+        "startup"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch",
+        "create",
+        "update-spec",
+        "update-status",
+        "update-metadata",
+        "update-finalizers",
+        "delete"
+      ],
+      "execution": [
+        "host"
+      ],
+      "exportable": false,
+      "reads": [
+        "Network",
+        "Host",
+        "Guest",
+        "Zone"
+      ]
     }
   ],
-  "provides": ["Provider/network-local", "Process/network-local-controller"],
+  "provides": [
+    "Provider/network-local",
+    "Process/network-local-controller"
+  ],
   "roles": [
     {
       "name": "NetVmLan",

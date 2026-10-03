@@ -207,8 +207,6 @@ pub struct AuditLog {
     /// Directory holding the daily-rotated records
     /// (`<audit_dir>/broker-<utc-date>.jsonl`).
     audit_dir: PathBuf,
-    /// `0640 root:d2bd` group target for the daily files.
-    expected_gid: u32,
     test_mode: bool,
     /// How many days of daily rotated audit files to retain. 0 disables
     /// pruning. Default 30 (matches the docs claim in
@@ -337,6 +335,10 @@ struct AuditWorkerState {
     /// worker. Reconciliation, pruning, export, and append therefore share
     /// one cross-process mutation boundary; the lock releases only when the
     /// worker exits (after the Shutdown ack).
+    ///
+    /// Never read: the `File` is held only so the exclusive `flock` lives
+    /// as long as the worker thread. Dropping the field would release it.
+    #[allow(dead_code, reason = "RAII guard: holds the exclusive audit directory flock")]
     directory_lock: File,
     /// Open append-fd for the current UTC day's record file. Refreshed on
     /// day-boundary crossings.
@@ -361,7 +363,7 @@ struct DailyAppender {
 
 #[cfg(test)]
 #[derive(Debug)]
-enum InjectedAuditIoFailure {
+pub(crate) enum InjectedAuditIoFailure {
     PartialWrite,
     Flush,
     Sync { remaining: u32 },
@@ -487,7 +489,6 @@ impl AuditLog {
             .map_err(|_| io::Error::other("audit worker unavailable"))??;
         Ok(Self {
             audit_dir: audit_dir.to_path_buf(),
-            expected_gid,
             test_mode,
             retention_days,
             writer: AuditWriter {
@@ -544,7 +545,7 @@ impl AuditLog {
     }
 
     #[cfg(test)]
-    fn inject_io_failure(&self, failure: InjectedAuditIoFailure) -> io::Result<()> {
+    pub(crate) fn inject_io_failure(&self, failure: InjectedAuditIoFailure) -> io::Result<()> {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         self.submit(
             AuditCommand::InjectIoFailure {
@@ -1919,7 +1920,6 @@ fn export_page_locked(
 
 #[derive(Debug)]
 struct AuditWriteLimiter {
-    privileged: AuditWriteBucket,
     unprivileged: AuditWriteBucket,
 }
 
@@ -1942,9 +1942,7 @@ impl AuditWriteLimiter {
         } else {
             (max_writes_per_window / 4).max(1)
         };
-        let privileged_max = max_writes_per_window.saturating_sub(unprivileged_max);
         Self {
-            privileged: AuditWriteBucket::new(privileged_max),
             unprivileged: AuditWriteBucket::new(unprivileged_max),
         }
     }
@@ -1963,7 +1961,6 @@ impl AuditWriteLimiter {
     /// `AuditWriteLimiter::new` keeps the production default: real time.
     #[cfg(test)]
     fn freeze_windows(&mut self) {
-        self.privileged.window_frozen = true;
         self.unprivileged.window_frozen = true;
     }
 }

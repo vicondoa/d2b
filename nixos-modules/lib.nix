@@ -506,6 +506,146 @@ rec {
         (builtins.hashString "sha256" "${bindingOwner}:${processRef}:${executionRef}")))
       16777215);
 
+  # The Zone names the host declares, in name order.
+  zoneNames = cfg: lib.sort lib.lessThan (lib.attrNames (cfg.zones or { }));
+
+  # The declared resource set of one Zone.
+  zoneResources = cfg: zoneName: cfg.zones.${zoneName}.resources or { };
+
+  # The declared controller execution reference of one Provider row, split into
+  # its `<ResourceType>/<name>` parts, or the empty list when the row declares
+  # none. The resource compiler projects a Provider's rows only against a
+  # declared target, so an unresolved reference accounts for nothing on either
+  # side of this boundary.
+  providerTargetParts = resources: providerName:
+    let
+      provider = resources.${providerName} or null;
+      reference =
+        if provider == null then null
+        else (provider.spec.config or { }).controllerExecutionRef or null;
+    in
+    if builtins.isString reference then lib.splitString "/" reference else [ ];
+
+  # Whether those parts name a declared row of that same type in the Zone.
+  resolvesZoneTarget = resources: parts:
+    lib.length parts == 2
+    && (resources.${builtins.elemAt parts 1}).type or null
+      == builtins.elemAt parts 0;
+
+  # The Provider name one declared reference carries, or the empty string when
+  # the reference is not a `<ResourceType>/<name>` pair. A Device is matched
+  # to its Device Provider by that name rather than by a spelled reference, so
+  # this shared module carries no Provider identity of its own.
+  providerNameOf = reference:
+    let
+      parts =
+        if builtins.isString reference
+        then lib.splitString "/" reference
+        else [ ];
+    in
+    if builtins.length parts == 2 then builtins.elemAt parts 1 else "";
+
+  # One site a Device Provider claims: the Zone, the Device, the controller
+  # execution reference its worker rows bind against, and the Device settings
+  # that select which worker rows the Provider's projection declares.
+  #
+  # A Device Provider's projection declares its worker rows only when the
+  # Device is claimed by a Guest and the Provider's controller execution
+  # reference resolves to a declared `Host` in the same Zone, so those are the
+  # conditions here too: an account derived for a row the compiler does not
+  # project would be an inert account, and an account missing for one it does
+  # project would be a refused row.
+  deviceWorkerSites = cfg: providerName:
+    lib.concatMap
+      (zoneName:
+        let
+          resources = zoneResources cfg zoneName;
+          parts = providerTargetParts resources providerName;
+        in
+        if !(resolvesZoneTarget resources parts && builtins.elemAt parts 0 == "Host")
+        then [ ]
+        else
+          map
+            (device: {
+              inherit zoneName device;
+              executionRef = lib.concatStringsSep "/" parts;
+              settings =
+                (resources.${device}.spec or { }).provider.settings or { };
+            })
+            (lib.filter
+              (name:
+                (resources.${name}.type or null) == "Device"
+                && providerNameOf ((resources.${name}.spec or { }).providerRef or null)
+                  == providerName
+                && lib.hasPrefix "Guest/" ((resources.${name}.metadata or { }).ownerRef or ""))
+              (lib.attrNames resources)))
+      (zoneNames cfg);
+
+  # The longest account name the host account database carries.
+  #
+  # NixOS's own user and group options refuse a name of 32 bytes or more
+  # (`nixos/modules/config/users-groups.nix`), and that is the POSIX bound on a
+  # group name rather than a NixOS choice, so a composed name past it is not a
+  # name the host holds at all.
+  accountNameLimit = 31;
+
+  # The hex digits of the digest a shortened name carries.
+  accountNameHashHex = 8;
+
+  # The account one row class runs as, bounded to what the host holds.
+  #
+  # A name that fits is used exactly as composed, so every ordinary row class
+  # reads as the row it belongs to. One that does not keeps a readable prefix
+  # of the row-class token and carries the first eight hex digits of the
+  # SHA-256 over the whole composed name: two row classes that overflow
+  # together stay two accounts rather than collapsing into one, and the name
+  # still says which Zone and which family it belongs to. A Zone name long
+  # enough that no prefix fits is a Zone this scheme cannot name either, and
+  # yields no account at all - the row is then refused by the resolver, which
+  # is the answer the resource compiler's own refusal gives, rather than a
+  # guest that fails to evaluate.
+  #
+  # `d2b-core`'s `bounded_account_name` (`bundle_resolver.rs`) is this same
+  # composition over the same inputs, and one table of row classes is read
+  # through both (`tests/unit/nix/cases/host-worker-accounts.json`, by that
+  # case and by the crate's own test), so a host that materializes these names
+  # resolves the rows that carry them.
+  boundedAccountName = zoneName: body:
+    let
+      prefix = "d2b-${zoneName}-";
+      full = "${prefix}${body}";
+      keep = accountNameLimit - builtins.stringLength prefix - 1 - accountNameHashHex;
+    in
+    if builtins.stringLength full <= accountNameLimit then
+      full
+    else if keep < 1 then
+      null
+    else
+      "${prefix}${builtins.substring 0 keep body}-${builtins.substring 0 accountNameHashHex (builtins.hashString "sha256" full)}";
+
+  # One host account row for a template-bound row class: the account name, the
+  # ids it holds, and the operator-visible description - or `null` for a row
+  # class whose name the host cannot carry, which every caller filters rather
+  # than provisioning under a name it does not hold.
+  #
+  # The numeric identity is the name-derived id every other named principal in
+  # this tree uses (`stablePrincipalId`), so an account keeps its ids for as
+  # long as it keeps its name and a reconfigured row is never renumbered under
+  # a live principal. Two schemes coexist - the Device TPM family below keeps
+  # the binding-triple ids its accounts already hold - and `host-users.nix`
+  # proves the two do not collide rather than assuming it.
+  templateAccount = zoneName: body: description:
+    let
+      name = boundedAccountName zoneName body;
+    in
+    if name == null then
+      null
+    else {
+      inherit name description;
+      uid = stablePrincipalId name;
+      gid = stablePrincipalId name;
+    };
+
   # The host principals one zone-native Device with a TPM needs, derived from
   # the same artifacts the runtime derives them from:
   #
@@ -522,54 +662,158 @@ rec {
   # principals are provisioned: the long-lived swtpm worker is granted rwx on
   # it and the one-shot flush the traverse and socket writes it needs.
   deviceTpmPrincipals = cfg:
-    let
-      providerRef = "Provider/device-tpm";
-      devices = lib.concatMap
-        (zoneName:
-          let
-            resources = cfg.zones.${zoneName}.resources or { };
-            provider = resources.device-tpm or null;
-            providerConfig =
-              if provider == null then { } else (provider.spec.config or { });
-            executionRef = providerConfig.controllerExecutionRef or null;
-            parts =
-              if builtins.isString executionRef then lib.splitString "/" executionRef else [ ];
-            resolvable = lib.length parts == 2
-              && builtins.elemAt parts 0 == "Host"
-              && builtins.hasAttr (builtins.elemAt parts 1) resources
-              && (resources.${builtins.elemAt parts 1}).type or null == "Host";
-            tpmDevices = lib.filter
-              (name:
-                (resources.${name}.type or null) == "Device"
-                && (resources.${name}.spec.providerRef or null) == providerRef
-                && lib.hasPrefix "Guest/" ((resources.${name}.metadata or { }).ownerRef or ""))
-              (lib.attrNames resources);
-          in
-          lib.optional (resolvable && tpmDevices != [ ]) {
-            inherit zoneName executionRef tpmDevices;
-          })
-        (lib.sort lib.lessThan (lib.attrNames (cfg.zones or { })));
-    in
     lib.concatMap
-      (zone:
-        map
-          (device:
-            let
-              account = "d2b-${zone.zoneName}-${device}-swtpm";
-              flushAccount = "d2b-${zone.zoneName}-${device}-swtpm-flush";
-              ownerRef = "Provider/device-tpm";
-            in
+      (site:
+        let
+          account = boundedAccountName site.zoneName "${site.device}-swtpm";
+          flushAccount = boundedAccountName site.zoneName "${site.device}-swtpm-flush";
+          ownerRef = "Provider/device-tpm";
+        in
+        # A Device whose name leaves the account past what the host can hold
+        # contributes no principal at all, so the state Volume it would have
+        # shared grants nothing and its worker rows are refused rather than
+        # launched under a name the host does not hold.
+        if account == null || flushAccount == null then
+          [ ]
+        else
+          [
             {
-              inherit (zone) zoneName;
-              inherit device;
+              inherit (site) zoneName device;
               inherit account flushAccount;
               ownerUid = deviceWorkerPrincipalId ownerRef
-                "Process/swtpm-${device}" zone.executionRef;
+                "Process/swtpm-${site.device}" site.executionRef;
               flushUid = deviceWorkerPrincipalId ownerRef
-                "EphemeralProcess/swtpm-flush-${device}" zone.executionRef;
-            })
-          zone.tpmDevices)
-      devices;
+                "EphemeralProcess/swtpm-flush-${site.device}" site.executionRef;
+            }
+          ])
+      (deviceWorkerSites cfg "device-tpm");
+
+  # The Device TPM family's account rows, carrying the ids those accounts
+  # already hold rather than re-deriving them: `deviceTpmPrincipals` is the
+  # authority for them, because those ids predate the name-derived scheme and
+  # changing them would renumber a live principal.
+  deviceTpmAccounts = cfg:
+    lib.concatMap
+      (row: [
+        {
+          name = row.account;
+          uid = row.ownerUid;
+          gid = row.ownerUid;
+          description = "d2b Device TPM state owner";
+        }
+        {
+          name = row.flushAccount;
+          uid = row.flushUid;
+          gid = row.flushUid;
+          description = "d2b Device TPM pre-start flush principal";
+        }
+      ])
+      (deviceTpmPrincipals cfg);
+
+  # The Device-owned GPU worker accounts.
+  #
+  # The row names are the GPU Provider's own projection's
+  # (`packages/d2b-provider-device-gpu/nix/default.nix` names
+  # `Process/gpu-<device>` and, for a Device that configures one,
+  # `Process/video-<device>`), read here from the same Device rows and the
+  # same settings that projection reads. Two accounts per Device rather than
+  # one, because the GPU authority admission refuses a video principal equal
+  # to the GPU principal (`PrincipalNotSeparated`): one account would make
+  # that refusal unreachable.
+  deviceGpuAccounts = cfg:
+    lib.concatMap
+      (site:
+        lib.filter (row: row != null) ([
+          (templateAccount site.zoneName "${site.device}-gpu"
+            "d2b Device GPU worker")
+        ]
+        ++ lib.optional (site.settings.videoSidecar or false)
+        (templateAccount site.zoneName "${site.device}-video"
+          "d2b Device video decode sidecar")))
+      (deviceWorkerSites cfg "device-gpu");
+
+  # The account one Provider's controller rows run as.
+  #
+  # A controller row's name is a hash over its Zone, Provider, component and
+  # execution target, so it is not a name an account can be derived from and
+  # not a boundary worth separating on: one Provider is one signed artifact
+  # published under one key, and its components share that trust. The Provider
+  # is therefore the account's granularity, and the Zone stays in the name so
+  # one Zone's controllers never share an identity with another's. The
+  # compiler projects a controller row only for a Provider that declares a
+  # controller execution reference resolving to a declared `Host` or `Guest`
+  # in its own Zone, so an account is derived on exactly that condition.
+  providerControllerAccounts = cfg:
+    lib.concatMap
+      (zoneName:
+        let
+          resources = zoneResources cfg zoneName;
+        in
+        lib.filter (row: row != null) (map
+          (providerName:
+            templateAccount zoneName "controller-${providerName}"
+              "d2b Provider controller")
+          (lib.filter
+            (name:
+              (resources.${name}.type or null) == "Provider"
+              && resolvesZoneTarget resources
+                (providerTargetParts resources name))
+            (lib.attrNames resources))))
+      (zoneNames cfg);
+
+  # The account the binding-owned virtiofsd serving worker runs as.
+  #
+  # Its launch ticket has the two path trees it names opened to its principal,
+  # so it does not share the controller account of the Provider that declares
+  # it. A Zone declares that Provider only when it has the row: the resource
+  # compiler emits no serving-worker template without it.
+  zoneTemplateAccounts = cfg:
+    lib.concatMap
+      (zoneName:
+        let
+          resources = zoneResources cfg zoneName;
+          declares = providerName: (resources.${providerName}.type or null) == "Provider";
+        in
+        lib.filter (row: row != null) (lib.optional (declares "volume-virtiofs")
+          (templateAccount zoneName "virtiofsd" "d2b Zone serving worker")))
+      (zoneNames cfg);
+
+  # Every host account a template-bound row class runs as, derived per Zone
+  # from the same trusted Zone rows the resource compiler binds.
+  #
+  # `d2b-core`'s `template_account` (`packages/d2b-core/src/bundle_resolver.rs`)
+  # composes each of these names from the binding's own owner reference,
+  # declared row name, and template. Every input here is one of those, read
+  # out of the same `cfg.zones.<zone>.resources` set, so the two sides are two
+  # evaluators of one rule over one input rather than two naming schemes kept
+  # in agreement by hand:
+  #
+  # | row class | account |
+  # |---|---|
+  # | Device TPM worker | `d2b-<zone>-<device>-swtpm` |
+  # | its one-shot pre-start flush | `d2b-<zone>-<device>-swtpm-flush` |
+  # | Device GPU worker | `d2b-<zone>-<device>-gpu` |
+  # | its video decode sidecar | `d2b-<zone>-<device>-video` |
+  # | a Provider's controller rows | `d2b-<zone>-controller-<provider>` |
+  # | the binding-owned serving worker | `d2b-<zone>-virtiofsd` |
+
+  # Each of those names is the `d2b-<zone>-<row-class token>` `boundedAccountName`
+  # composes, so a row class whose composed name is longer than the 31 bytes
+  # the host account database carries keeps a readable prefix of that token
+  # and carries eight hex digits of the SHA-256 over the whole name instead.
+  # The two sides shorten the same way over the same input, so the row still
+  # resolves; a Zone name long enough that nothing fits is refused by the
+  # resolver rather than provisioned under a name the host does not hold.
+  #
+  # A row class neither side names has no account: the credential agent a
+  # `Credential` controller adopts is one the shared crate may not name under
+  # the Provider family-knowledge rule, so its rows stay refused here rather
+  # than resolving to an account whose name only one side holds.
+  templateWorkerAccounts = cfg:
+    deviceTpmAccounts cfg
+    ++ deviceGpuAccounts cfg
+    ++ providerControllerAccounts cfg
+    ++ zoneTemplateAccounts cfg;
 
   # Stable virtio-blk serial for a d2b.vms.<vm>.runner.volumes entry.
   # Cloud Hypervisor emits this into the block device, while

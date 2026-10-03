@@ -68,6 +68,35 @@ let
       cfg.daemon.lifecycle.liveActivation.timeoutSeconds;
   };
 
+  # The verified deployment graph the daemon publishes before it starts any
+  # provider. It is derived from the generated provider declarations (see
+  # `zone-resources.nix`), so the implementation identities it names are the
+  # compiled set and there is no separate configurable allowlist. The daemon
+  # re-verifies the self-hash and refuses startup on a mismatch, so the file
+  # is installed rather than trusted.
+  deploymentBootstrap = cfg._bundle.deploymentBootstrap or { };
+  deploymentBootstrapFile =
+    pkgs.writeText "d2b-deployment-bootstrap.json"
+      (deploymentBootstrap.documentJson or "{}");
+
+  # The daemon and the broker share one deployment root, so both halves
+  # bootstrap from the same verified document. This installs it into the
+  # deployment root before the daemon starts; it is not a separate unit and
+  # it does not widen the root-unit boundary.
+  installDeploymentBootstrap = pkgs.writeShellScript
+    "d2b-install-deployment-bootstrap" ''
+    set -eu
+    target_dir=${lib.escapeShellArg "${cfg.site.stateDir}"}
+    install -d -m 0750 -o root -g d2bd "$target_dir"
+    umask 0077
+    tmp="$target_dir/.deployment-bootstrap.json.new"
+    cat > "$tmp" < ${deploymentBootstrapFile}
+    ${pkgs.coreutils}/bin/chown root:d2bd "$tmp"
+    ${pkgs.coreutils}/bin/chmod 0640 "$tmp"
+    ${pkgs.coreutils}/bin/mv -f "$tmp" \
+      "$target_dir/${deploymentBootstrap.path or "deployment-bootstrap.json"}"
+  '';
+
   hostShutdownHook = pkgs.writeShellScript "d2b-host-shutdown-hook" ''
     set -eu
 
@@ -215,7 +244,17 @@ in
         Group = "d2bd";
         # U10 seam: the broker's envelope forwarder dials the daemon's
         # forward rendezvous; the daemon binds this path at startup.
-        Environment = "D2B_BROKER_FORWARD_SOCKET=/run/d2b/broker-forward.sock";
+        #
+        # U31 seam: the deployment root both the daemon and the broker
+        # bootstrap from. The verified deployment graph is installed into it
+        # before the daemon starts; without one the daemon refuses to open
+        # its resource plane rather than starting a provider under no
+        # accepted graph.
+        Environment = [
+          "D2B_BROKER_FORWARD_SOCKET=/run/d2b/broker-forward.sock"
+          "D2B_DEPLOYMENT_ROOT=${cfg.site.stateDir}"
+        ];
+        ExecStartPre = "+${installDeploymentBootstrap}";
         ExecStart = "${d2bdPackage}/bin/d2bd host --config /etc/d2b/daemon-config.json";
         ExecStop = "+${hostShutdownHook}";
         TimeoutStopSec =

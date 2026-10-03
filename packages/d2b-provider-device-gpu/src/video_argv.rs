@@ -18,6 +18,14 @@
 //! `--vhost-user-media socket=<socket>` to its argv to consume the
 //! decoded media stream.
 //!
+//! # What the argv may not carry
+//!
+//! Which device nodes the decoder reaches is decided by the video worker's
+//! own admitted `DeviceBinding` legs, never by a template name and never by a
+//! command line. The only path-shaped input here is the decode socket, so a
+//! `/dev/...` component in it is refused before the argv is rendered rather
+//! than handed to a worker whose binding carries no such device.
+//!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 
 use serde::{Deserialize, Serialize};
@@ -140,6 +148,12 @@ pub enum VideoArgvError {
     EmptyVmName,
     /// The socket path is empty.
     EmptySocketPath,
+    /// The socket path named a device node.
+    ///
+    /// A device capability is delivered by the worker's own admitted
+    /// `DeviceBinding`, so a render node or any other device is refused here
+    /// rather than becoming a launch argument.
+    DeviceNodeArgumentRefused,
 }
 
 /// Render the video-decoder argv.
@@ -149,7 +163,8 @@ pub enum VideoArgvError {
 /// Returns [`VideoArgvError::InvalidCrosvmBinaryPath`] when the binary path
 /// is empty or not absolute, [`VideoArgvError::EmptyVmName`] when the VM
 /// name is empty, and [`VideoArgvError::EmptySocketPath`] when the socket
-/// path is empty.
+/// path is empty and [`VideoArgvError::DeviceNodeArgumentRefused`] when it
+/// names a device node.
 pub fn generate_video_argv(input: &VideoArgvInput) -> Result<Vec<String>, VideoArgvError> {
     if input.crosvm_binary_path.is_empty() || !input.crosvm_binary_path.starts_with('/') {
         return Err(VideoArgvError::InvalidCrosvmBinaryPath {
@@ -161,6 +176,13 @@ pub fn generate_video_argv(input: &VideoArgvInput) -> Result<Vec<String>, VideoA
     }
     if input.socket_path.is_empty() {
         return Err(VideoArgvError::EmptySocketPath);
+    }
+    if input
+        .socket_path
+        .split('/')
+        .any(|component| component == "dev" || component == "proc" || component == "sys")
+    {
+        return Err(VideoArgvError::DeviceNodeArgumentRefused);
     }
     Ok(vec![
         input.crosvm_binary_path.clone(),

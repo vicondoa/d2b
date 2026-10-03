@@ -1252,10 +1252,34 @@ where
         .await?;
         lease.finish().map_err(|_| "interaction-operation-failed")?;
         if finalize_after_response {
+            // Nothing here is a flush. `send_component_response` awaited the
+            // session writer, and the writer reports completion only after
+            // the batch carrying this response has been written, so the frame
+            // is on the transport before this branch runs; the release below
+            // then takes the registrar's writer-acknowledged revocation.
+            //
+            // The delay is not what makes the response arrive. Ending this
+            // session closes its socket, and a peer's driver ends its loop on
+            // that EOF; the frames it had already read from the wire are owed
+            // to the peer regardless, so that teardown hands them back to the
+            // peer's next `receive_ttrpc` rather than discarding them
+            // (`EventQueue::fail` in `packages/d2b-session/src/driver.rs`
+            // returns them and `SessionDriverHandle::receive_ttrpc` drains
+            // them before it reports the session's own failure). What the
+            // delay still buys is the peer's scheduler: it keeps the peer's
+            // bookkeeping from racing the socket close. The ttrpc
+            // request/response exchange carries no acknowledgement that the
+            // peer finished reading, so this stays a bounded grace rather
+            // than an ordering guarantee.
             tokio::time::sleep(Duration::from_millis(1)).await;
-            self.finalize_async(d2b_provider_display_wayland::GraceState::Expired)
+            // The release is scoped to the session that asked for it. Another
+            // service's session, and any request it has in flight, survives
+            // this Finalize; the display runtime and its dependents are torn
+            // down by `remove_session` only when this was the last display
+            // session.
+            self.remove_session(session_key)
                 .await
-                .map_err(|_| "interaction-finalization-failed")?;
+                .map_err(|error| format!("interaction-finalization-failed: {error}"))?;
         }
         Ok(())
     }
@@ -3560,12 +3584,9 @@ where
             precondition.expected_uid = Some(status_endpoint_uid.as_str().to_owned());
             mutation.precondition = protobuf::MessageField::some(precondition);
             mutation.resource = protobuf::MessageField::some(resource);
-            mutation.owner = protobuf::MessageField::some(resource_wire_identity(
-                &zone,
-                &owner_ref,
-                Some(&owner_uid),
-                None,
-            ));
+            // A status write re-states the row; it never moves ownership, and
+            // the Resource API refuses an owner on any mutation other than
+            // Create or UpdateMetadata.
             let mut request = wire::UpdateStatusRequest::new();
             request.meta = protobuf::MessageField::some(resource_request_meta(&operation_id));
             request.mutation = protobuf::MessageField::some(mutation);
@@ -5862,6 +5883,12 @@ fn resource_get_request(
     )));
     request.target =
         protobuf::MessageField::some(resource_wire_identity(zone, resource_ref, None, None));
+    // The service refuses a read that does not name its projection; every
+    // display effect read wants the whole envelope.
+    let mut projection = wire::Projection::new();
+    projection.kind =
+        protobuf::EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
+    request.projection = protobuf::MessageField::some(projection);
     request
 }
 
@@ -6218,7 +6245,27 @@ where
     // spawned, so it does not need to be Send.
     Fut: Future<Output = Result<T, WorkerEffectError>> + 'static,
 {
-    let permit = EFFECT_ADMISSION
+    run_effect_gated(&EFFECT_ADMISSION, operation)
+}
+
+/// The admission-gated body of [`run_effect`], with the seat budget passed
+/// in rather than read from the process-global [`EFFECT_ADMISSION`]. Every
+/// daemon caller shares that one cap, so a test that saturated it would be
+/// racing every other effect in the binary for a slot rather than testing
+/// the cap; a test that owns its gate exercises the same refusal path
+/// deterministically.
+fn run_effect_gated<T, F, Fut>(
+    admission: &d2bd_runtime::concurrency::ConnSemaphore,
+    operation: F,
+) -> Result<T, WorkerEffectError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
+    // The future is driven on the calling thread by `block_on` below, never
+    // spawned, so it does not need to be Send.
+    Fut: Future<Output = Result<T, WorkerEffectError>> + 'static,
+{
+    let permit = admission
         .try_acquire()
         .ok_or(WorkerEffectError::WorkerUnavailable)?;
     // The permit is held for the whole effect, so the cap counts calls that
@@ -6374,6 +6421,22 @@ mod tests {
             return false;
         };
         handle.lock().await.has_service_session(service)
+    }
+
+    /// End every remaining session the way the daemon ends them: through the
+    /// one caller entitled to tear a whole Zone down at once. A test that
+    /// finalizes one service must reach for this to close the others, so the
+    /// per-request Finalize can never be mistaken for shutdown again.
+    async fn shutdown_test_interactions(runtime: &TestInteractionRuntime) {
+        assert!(
+            finalize_interaction_runtimes(
+                runtime,
+                d2b_provider_display_wayland::GraceState::Expired
+            )
+            .await
+            .is_none(),
+            "daemon shutdown finalized every Zone composition"
+        );
     }
 
     #[test]
@@ -7474,6 +7537,26 @@ mod tests {
         Arc<dyn ComponentSessionDriver>,
         tokio::task::JoinHandle<Result<(), String>>,
     ) {
+        establish_interaction_client(listener, runtime, zone, service, uid, path).await
+    }
+
+    /// The same ComponentSession admission over any effect port, so a test
+    /// can drive a composition the production builder produced rather than
+    /// one a test helper assembled.
+    async fn establish_interaction_client<S>(
+        listener: &Socket,
+        runtime: &Arc<AsyncMutex<Option<InteractionRuntimeSet<S>>>>,
+        zone: &ZoneId,
+        service: &str,
+        uid: u32,
+        path: &std::path::Path,
+    ) -> (
+        Arc<dyn ComponentSessionDriver>,
+        tokio::task::JoinHandle<Result<(), String>>,
+    )
+    where
+        S: ProcessLaunchEffectPort + Clone + Send + Sync + 'static,
+    {
         let client_socket =
             Socket::new(Domain::UNIX, Type::from(libc::SOCK_SEQPACKET), None).unwrap();
         client_socket
@@ -7521,6 +7604,31 @@ mod tests {
         .await
         .expect("client handshake timeout")
         .unwrap_or_else(|error| panic!("client handshake failed for {service}: {error}"));
+        // The client handshake finishing is not the server admitting this
+        // service: `admit_interaction_socket` still has to verify the peer,
+        // find the Zone's composition and register the session, and it does
+        // that on its own task after the handshake it just answered. Every
+        // assertion below reads that registration, so returning here first
+        // made the helper race its own server and `route_for_service` read
+        // `None` under load. Wait for the admission these tests depend on.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let handle = {
+                    let guard = runtime.lock().await;
+                    guard.as_ref().and_then(|set| set.runtime_handle(zone))
+                };
+                let admitted = match handle {
+                    Some(handle) => handle.lock().await.has_service_session(service),
+                    None => false,
+                };
+                if admitted {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("interaction session for {service} was never admitted"));
         (Arc::new(engine.into_driver()), server)
     }
 
@@ -7538,7 +7646,20 @@ mod tests {
             .await
             .expect("interaction response timeout")
             .unwrap();
-        assert!(driver.complete_ttrpc(request_id).await.unwrap());
+        // Retiring the request id is local bookkeeping that has to go through
+        // the session's own driver, so it needs that session to still be
+        // there. `DisplayService/Finalize` is the one request whose contract
+        // is to take the session away, so whether its id can still be retired
+        // is a race between the peer retiring it and the peer's driver ending
+        // on the close this very request causes - the same close
+        // `hermetic_listener_authenticates_...` asserts has already happened
+        // by the time the response returns. There is no ordering to assert
+        // here, so every Finalize call site asserts the deterministic outcome
+        // instead: the response was delivered and that session is gone.
+        let retired = driver.complete_ttrpc(request_id).await;
+        if method != "DisplayService/Finalize" {
+            assert!(retired.unwrap());
+        }
         TtrpcResponse::parse_from_bytes(&response[ttrpc::proto::MESSAGE_HEADER_LENGTH..]).unwrap()
     }
 
@@ -7864,6 +7985,25 @@ mod tests {
         )
         .await;
         assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        // Finalize is a per-session teardown. The display session is the only
+        // one that ends; the sessions that did not ask for it stay admitted,
+        // so a peer with a command in flight on one of them still gets its
+        // answer.
+        let display_server = clients.remove(0).4;
+        assert!(display_server.await.unwrap().is_ok());
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(3));
+        for survivor in [
+            d2b_provider_clipboard_wayland::BRIDGE_SERVICE,
+            d2b_provider_clipboard_wayland::PICKER_SERVICE,
+            d2b_provider_notification_desktop::SERVICE_PACKAGE,
+        ] {
+            assert!(
+                zone_has_service_session(&runtime, &zone, survivor).await,
+                "{survivor} kept its session across another service's Finalize"
+            );
+        }
+        // Only the daemon's shutdown ends the rest.
+        shutdown_test_interactions(&runtime).await;
         for (_, _, _, _, server) in clients {
             assert!(server.await.unwrap().is_ok());
         }
@@ -8044,9 +8184,16 @@ mod tests {
         )
         .await;
         assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        // The display session that asked for the Finalize is the only one that
+        // ends; the bridge and picker sessions were not part of that request.
+        let display_server = clients.remove(0).4;
+        assert!(display_server.await.unwrap().is_ok());
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(2));
+        shutdown_test_interactions(&runtime).await;
         for (_, _, _, _, server) in clients {
             assert!(server.await.unwrap().is_ok());
         }
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(0));
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -8231,9 +8378,152 @@ mod tests {
         )
         .await;
         assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        // Only the session that asked to be finalized ends here; the bridge
+        // and notification sessions outlive the display they depend on.
+        let display_server = clients.remove(0).4;
+        assert!(display_server.await.unwrap().is_ok());
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(2));
+        shutdown_test_interactions(&runtime).await;
         for (_, _, _, _, server) in clients {
             assert!(server.await.unwrap().is_ok());
         }
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(0));
+    }
+
+    /// A Finalize is a request on one session and releases that session, so a
+    /// second session that pipelined a command behind it is untouched: the
+    /// command is still answered, and the session is still there to be driven
+    /// afterwards. Finalizing every registered session instead drops that
+    /// peer's in-flight command and refuses the request as
+    /// `session-disconnected`, which is what a multiplexed connection does to
+    /// any client that keeps writing after its Finalize.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_session_finalize_leaves_another_sessions_in_flight_command_answered() {
+        let directory = tempfile::tempdir().unwrap();
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let runtime = Arc::new(AsyncMutex::new(Some(committed_test_interaction_runtime(
+            &zone, uid,
+        ))));
+        let display_service = d2b_provider_display_wayland::SERVICE_PACKAGE;
+        let notification_service = d2b_provider_notification_desktop::SERVICE_PACKAGE;
+        let mut clients = Vec::new();
+        for service in [display_service, notification_service] {
+            let path = directory
+                .path()
+                .join(service.replace('.', "-"))
+                .with_extension("sock");
+            let listener = bind_interaction_listener(&path, uid).await.unwrap();
+            let (client, server) =
+                establish_test_client(&listener, &runtime, &zone, service, uid, &path).await;
+            clients.push((service, path, listener, client, server));
+        }
+        // Own the two drivers so the client table can be drained later.
+        let display = Arc::clone(&clients[0].3);
+        let notification = Arc::clone(&clients[1].3);
+        let display_spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland").unwrap(),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "cross-session-finalize",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .unwrap(),
+            true,
+        )
+        .unwrap();
+        let reconcile = dispatch_test_request(
+            &display,
+            display_service,
+            500,
+            "DisplayService/Reconcile",
+            serde_json::to_vec(&serde_json::json!({"spec": display_spec})).unwrap(),
+        )
+        .await;
+        assert_eq!(reconcile.status().code(), TtrpcCode::OK);
+
+        // The notification session pipelines a command and does not read it
+        // yet, so it is outstanding across the display session's Finalize.
+        let in_flight = request_frame_for_test(
+            notification_service,
+            1,
+            "NotificationService/Drain",
+            Vec::new(),
+        );
+        let in_flight_id = d2b_session::ttrpc_request_id(1, &in_flight).unwrap();
+        notification
+            .start_ttrpc(in_flight_id.clone(), in_flight)
+            .await
+            .unwrap();
+
+        let finalize = dispatch_test_request(
+            &display,
+            display_service,
+            501,
+            "DisplayService/Finalize",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(finalize.status().code(), TtrpcCode::OK);
+
+        // The command this session had already written is answered, and its
+        // request id retires against a session that is still there. Which of
+        // the two answers it gets is the display's business - `OK` if the
+        // command ran before the display session's teardown reconciled the
+        // dependents, `FAILED_PRECONDITION` if it ran after - but an answer
+        // arrives either way, because this session's own authority was never
+        // part of what that Finalize was asked to release.
+        let answered = tokio::time::timeout(Duration::from_secs(5), notification.receive_ttrpc())
+            .await
+            .expect("the other session's in-flight command was never answered")
+            .unwrap_or_else(|error| {
+                panic!("another session's Finalize dropped this session's in-flight command: {error}")
+            });
+        let answered =
+            TtrpcResponse::parse_from_bytes(&answered[ttrpc::proto::MESSAGE_HEADER_LENGTH..])
+                .unwrap();
+        assert!(
+            matches!(
+                answered.status().code(),
+                TtrpcCode::OK | TtrpcCode::FAILED_PRECONDITION
+            ),
+            "the in-flight command was answered with {:?}",
+            answered.status().code()
+        );
+        assert!(notification.complete_ttrpc(in_flight_id).await.unwrap());
+
+        let display_server = clients.remove(0).4;
+        assert!(display_server.await.unwrap().is_ok());
+
+        // The surviving session is still admitted, and still answers for
+        // itself. The display is gone, so anything these providers serve is
+        // legitimately refused now; what has to survive is the session, and
+        // that it still gets a response at all.
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(1));
+        assert!(
+            zone_has_service_session(&runtime, &zone, notification_service).await,
+            "the session that did not send Finalize was revoked by it"
+        );
+        assert!(!zone_has_service_session(&runtime, &zone, display_service).await);
+        let after = dispatch_test_request(
+            &notification,
+            notification_service,
+            2,
+            "NotificationService/CloseObserver",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(after.status().code(), TtrpcCode::UNIMPLEMENTED);
+
+        shutdown_test_interactions(&runtime).await;
+        let (_, _, _, _, notification_server) = clients.remove(0);
+        assert!(notification_server.await.unwrap().is_ok());
+        assert_eq!(zone_session_count(&runtime, &zone).await, Some(0));
     }
 
     #[test]
@@ -8453,24 +8743,26 @@ mod tests {
     /// A provider effect past the admission cap is refused instead of being
     /// handed another thread, and a released slot is usable again.
     ///
-    /// `run_effect` drives the effect on the ambient daemon runtime (U13),
-    /// so the released-slot call needs a runtime context.
+    /// The daemon's [`EFFECT_ADMISSION`] cap is process-global, so this
+    /// saturates a gate it owns: a test that filled the shared one would be
+    /// racing every other effect in the binary for a slot rather than
+    /// testing the cap. `run_effect_gated` drives the effect on the ambient
+    /// daemon runtime (U13), so the released-slot call needs a runtime
+    /// context.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn effects_past_the_admission_cap_are_refused() {
+        let admission = d2bd_runtime::concurrency::ConnSemaphore::new(MAX_INFLIGHT_EFFECTS);
         let held: Vec<_> = (0..MAX_INFLIGHT_EFFECTS)
-            .map(|_| {
-                EFFECT_ADMISSION
-                    .try_acquire()
-                    .expect("a slot inside the cap")
-            })
+            .map(|_| admission.try_acquire().expect("a slot inside the cap"))
             .collect();
         assert_eq!(
-            run_effect(|| async { Ok::<(), WorkerEffectError>(()) }).expect_err("past the cap"),
+            run_effect_gated(&admission, || async { Ok::<(), WorkerEffectError>(()) })
+                .expect_err("past the cap"),
             WorkerEffectError::WorkerUnavailable
         );
         drop(held);
-        run_effect(|| async { Ok::<(), WorkerEffectError>(()) })
+        run_effect_gated(&admission, || async { Ok::<(), WorkerEffectError>(()) })
             .expect("a released slot admits the next effect");
     }
 
@@ -8639,5 +8931,647 @@ mod tests {
         );
         drop(client);
         drop(accepted);
+    }
+
+    /// The daemon's system-core Resource API plane for one Zone, assembled
+    /// from the production seams themselves - the Zone manager over its spec
+    /// store, `ManagerBackend` over that manager, the native
+    /// `ResourceService`, and the authenticated `ResourceBusAdapter` whose
+    /// `client()` is exactly the client the production display driver is
+    /// bound to. No stand-in type is involved: a regression in what the
+    /// production builder binds is a change to what this plane sees.
+    struct SystemCorePlane {
+        _directory: tempfile::TempDir,
+        _actor: ractor::ActorRef<d2b_resource_runtime::ResourceManagerMsg>,
+        manager: d2b_resource_runtime::ResourceManagerClient,
+        client: Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>,
+    }
+
+    /// The system-core session the daemon's Resource API client runs as.
+    fn system_core_subject(zone: &str) -> d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext
+    {
+        use d2b_contracts_resource::v3::identity::{
+            BindingDigest, Locality, ReconnectGeneration, SessionBinding, SessionPurpose,
+            TranscriptHash,
+        };
+        d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext::new(
+            ResourceRef::parse("Provider/system-core").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").unwrap(),
+            ResourceRef::parse(&format!("Zone/{zone}")).unwrap(),
+            EvidenceClass::UnixPeer,
+            SessionPurpose::parse("resource-api").unwrap(),
+            ServiceName::parse("d2b.resource.v3").unwrap(),
+            SessionBinding::new(
+                d2b_contracts_resource::v3::SchemaFingerprint::parse(format!(
+                    "sha256:{}",
+                    "1".repeat(64)
+                ))
+                .unwrap(),
+                d2b_contracts_resource::v3::identity::TransportBinding::new(
+                    Locality::Local,
+                    BindingDigest::parse(format!("sha256:{}", "2".repeat(64))).unwrap(),
+                ),
+                ReconnectGeneration::new(1).unwrap(),
+                TranscriptHash::from_bytes([3; 32]),
+            ),
+        )
+    }
+
+    fn system_core_authorization_state() -> d2b_resource_api::authz::AuthorizationState {
+        d2b_resource_api::authz::AuthorizationState {
+            snapshot: PolicySnapshot {
+                policy_revision: 7,
+                api_catalog_revision: 1,
+                active_configuration_revision:
+                    d2b_contracts_resource::v3::ConfigurationGeneration::new(7).unwrap(),
+                controller_generation: Some(
+                    d2b_contracts_resource::v3::ControllerGeneration::new(11).unwrap(),
+                ),
+            },
+            zone_policy_revision: ZoneRevision::new(7),
+            bootstrap_phase: BootstrapPhase::Disabled,
+            now_tick: 1,
+        }
+    }
+
+    /// Recovery adopts and reconcile satisfies: the display rows under test
+    /// are committed and observed, never realized by a real Provider.
+    struct DisplayStubDriver;
+
+    #[async_trait::async_trait]
+    impl d2b_resource_runtime::driver::ResourceDriver for DisplayStubDriver {
+        type Error = std::io::Error;
+
+        fn classify_error(
+            &self,
+            _error: &Self::Error,
+        ) -> d2b_resource_runtime::error::DriverFailure {
+            d2b_resource_runtime::error::DriverFailure::retryable(
+                d2b_resource_runtime::error::DriverOp::Reconcile,
+            )
+        }
+
+        async fn validate(
+            &mut self,
+            _ctx: &mut d2b_resource_runtime::context::ResourceContext,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        async fn recover(
+            &mut self,
+            _ctx: &mut d2b_resource_runtime::context::ResourceContext,
+        ) -> Result<d2b_resource_runtime::driver::RecoveryOutcome, Self::Error> {
+            Ok(d2b_resource_runtime::driver::RecoveryOutcome::Adopted)
+        }
+
+        async fn reconcile(
+            &mut self,
+            _ctx: &mut d2b_resource_runtime::context::ResourceContext,
+        ) -> Result<d2b_resource_runtime::driver::ReconcileOutcome, Self::Error> {
+            Ok(d2b_resource_runtime::driver::ReconcileOutcome::Satisfied)
+        }
+
+        async fn delete(
+            &mut self,
+            _ctx: &mut d2b_resource_runtime::context::ResourceContext,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    /// The types the stub factory serves. A `LazyLock` rather than a leaked
+    /// box: the list is built once and shared without growing the process
+    /// heap for the lifetime of the test binary.
+    static DISPLAY_STUB_TYPES: std::sync::LazyLock<
+        [d2b_resource_runtime::identity::ResourceTypeName; 3],
+    > = std::sync::LazyLock::new(|| {
+        [
+            d2b_resource_runtime::identity::ResourceTypeName::new("Process"),
+            d2b_resource_runtime::identity::ResourceTypeName::new("Endpoint"),
+            d2b_resource_runtime::identity::ResourceTypeName::new(
+                "display-wayland.d2bus.org.WaylandSession",
+            ),
+        ]
+    });
+
+    struct DisplayStubFactory;
+
+    #[async_trait::async_trait]
+    impl d2b_resource_runtime::driver::ResourceDriverFactory for DisplayStubFactory {
+        fn resource_types(&self) -> &[d2b_resource_runtime::identity::ResourceTypeName] {
+            DISPLAY_STUB_TYPES.as_slice()
+        }
+
+        async fn create(
+            &self,
+            _key: &d2b_resource_runtime::spec_store::ResourceKey,
+        ) -> Box<dyn d2b_resource_runtime::driver::DynResourceDriver> {
+            Box::new(DisplayStubDriver)
+        }
+    }
+
+    struct NoDecoder;
+
+    impl d2b_resource_runtime::context::SpecDecoder for NoDecoder {
+        fn decode(
+            &self,
+            _envelope: &[u8],
+        ) -> Result<Box<dyn std::any::Any + Send>, Box<dyn std::error::Error + Send + Sync>> {
+            Err("no decoder".into())
+        }
+    }
+
+    /// No fixture row declares an execution reference, so every display
+    /// Process realizes on the Zone's Host target.
+    struct HostOnlyResolver;
+
+    impl d2b_resource_runtime::target::TargetResolver for HostOnlyResolver {
+        fn execution_ref(
+            &self,
+            _key: &d2b_resource_runtime::spec_store::ResourceKey,
+            _spec: &[u8],
+        ) -> Option<String> {
+            None
+        }
+    }
+
+    async fn system_core_plane(zone: &ZoneId) -> SystemCorePlane {
+        use std::collections::HashMap;
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            d2b_resource_runtime::spec_store::SpecStore::open(
+                directory.path().join("specs.sqlite"),
+            )
+            .unwrap(),
+        );
+        let hub = Arc::new(d2b_resource_runtime::watch::WatchHub::new(
+            &d2b_resource_runtime::revision::SystemClock,
+            d2b_resource_runtime::watch::DEFAULT_RING_CAPACITY,
+        ));
+        let args = d2b_resource_runtime::ResourceManagerArgs {
+            zone: zone.as_str().to_owned(),
+            store,
+            authority: d2b_resource_runtime::test_support::RecordingPublisher::new(),
+            providers: {
+                let mut providers = d2b_resource_runtime::provider::ProviderDirectory::new();
+                providers
+                    .register(
+                        Arc::new(DisplayStubFactory)
+                            as Arc<dyn d2b_resource_runtime::driver::ResourceDriverFactory>,
+                    )
+                    .unwrap();
+                providers
+            },
+            hub: Arc::clone(&hub),
+            admission: Arc::new(d2b_resource_runtime::AllowAll),
+            decoders: HashMap::new(),
+            default_decoder: Arc::new(NoDecoder),
+            targets: Arc::new(d2b_resource_runtime::target::TargetDirectory::new()),
+            host_target: d2b_resource_runtime::target::TargetRef::host("test-host")
+                .expect("host target"),
+            target_resolver: Arc::new(HostOnlyResolver),
+            backoff: Duration::from_millis(200),
+            relation_extractors: d2b_resource_runtime::RelationExtractors::new(),
+        };
+        let (actor, _join) =
+            ractor::Actor::spawn(None, d2b_resource_runtime::ResourceManager::new(), args)
+                .await
+                .expect("the Zone manager actor starts");
+        let manager = d2b_resource_runtime::ResourceManagerClient::new(actor.clone());
+
+        // The committed bundle's qualified types, exactly as the daemon's
+        // policy projection installs them.
+        let catalog = ApiCatalog::with_extensions([
+            d2b_contracts_resource::v3::ResourceTypeName::parse(
+                "display-wayland.d2bus.org.WaylandSession",
+            )
+            .unwrap(),
+        ])
+        .expect("the display catalog extends the standard one");
+        let subject = system_core_subject(zone.as_str());
+        let rule = PolicyRule::new(
+            &catalog,
+            [
+                d2b_contracts_resource::v3::ResourceTypeName::parse(
+                    "display-wayland.d2bus.org.WaylandSession",
+                )
+                .unwrap(),
+                d2b_contracts_resource::v3::ResourceTypeName::parse("Process").unwrap(),
+                d2b_contracts_resource::v3::ResourceTypeName::parse("Endpoint").unwrap(),
+            ],
+            [
+                d2b_resource_api::authz::ResourceVerb::Get,
+                d2b_resource_api::authz::ResourceVerb::Create,
+                d2b_resource_api::authz::ResourceVerb::UpdateSpec,
+                d2b_resource_api::authz::ResourceVerb::UpdateStatus,
+                d2b_resource_api::authz::ResourceVerb::UpdateMetadata,
+                d2b_resource_api::authz::ResourceVerb::UpdateFinalizers,
+                d2b_resource_api::authz::ResourceVerb::Delete,
+            ],
+            [SessionVerb::Connect],
+            [],
+            [],
+            [zone.clone()],
+            [],
+        )
+        .expect("the system-core display rule compiles");
+        let role =
+            CompiledRole::new(ResourceRef::parse("Role/system-core").unwrap(), vec![rule])
+                .expect("the system-core role compiles");
+        let binding = CompiledRoleBinding::new(
+            role.role_ref.clone(),
+            [BoundSubject {
+                subject_ref: subject.subject_ref().clone(),
+                subject_uid: subject.subject_uid().clone(),
+            }],
+            BindingScope::default(),
+            d2b_resource_api::authz::RelayGrantAuthority::None,
+        )
+        .expect("the system-core role binding compiles");
+        let policy = PolicySet::new(&catalog, 7, vec![role], vec![binding])
+            .expect("the system-core policy set compiles");
+        let authorizer =
+            Arc::new(NativeAuthorizer::new(catalog, Some(policy)).expect("authorizer binds"));
+        let seal = d2b_contracts_resource::v3::StoreSealIdentity::new(
+            d2b_contracts_resource::v3::StoreSlot::new(0).unwrap(),
+            zone.clone(),
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+        );
+        let acceptor = authorizer
+            .take_store_seal(seal)
+            .expect("the manager plane takes the store seal");
+        let backend = d2b_resource_api::manager_backend::ManagerBackend::new(
+            manager.clone(),
+            Arc::clone(&hub),
+            acceptor,
+        );
+        let service = Arc::new(
+            d2b_resource_api::ResourceService::new_with_zone_uid(
+                Arc::new(backend),
+                Arc::clone(&authorizer),
+                None,
+            )
+            .expect("the system-core Resource service binds"),
+        );
+        let capability = authorizer
+            .issue_authenticated_subject(
+                subject,
+                system_core_authorization_state(),
+            )
+            .expect("the policy grants the system-core session");
+        let adapter = d2b_resource_api::ResourceBusAdapter::bind_component_session(
+            service,
+            capability,
+        )
+        .expect("the session binds to the Resource service");
+        SystemCorePlane {
+            _directory: directory,
+            _actor: actor,
+            manager,
+            client: Arc::new(adapter.client()),
+        }
+    }
+
+    impl SystemCorePlane {
+        /// Commit the Zone's committed WaylandSession row the way the
+        /// session Provider commits it, and return the uid the manager's
+        /// deterministic identity assigns to that key.
+        async fn commit_wayland_session(
+            &self,
+            zone: &ZoneId,
+        ) -> (ResourceRef, ResourceUid) {
+            let session_ref =
+                ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
+                    .unwrap();
+            let key = d2b_resource_runtime::spec_store::ResourceKey::new(
+                zone.as_str(),
+                session_ref.resource_type().as_str(),
+                session_ref.name().as_str(),
+            );
+            let envelope = serde_json::json!({
+                "apiVersion": "resources.d2bus.org/v3",
+                "type": "display-wayland.d2bus.org.WaylandSession",
+                "metadata": {
+                    "name": session_ref.name().as_str(),
+                    "zone": zone.as_str(),
+                    "ownerRef": null,
+                    "finalizers": [],
+                    "deletionRequestedAt": null,
+                    "createdAt": "1970-01-01T00:00:00.000Z",
+                    "updatedAt": "1970-01-01T00:00:00.000Z",
+                    "managedBy": "controller",
+                    "generation": 1,
+                    "revision": 1,
+                },
+                "spec": {
+                    "providerRef": "Provider/wayland-session",
+                },
+                "status": {
+                    "completedAt": null,
+                    "conditions": [],
+                    "lastReconciledAt": null,
+                    "observedGeneration": 0,
+                    "outcome": null,
+                    "phase": "Pending",
+                    "resource": {},
+                    "startedAt": null,
+                    "update": {
+                        "dependencies": {"count": 0, "refs": []},
+                        "disruption": "None",
+                        "lastAssessedAt": null,
+                        "observedGeneration": 0,
+                        "operationId": null,
+                        "owned": {"count": 0, "refs": []},
+                        "preserveState": true,
+                        "reasons": [],
+                        "state": "Unknown",
+                        "targetGeneration": 1,
+                    },
+                },
+            });
+            let payload = CanonicalJsonValue::parse(&serde_json::to_vec(&envelope).unwrap())
+                .expect("the session envelope parses")
+                .to_canonical_bytes();
+            let target = resource_wire_identity(zone, &session_ref, None, None);
+            let mut body = wire::ResourceEnvelopeBytes::new();
+            body.identity = protobuf::MessageField::some(target.clone());
+            body.canonical_json = payload.clone();
+            body.payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &payload);
+            let mut precondition = wire::Precondition::new();
+            precondition.kind = protobuf::EnumOrUnknown::new(
+                wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT,
+            );
+            let mut mutation = wire::Mutation::new();
+            mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_CREATE);
+            mutation.target = protobuf::MessageField::some(target);
+            mutation.precondition = protobuf::MessageField::some(precondition);
+            mutation.resource = protobuf::MessageField::some(body);
+            let mut request = wire::CreateRequest::new();
+            request.meta = protobuf::MessageField::some(resource_request_meta(
+                &resource_operation_id_with_key(
+                    "wayland-session-create",
+                    zone,
+                    &session_ref,
+                    &payload,
+                ),
+            ));
+            request.mutation = protobuf::MessageField::some(mutation);
+            let created = self.client.create(request).await;
+            assert!(
+                created.error.is_none(),
+                "the Zone commits the committed WaylandSession row: {:?}",
+                created.error.as_ref().map(|error| format!(
+                    "{:?} {}",
+                    error.kind.enum_value_or_default(),
+                    error.reason
+                ))
+            );
+            (
+                session_ref,
+                ResourceUid::from_bytes(&d2b_resource_runtime::manager::deterministic_uid(&key))
+                    .expect("the derived session uid is well formed"),
+            )
+        }
+
+        /// The canonical envelope the Zone's resource plane serves for one
+        /// reference, read through the same client the daemon holds.
+        async fn served_envelope(&self, zone: &ZoneId, target: &ResourceRef) -> serde_json::Value {
+            let response = self
+                .client
+                .get(resource_get_request(zone, target, "display-wiring-read"))
+                .await;
+            assert!(
+                response.error.is_none(),
+                "the Zone plane serves {}",
+                target.to_canonical_string()
+            );
+            let resource = response
+                .resource
+                .0
+                .expect("a served resource for the read");
+            serde_json::from_slice(&resource.canonical_json).expect("a canonical envelope")
+        }
+
+        /// Every reference the Zone's manager holds for one resource type,
+        /// read straight from the manager the daemon's backend rides.
+        async fn manager_keys(&self, zone: &ZoneId, type_name: &str) -> Vec<ResourceRef> {
+            let views = self
+                .manager
+                .list(d2b_resource_runtime::manager::ResourceSelector {
+                    zone: Some(zone.as_str().to_owned()),
+                    type_name: Some(type_name.to_owned()),
+                    ..Default::default()
+                })
+                .await
+                .expect("the Zone manager lists its rows");
+            let mut keys = views
+                .into_iter()
+                .filter_map(|view| d2b_resource_runtime::manager::resource_ref(&view.key))
+                .collect::<Vec<_>>();
+            keys.sort_by_key(|target| target.to_canonical_string());
+            keys
+        }
+    }
+
+    /// Production display wiring: the composition the daemon builds at
+    /// startup drives its DisplayService through the real system-core
+    /// Resource API client and the real display driver, so the Zone's
+    /// committed WaylandSession row gains the display finalizer and owns the
+    /// durable display `Process` - launched against the committed Host
+    /// execution reference - and the wayland-cross-domain `Endpoint` that
+    /// `d2b-wayland-proxy` serves.
+    ///
+    /// This is the only path through the display stack that observes what
+    /// `production_interaction_composition` bound. Without a bound client
+    /// and a bound committed identity the display driver takes the in-memory
+    /// supervisor branch and publishes nothing durable, so every assertion
+    /// below collapses when the production builder stops binding either.
+    ///
+    /// What is pinned here is the wiring, not a Ready display. The reconcile
+    /// commits the rows asserted below and then stops at the durable endpoint
+    /// status write, which the Resource API refuses; the second display role
+    /// is never reached. That refusal is a recorded decision tracked on its
+    /// own, and the test says nothing about it either way.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn production_composition_publishes_display_wiring_to_the_committed_session() {
+        let zone = ZoneId::parse("work").unwrap();
+        let uid = nix::unistd::getuid().as_raw();
+        let plane = system_core_plane(&zone).await;
+        let (session_ref, session_uid) = plane.commit_wayland_session(&zone).await;
+
+        let identity = CommittedInteractionIdentity::for_test_with_session_uid(
+            zone.clone(),
+            session_uid.clone(),
+            ResourceRef::parse("Guest/work").unwrap(),
+            ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            BTreeMap::from([(
+                ResourceRef::parse("Guest/work").unwrap(),
+                ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap(),
+            )]),
+            ResourceGeneration::new(7).unwrap(),
+            None,
+            None,
+            None,
+            None,
+        );
+        let composition = production_interaction_composition(
+            uid,
+            ProductionInteractionResourceState::new(
+                zone.clone(),
+                system_core_authorization_state().snapshot,
+                ZoneRevision::new(7),
+                true,
+                None,
+                Some(&identity),
+                Some(Arc::clone(&plane.client)),
+            ),
+        )
+        .expect("the production builder composes the Zone's display session");
+
+        let mut runtimes: InteractionRuntimeSet<NonLaunchingProcessEffectPort> =
+            InteractionRuntimeSet::new();
+        runtimes.insert(zone.clone(), composition);
+        let runtime = Arc::new(AsyncMutex::new(Some(runtimes)));
+
+        let directory = tempfile::tempdir().unwrap();
+        let service = d2b_provider_display_wayland::SERVICE_PACKAGE;
+        let path = directory
+            .path()
+            .join(service.replace('.', "-"))
+            .with_extension("sock");
+        let listener = bind_interaction_listener(&path, uid).await.unwrap();
+        let (client, server) =
+            establish_interaction_client(&listener, &runtime, &zone, service, uid, &path).await;
+
+        let spec = WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/display-wayland").unwrap(),
+            d2b_provider_display_wayland::DisplayIdentity::new(
+                "production-wiring",
+                "#112233",
+                "#223344",
+                "#334455",
+            )
+            .unwrap(),
+            true,
+        )
+        .unwrap();
+        dispatch_test_request(
+            &client,
+            service,
+            910,
+            "DisplayService/Reconcile",
+            serde_json::to_vec(&serde_json::json!({"spec": spec})).unwrap(),
+        )
+        .await;
+
+        let session = plane.served_envelope(&zone, &session_ref).await;
+        let owner = session_ref.to_canonical_string();
+        assert_eq!(
+            session.pointer("/metadata/uid").and_then(serde_json::Value::as_str),
+            Some(session_uid.as_str()),
+            "the committed session row is the one the composition bound"
+        );
+        assert!(
+            session
+                .pointer("/metadata/finalizers")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|finalizers| finalizers.iter().any(|finalizer| {
+                    finalizer.as_str() == Some(d2b_provider_display_wayland::FINALIZER)
+                })),
+            "the display driver stamped its proxy finalizer on the committed session"
+        );
+
+        let processes = plane.manager_keys(&zone, "Process").await;
+        assert!(
+            !processes.is_empty(),
+            "the production display driver committed at least one durable display Process \
+             through the system-core client it was bound to"
+        );
+        for process in &processes {
+            let envelope = plane.served_envelope(&zone, process).await;
+            assert_eq!(
+                envelope.pointer("/metadata/ownerRef").and_then(serde_json::Value::as_str),
+                Some(owner.as_str()),
+                "{} is owned by the committed WaylandSession",
+                process.to_canonical_string()
+            );
+            assert!(
+                matches!(
+                    envelope
+                        .pointer("/spec/providerRef")
+                        .and_then(serde_json::Value::as_str),
+                    Some("Provider/system-minijail" | "Provider/system-systemd")
+                ),
+                "{} names the system Process provider the display driver launches through",
+                process.to_canonical_string()
+            );
+            assert_eq!(
+                envelope
+                    .pointer("/spec/executionRef")
+                    .and_then(serde_json::Value::as_str),
+                Some("Host/host"),
+                "{} launches against the Host execution reference the committed identity names",
+                process.to_canonical_string()
+            );
+            let row_uid = envelope
+                .pointer("/metadata/uid")
+                .and_then(serde_json::Value::as_str);
+            assert!(
+                row_uid.is_some_and(|uid| uid != session_uid.as_str()),
+                "{} carries its own committed row identity, distinct from the owning session",
+                process.to_canonical_string()
+            );
+        }
+        let endpoints = plane.manager_keys(&zone, "Endpoint").await;
+        assert_eq!(
+            endpoints.len(),
+            processes.len(),
+            "each durable Process this reconcile reached publishes its Endpoint"
+        );
+        for endpoint in &endpoints {
+            let envelope = plane.served_envelope(&zone, endpoint).await;
+            assert_eq!(
+                envelope.pointer("/metadata/ownerRef").and_then(serde_json::Value::as_str),
+                Some(owner.as_str()),
+                "{} is owned by the committed WaylandSession",
+                endpoint.to_canonical_string()
+            );
+            let producer = envelope
+                .pointer("/spec/producerRef")
+                .and_then(serde_json::Value::as_str)
+                .expect("a committed Endpoint names its producer");
+            assert!(
+                processes
+                    .iter()
+                    .any(|process| process.to_canonical_string() == producer),
+                "{} is produced by a display Process this reconcile committed",
+                endpoint.to_canonical_string()
+            );
+            assert_eq!(
+                envelope.pointer("/spec/providerRef").and_then(serde_json::Value::as_str),
+                Some("Provider/display-wayland"),
+                "{} is the display Provider's endpoint",
+                endpoint.to_canonical_string()
+            );
+            assert_eq!(
+                envelope.pointer("/spec/purpose").and_then(serde_json::Value::as_str),
+                Some("wayland-cross-domain"),
+                "{} is the cross-domain wayland endpoint the proxy serves",
+                endpoint.to_canonical_string()
+            );
+        }
+
+        let finalize =
+            dispatch_test_request(&client, service, 911, "DisplayService/Finalize", Vec::new())
+                .await;
+        assert_eq!(finalize.status().code(), TtrpcCode::OK);
+        assert!(server.await.unwrap().is_ok());
     }
 }

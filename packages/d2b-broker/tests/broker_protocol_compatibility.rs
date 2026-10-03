@@ -1,13 +1,9 @@
-#[cfg(not(feature = "layer1-bootstrap"))]
 #[path = "common/mod.rs"]
 mod common;
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 use std::os::fd::AsRawFd;
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 use common::TestBroker;
-#[cfg(not(feature = "layer1-bootstrap"))]
 use d2b_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
 use d2b_contracts::types::{BundleOpId, ScopeId};
 use d2b_contracts_broker::PROTOCOL_VERSION;
@@ -237,7 +233,6 @@ fn the_retired_wire_gate_machinery_names_a_retired_variant() {
 }
 
 #[test]
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn the_retired_wire_gate_names_every_retired_variant_at_wire_v6() {
     use d2b_broker::catalog::WIRE_VARIANTS;
     use d2b_broker::runtime::{RETIRED_WIRE_VARIANTS, retired_wire_variant};
@@ -298,7 +293,6 @@ fn a_retired_variant_old_frame_is_unknown_to_the_current_decoder() {
 }
 
 #[test]
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn an_old_binary_retired_variant_frame_is_refused_with_the_stale_wire_code_and_audited() {
     // The full mixed-version matrix on the real broker binary (KTD10):
     // each literal v<6 retired frame is answered with the typed

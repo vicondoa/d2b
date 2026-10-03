@@ -89,13 +89,13 @@ use d2b_provider_toolkit::{
 };
 use d2b_provider_guest::GuestSpec;
 use d2b_provider_guest_cloud_hypervisor::{
-    AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph, ChildRole,
-    CloudHypervisorConfig, CloudHypervisorController, CloudHypervisorResourceApiError,
-    CloudHypervisorResourceRequest, CloudHypervisorResourceResponse, FencedChild,
-    GuestChildCommitResponse, GuestDependencySnapshot, GuestFinalizationInput, GuestGenerationSet,
-    GuestSessionEvidence, GuestSessionEvidenceBinding, GuestSetupDescriptor,
+    AdmittedGuestGraph, AuthenticatedResourceApiAdapter, AuthenticatedResourceSession,
+    BootstrapGraph, ChildRole, CloudHypervisorConfig, CloudHypervisorController,
+    CloudHypervisorResourceApiError, CloudHypervisorResourceRequest, CloudHypervisorResourceResponse,
+    FencedChild, GuestChildCommitResponse, GuestDependencySnapshot, GuestFinalizationInput,
+    GuestGenerationSet, GuestSessionEvidence, GuestSessionEvidenceBinding, GuestSetupDescriptor,
     GuestSetupDescriptorVerifier, GuestSnapshot, OwnedChildSnapshot, ProcessState, SessionState,
-    VerifiedGuestSetupDescriptor, deterministic_child_ref,
+    VerifiedGuestSetupDescriptor, classify_guest_execution_parent, deterministic_child_ref,
 };
 use d2b_resource_api::{
     ResourceApiClient, ResourceBusAdapter, ResourceService,
@@ -582,6 +582,46 @@ impl CommittedInteractionIdentity {
             .expect("fixed test WaylandSession reference"),
             wayland_session_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333")
                 .expect("fixed test WaylandSession UID"),
+            subject_ref,
+            subject_uid,
+            host_execution_ref,
+            user_ref,
+            allowed_guest_sources,
+            display_provider_generation,
+            clipboard_provider_generation,
+            clipboard_provider_uid,
+            notification_provider_generation,
+            notification_provider_uid,
+        }
+    }
+
+    /// One identity-bound composition whose committed WaylandSession UID is
+    /// supplied rather than fixed, so a test can drive the production
+    /// display driver against a session row the Zone's resource plane
+    /// actually holds.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_test_with_session_uid(
+        zone: ZoneId,
+        wayland_session_uid: ResourceUid,
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        host_execution_ref: ResourceRef,
+        user_ref: ResourceRef,
+        allowed_guest_sources: BTreeMap<ResourceRef, ResourceUid>,
+        display_provider_generation: ResourceGeneration,
+        clipboard_provider_generation: Option<ResourceGeneration>,
+        clipboard_provider_uid: Option<ResourceUid>,
+        notification_provider_generation: Option<ResourceGeneration>,
+        notification_provider_uid: Option<ResourceUid>,
+    ) -> Self {
+        Self {
+            zone,
+            wayland_session_ref: ResourceRef::parse(
+                "display-wayland.d2bus.org.WaylandSession/display-wayland",
+            )
+            .expect("fixed test WaylandSession reference"),
+            wayland_session_uid,
             subject_ref,
             subject_uid,
             host_execution_ref,
@@ -3079,6 +3119,64 @@ impl core::fmt::Debug for ZoneResourceRuntime {
             .field("readiness", &self.readiness)
             .finish()
     }
+}
+
+/// Why one Cloud Hypervisor Guest's graph inputs were refused.
+///
+/// Every variant is field-free: a refusal names the stage, never a resource
+/// identity or caller text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudHypervisorGraphInputError {
+    /// The Guest's flattened fragment is not expressible in the typed
+    /// execution-parent vocabulary.
+    ExecutionParentUnclassified,
+    /// The committed rows carry no classified input at all.
+    GraphUnclassified,
+}
+
+impl core::fmt::Display for CloudHypervisorGraphInputError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::ExecutionParentUnclassified => "cloud-hypervisor-execution-parent-unclassified",
+            Self::GraphUnclassified => "cloud-hypervisor-graph-unclassified",
+        })
+    }
+}
+
+impl std::error::Error for CloudHypervisorGraphInputError {}
+
+/// Classify one Cloud Hypervisor Guest's committed inputs into its admitted
+/// graph (U21; AE31-AE33).
+///
+/// The Guest's own `VolumeBinding` rows are the only thing that becomes a
+/// relationship whose consumer is the Guest. A row in the retired
+/// attachment shape is not a request this projection will translate, and a
+/// row whose consumer is another Guest is not this one's use: guessing either
+/// would be the flattening this conversion removes.
+///
+/// Re-exported so this package's owning integration test drives the same
+/// projection production will install, rather than a test-local imitation
+/// of it.
+pub fn cloud_hypervisor_guest_graph(
+    guest_ref: &ResourceRef,
+    guest_spec: &GuestSpec,
+    binding_rows: &[StoredResource],
+) -> Result<AdmittedGuestGraph, CloudHypervisorGraphInputError> {
+    let mut parent = classify_guest_execution_parent(guest_spec.policy())
+        .map_err(|_| CloudHypervisorGraphInputError::ExecutionParentUnclassified)?;
+    for row in binding_rows {
+        let Some(request) = d2b_provider_volume_binding::parsed_consumer_request(row) else {
+            continue;
+        };
+        if request.consumer_ref() != guest_ref {
+            continue;
+        }
+        parent = parent
+            .with_parent_use(guest_ref, request)
+            .map_err(|_| CloudHypervisorGraphInputError::ExecutionParentUnclassified)?;
+    }
+    AdmittedGuestGraph::from_execution_parent(guest_ref.clone(), &parent)
+        .map_err(|_| CloudHypervisorGraphInputError::GraphUnclassified)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11580,7 +11678,6 @@ mod tests {
             Bundle {
                 bundle_version: 1,
                 schema_version: "v3".to_owned(),
-                privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
                 realm_workloads_launcher_v2_path: None,
                 generation: BundleGeneration {
@@ -12484,6 +12581,7 @@ mod tests {
             ),
             spec,
             Vec::new(),
+            Vec::new(),
         )
         .unwrap()
     }
@@ -12538,6 +12636,7 @@ mod tests {
             ),
             spec,
             Vec::new(),
+            Vec::new(),
         )
         .unwrap()
     }
@@ -12560,7 +12659,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        NetworkAdmissionIntent::new(key, spec, Vec::new()).unwrap()
+        NetworkAdmissionIntent::new(key, spec, Vec::new(), Vec::new()).unwrap()
     }
 
     fn self_owned_occupancy(intent: &NetworkAdmissionIntent) -> HostNetworkOccupancy {
@@ -13105,7 +13204,17 @@ mod tests {
             intent.execution_ref().clone(),
             intent.view().as_str(),
             intent.access(),
-            intent.mount_path(),
+            d2b_contracts_resource::v3::volume_binding::VolumePresentation::filesystem(
+                intent.mount_path(),
+            )
+            .expect("a consumer destination"),
+            intent.view().as_str(),
+            d2b_contracts_resource::v3::BindingSourceDecision::new(
+                vec![d2b_contracts_resource::v3::RequestedRights::Consume],
+                d2b_contracts_resource::v3::binding::BindingArbitration::Shared,
+                vec![d2b_contracts_resource::v3::BindingRealizationFacet::FilesystemPresentation],
+            )
+            .expect("decision validates"),
         )
         .expect("admitted spec");
         assert!(ZoneResourceRuntime::binding_admitted_by_volume_spec(
@@ -13118,7 +13227,17 @@ mod tests {
             ResourceRef::parse("Guest/victim-vm").expect("guest ref"),
             intent.view().as_str(),
             intent.access(),
-            intent.mount_path(),
+            d2b_contracts_resource::v3::volume_binding::VolumePresentation::filesystem(
+                intent.mount_path(),
+            )
+            .expect("a consumer destination"),
+            intent.view().as_str(),
+            d2b_contracts_resource::v3::BindingSourceDecision::new(
+                vec![d2b_contracts_resource::v3::RequestedRights::Consume],
+                d2b_contracts_resource::v3::binding::BindingArbitration::Shared,
+                vec![d2b_contracts_resource::v3::BindingRealizationFacet::FilesystemPresentation],
+            )
+            .expect("decision validates"),
         )
         .expect("forged spec");
         assert!(!ZoneResourceRuntime::binding_admitted_by_volume_spec(

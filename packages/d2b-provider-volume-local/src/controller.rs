@@ -10,11 +10,15 @@ use std::collections::BTreeSet;
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::volume::{SourceKind, VolumeSpec};
-use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{BindingRefusal, ResourceRef, ResourceUid, ZoneId};
 
 use crate::content::{
     ContentMaterializationEvidence, ContentProjection, NetworkConfigContentProjection,
     NetworkConfigMaterializationEvidence,
+};
+use crate::bindings::{
+    AdmittedVolumeBinding, VolumeAdmissionGrant, VolumeAdmissionSource, VolumeConsumerRequest,
+    admit_consumer_requests,
 };
 use crate::error::VolumeLocalError;
 use crate::finalization::{
@@ -142,6 +146,42 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
     /// Borrow the declared profile.
     pub const fn profile(&self) -> &VolumeLocalProfile {
         &self.profile
+    }
+
+    /// Admit this Volume's canonical consumer requests.
+    ///
+    /// This is the one source-side admission path: every consumer kind and
+    /// both presentations a `VolumeBindingRequest` can carry are decided
+    /// here against this controller's own profile, so the single-writer rule
+    /// and the shared-write declaration are this Provider's decision rather
+    /// than something each consumer's call site restates.
+    ///
+    /// It performs no mutation and opens no effect: it answers whether the
+    /// declared relationships may exist, and the committed rows are minted
+    /// from the admitted set.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`BindingRefusal`] of the admission path; see
+    /// [`crate::admit_consumer_requests`] for the refusals it can produce.
+    pub fn admit_bindings(
+        &self,
+        zone: &ZoneId,
+        volume_ref: &ResourceRef,
+        volume_uid: &ResourceUid,
+        spec: &VolumeSpec,
+        grant: &VolumeAdmissionGrant<'_>,
+        requests: &[VolumeConsumerRequest],
+    ) -> Result<Vec<AdmittedVolumeBinding>, BindingRefusal> {
+        let source = VolumeAdmissionSource::new(
+            zone,
+            volume_ref,
+            volume_uid,
+            spec,
+            self.profile.supports_shared_write(),
+            grant,
+        );
+        admit_consumer_requests(&source, requests)
     }
 
     /// Reconcile one Volume and return its public status projection.

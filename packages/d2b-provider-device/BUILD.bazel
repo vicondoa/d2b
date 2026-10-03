@@ -9,7 +9,7 @@ load(
 
 # Provider crates link only from the daemon composition root and the
 # enumerated consumers; broker/shared crates cannot depend on them (U14).
-package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2bd:__pkg__"])
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2bd:__pkg__" ])
 
 exports_files(
     ["BUILD.bazel"],
@@ -83,6 +83,21 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "device_binding",
+    srcs = ["tests/device_binding.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-device-gpu:d2b_provider_device_gpu_test_support",
+        "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key_test_support",
+        "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip_test_support",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        ":d2b_provider_device_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "device_family_integration",
     srcs = ["integration/device_family.rs"],
     compile_data = ["Cargo.toml"],
@@ -110,6 +125,10 @@ filegroup(
             "integration/**/*",
             "nix/**/*",
             "README.md",
+            "operations.json",
+            "registrations.json",
+            "resource-types.json",
+            "service-catalog.json",
             "src/**/*.rs",
             "tests/**/*.rs",
         ],

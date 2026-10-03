@@ -18,7 +18,6 @@
   CloudHypervisorRunner = "Provider/runtime-cloud-hypervisor";
   QemuMediaRunner = "Provider/runtime-qemu-media";
   ActivationNixosRunner = "Provider/activation-nixos";
-  VsockRelay = "Provider/transport-vsock";
   OtelHostBridge = "Provider/observability-otel";
   Usbip = "Provider/device-usbip";
   SecurityKeyFrontend = "Provider/device-security-key";

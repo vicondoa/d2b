@@ -42,7 +42,7 @@ use std::{
 
 use serde_json::{json, Value};
 
-use crate::legacy::{DiagRow, GuestControl, LegacyError, LegacyResult};
+use crate::legacy::{CommandResult, DiagRow, GuestControl, LegacyError, LegacyResult};
 
 /// The zone the check drives, the fixture's own.
 const ZONE: &str = "work";
@@ -273,6 +273,62 @@ const GPU_REFUSAL_LINES: &str = concat!(
     "journalctl -u d2bd.service --no-pager -o cat -b -n 4000 ",
     "| grep -E 'device-worker|process-resolution-refused|gpu-runner-shape|",
     "render|w1-gpu|video' | tail -n 40 || true",
+);
+
+/// The daemon's own account of a refused `Device` teardown. The Device
+/// family's teardown runs a finalizer that stops the worker and retains the
+/// state Volume, so the lines that matter here are the ones the delete verb,
+/// the manager's durable delete and that finalizer write.
+///
+/// The journal entries are folded rather than cut: the lane's guest console
+/// truncates one long line, so an entry that carries its cause past the cut
+/// reads as an entry that carries no cause at all. Folding keeps every word
+/// and puts each on a line of its own.
+const DELETE_REFUSAL_LINES: &str = concat!(
+    "journalctl -u d2bd.service --no-pager -o cat -b -n 6000 ",
+    "| grep -E 'manager-backed store call failed|d2b_resource_api|finaliz|Finaliz|",
+    "Device/tpm0|swtpm|store|Store' ",
+    "| fold -w 150 | tail -n 30 || true",
+);
+
+/// Both units' whole-boot account of the authority publication the refused
+/// delete ran into. The refusal the CLI renders names the Zone's outstanding
+/// transaction, not the step that left it outstanding, so the publication's
+/// own history is what says which step leaked it.
+const PUBLICATION_JOURNAL: &str = concat!(
+    "journalctl -u d2bd.service -u d2b-broker.service --no-pager -o cat -b -n 20000 ",
+    "| grep -iE 'publication|authority|fence|outstanding|resynchroniz|store call failed' ",
+    "| fold -w 150 | tail -n 60 || true",
+);
+
+/// The Device row after a refused delete: whether the durable deleting mark
+/// landed at all, which revision it left behind, which finalizers are still
+/// installed, and what the driver published on the way out.
+const DEVICE_POST_DELETE: &str = concat!(
+    "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock ",
+    "d2b --zone work --json get Device/tpm0 ",
+    ">/run/d2b-u17-device-post-delete.json 2>&1; ",
+    "jq -c '{revision: .metadata.revision, deleting: .metadata.deletionRequestedAt, ",
+    "finalizers: .metadata.finalizers, phase: .status.phase}' ",
+    "/run/d2b-u17-device-post-delete.json 2>/dev/null ",
+    "|| fold -w 150 /run/d2b-u17-device-post-delete.json",
+);
+
+/// The declared rows the refused teardown was supposed to retire, so a
+/// refusal that already drained half of them is distinguishable from one that
+/// changed nothing.
+const DEVICE_POST_DELETE_ROWS: &str = concat!(
+    "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock ",
+    "d2b --zone work --json list Process >/run/d2b-u17-device-post-process.json 2>&1; ",
+    "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock ",
+    "d2b --zone work --json list Volume >/run/d2b-u17-device-post-volume.json 2>&1; ",
+    "jq -c '[.resources[] | select(.metadata.name == \"swtpm-tpm0\") ",
+    "| {name: .metadata.name, phase: .status.phase, deleting: .metadata.deletionRequestedAt}]' ",
+    "/run/d2b-u17-device-post-process.json 2>/dev/null; ",
+    "jq -c '[.resources[] | select(.metadata.name | startswith(\"device-\")) ",
+    "| {name: .metadata.name, phase: .status.phase, deleting: .metadata.deletionRequestedAt}]' ",
+    "/run/d2b-u17-device-post-volume.json 2>/dev/null",
+    "|| true",
 );
 
 /// The Device's revision, which the delete carries.
@@ -776,10 +832,34 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
     control.stage("tpm-teardown");
     control.succeed(&[&list_json("Device", DEVICE_PRE_DELETE)], None)?;
     let revision = control.succeed(&[DEVICE_REVISION], None)?.trim().to_owned();
-    control.succeed(
-        &[&d2b(&format!("delete Device/tpm0 --revision {revision}"), DEVICE_DELETE)],
+    // A refusing delete writes its error envelope to the same file the
+    // accepted path writes the row into, and the CLI renders that envelope on
+    // stdout. Reporting the exit code alone therefore said only that the
+    // teardown was refused, never which refusal, so the stage now carries the
+    // envelope and the daemon's own account of it.
+    let deleted = control.execute(
+        &d2b(&format!("delete Device/tpm0 --revision {revision}"), DEVICE_DELETE),
         None,
     )?;
+    if deleted.status != 0 {
+        // The refusal is reported as separate short lines: the lane console
+        // cuts one long line, and a refusal whose cause is only in the cut
+        // half is indistinguishable from a refusal with no cause at all.
+        for (label, command) in [
+            ("delete envelope", format!("cat {DEVICE_DELETE}")),
+            ("delete journal", DELETE_REFUSAL_LINES.to_owned()),
+            ("publication journal", PUBLICATION_JOURNAL.to_owned()),
+            ("delete row", DEVICE_POST_DELETE.to_owned()),
+            ("delete rows", DEVICE_POST_DELETE_ROWS.to_owned()),
+        ] {
+            let captured = control.execute(&command, None)?;
+            announce_block(control, label, &captured);
+        }
+        return Err(LegacyError::Assertion(format!(
+            "deleting Device/tpm0 must be accepted: exit {}",
+            deleted.status,
+        )));
+    }
     control.diag_wait(
         "tpm-teardown",
         &format!(
@@ -970,6 +1050,23 @@ fn binding_owner(owner: &str) -> &str {
 fn parse_json(output: &str, what: &str) -> LegacyResult<Value> {
     serde_json::from_str(output)
         .map_err(|error| LegacyError::Assertion(format!("{what} is not readable JSON: {error}")))
+}
+
+/// Print one command's output as its own announced lines, one entry per line.
+///
+/// The lane's guest console truncates a single long line, so a multi-entry
+/// dump joined into one string loses exactly the tail a refusal is usually
+/// explained in. Announcing the entries separately keeps every one of them
+/// whole, and the `label` prefix says which capture each line came from.
+fn announce_block(control: &mut GuestControl, label: &str, result: &CommandResult) {
+    let mut printed = 0usize;
+    for line in result.output.lines().filter(|line| !line.trim().is_empty()) {
+        control.announce(&format!("[d2b] {label}: {}", line.trim_end()));
+        printed += 1;
+    }
+    if printed == 0 {
+        control.announce(&format!("[d2b] {label}: (no output, exit {})", result.status));
+    }
 }
 
 /// The interval the fixture's two bounded polling windows slept between

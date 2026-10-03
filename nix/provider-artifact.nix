@@ -7,6 +7,7 @@
 , signature
 , configSchema
 , publicKey
+, declarationProjection ? null
 , packageName ? "d2b-provider-${artifactId}"
 , providerName ? artifactId
 , version ? "0.0.0"
@@ -37,6 +38,36 @@ let
       (contextPath: lib.hasSuffix ".drv" contextPath)
       (builtins.attrNames (builtins.getContext (toString path)));
   rawDigest = path: "sha256:${builtins.hashFile "sha256" path}";
+  # KTD1: the declaration-derived projection row this artifact was published
+  # from, when the packaging generator supplies one.
+  #
+  # The projection is data, never authority. Every digest below is still
+  # computed from the bytes this build produced, the signature and public key
+  # still come from the packaging boundary, and the projection has to agree
+  # with what was computed - so a build whose executable set, configuration
+  # schema, or declared Provider identity disagrees is refused here rather
+  # than signed. There is no field on this path for a signing key, so a
+  # provider's own source cannot carry one into packaging.
+  projectionRow =
+    if declarationProjection == null
+    then null
+    else (declarationProjection.providers or { }).${artifactId} or null;
+  projectedComponents =
+    if projectionRow == null then [ ] else projectionRow.components;
+  # The presentation capability each component realizes, exactly as the
+  # declaration stated it. No role name, seccomp label, or serving-worker
+  # role is consulted anywhere on this path, because there is none to consult.
+  declaredPresentations =
+    lib.listToAttrs (map
+      (component: lib.nameValuePair component.componentId component.presentation)
+      projectedComponents);
+  declaration =
+    if projectionRow == null
+    then null
+    else projectionRow // {
+      inherit artifactId;
+      inherit declaredPresentations;
+    };
   manifestData = builtins.fromJSON (builtins.readFile manifest);
   publisher = manifestData.trust.publisher;
   controllers = lib.filter
@@ -225,7 +256,7 @@ let
   package = assembled // {
     passthru = (assembled.passthru or { }) // {
       providerArtifact = {
-        inherit catalog trustedPublisher;
+        inherit catalog trustedPublisher declaration;
       };
     };
   };
@@ -258,6 +289,39 @@ assert builtins.isString manifestDigest
   && builtins.match digestPattern manifestDigest != null;
 assert builtins.isString configDigest
   && builtins.match digestPattern configDigest != null;
+assert declarationProjection == null || projectionRow != null;
+assert projectionRow == null
+  || lib.sort lib.lessThan (builtins.attrNames projectionRow)
+    == [
+      "components"
+      "configDigest"
+      "declarationDigest"
+      "executableSetDigest"
+      "providerRef"
+    ];
+assert projectionRow == null
+  || lib.all
+    (component:
+      lib.sort lib.lessThan (builtins.attrNames component)
+        == [
+          "componentId"
+          "presentation"
+          "setupRestrictions"
+        ]
+      && builtins.match binaryPattern component.componentId != null
+      && builtins.match binaryPattern component.presentation != null
+      && builtins.isList component.setupRestrictions
+      && lib.all
+        (restriction: builtins.match binaryPattern restriction != null)
+        component.setupRestrictions)
+    projectedComponents;
+assert projectionRow == null
+  || builtins.match digestPattern projectionRow.declarationDigest != null;
+assert projectionRow == null
+  || projectionRow.executableSetDigest == executableSetDigest;
+assert projectionRow == null || projectionRow.configDigest == configDigest;
+assert projectionRow == null
+  || projectionRow.providerRef == "Provider/${artifactId}";
 assert builtins.isList systems
   && lib.length systems > 0
   && lib.all (system: builtins.isString system) systems;

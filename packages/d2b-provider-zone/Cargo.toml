@@ -20,6 +20,10 @@ test-support = []
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
+# KTD1: the unified provider declaration is the serializable spec (contracts
+# layer) plus the canonical projection; generators and composition consume it.
+d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
+d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 
 [dev-dependencies]
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap", features = ["test-support"] }

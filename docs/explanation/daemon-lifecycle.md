@@ -1,9 +1,11 @@
 # Daemon lifecycle
 
 d2bd supervises the current Zone resource plane. It owns Zone runtime
-reconciliation and observes Guest, Process, Endpoint, Volume, Provider, and
-session status; `d2b-broker` performs the approved host mutations and is the
-sole parent and reaper for broker-spawned runners.
+reconciliation and observes the committed rows a Guest's lifecycle depends on:
+its Process, Endpoint, Volume, Network, Device, Credential, and binding rows,
+the Provider rows that assign them, and session status. `d2b-broker` performs
+the approved host mutations and is the sole parent and reaper for
+broker-spawned runners.
 
 ## Control-plane ownership
 
@@ -22,8 +24,24 @@ the Guest UID, child UID, generation, and revision.
 
 The Guest controller never spawns a process, mounts storage, binds a socket,
 provisions a device, handles credentials, or calls the broker directly.
-Process, Endpoint, Volume, Network, Device, Credential, and Provider
+Process, Endpoint, Volume, Network, Device, Credential, Provider, and binding
 controllers remain the effect owners.
+
+A binding is committed, not inlined. A consumer publishes a typed binding
+request, the source provider admits it against its own decision, the
+`Role` and `RoleBinding` authorization evidence, and the realization its
+selected backend declares, and the admitted relationship is committed as a row
+of its own type - `VolumeBinding`, `DeviceBinding`, `EndpointBinding`,
+`NetworkBinding`, or `CredentialBinding` - that a dedicated Provider serves
+and releases.
+
+Calls are declared rather than scripted. An `Operation` row names a declared
+`Provider` method or a provider-owned executable template, never a command
+row, host path, or argv. `Role` is authorization-only: bounded rules plus the
+`Operation` rows the holder may create, with no posture, mount, or command
+facet. `ExecutionPolicy` and `SeccompProfile` state confinement and the
+syscall filter respectively; neither grants resource access, which only an
+admitted binding row carries.
 
 ## Readiness
 
@@ -32,7 +50,8 @@ observable:
 
 - required Provider assignments and artifact commitments are current;
 - host-side Process, Endpoint, Volume, Network, and Device resources are
-  Ready;
+  Ready, and the binding rows their sources derived are ensured, with the
+  ones no longer derived retired;
 - the VMM Process is current and running;
 - the private Guest-control Endpoint is connected; and
 - the authenticated ComponentSession and any target-local seed Resources are
@@ -140,3 +159,4 @@ credentials.
 - [Storage lifecycle](../reference/store-lifecycle.md)
 - [ADR 0015](../adr/0015-daemon-only-clean-break.md)
 - [ADR 0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md)
+- [ADR 0055](../adr/0055-unified-resource-graph-bindings-operations-and-authority.md)

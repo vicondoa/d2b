@@ -5,7 +5,9 @@
 //!
 //! - aggregates those declarations into the `V3_CONVERTED_RESOURCE_TYPES`
 //!   authority const the v3 resource plane consumes (`include!`d from
-//!   `packages/d2b-contracts/src/identity.rs`), keeping the committed entry
+//!   `packages/d2b-contracts/src/identity.rs` straight out of the staged
+//!   `generated/new-graph/` closure, so there is one committed byte and not
+//!   a generated copy beside the compiled one), keeping the committed entry
 //!   order the plane's closed-form fence has consumed since that const
 //!   landed; a declared type absent from the committed order is appended
 //!   after it in sorted order, so a new type needs no edit here;
@@ -59,18 +61,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::authority_common::{collect_rs_files, verify_committed};
+use crate::authority_common::{collect_rs_files, declaration_paths, verify_committed, Declaration};
+#[cfg(test)]
+use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
 
 /// The directory-glob root the per-crate declarations live under.
 const PACKAGES_DIR: &str = "packages";
-const PROVIDER_PREFIX: &str = "d2b-provider-";
-const DECLARATION_FILE: &str = "resource-types.json";
 
-/// The repository-relative generated artifact path (relative to the source
-/// file that `include!`s it, so `include!("generated/...")` resolves it).
+/// The repository-relative generated artifact path: the staged closure copy
+/// the resource contracts `include!`s, so the declaration render and the
+/// compiled production bytes are the same file rather than two.
 pub(crate) const GENERATED_ARTIFACT: &str =
-    "packages/d2b-contracts/src/generated/v3_converted_resource_types.rs";
+    "generated/new-graph/v3_converted_resource_types.rs";
 
 /// The repository-relative generated Nix standard type registry.
 pub(crate) const NIX_RESOURCE_TYPES_OUT: &str = "nixos-modules/generated/resource-types.nix";
@@ -117,12 +120,15 @@ const COMMITTED_NIX_STANDARD_ORDER: &[&str] = &[
     "VolumeBinding",
     "Network",
     "Device",
+    "CredentialBinding",
+    "DeviceBinding",
     "User",
     "Credential",
     "Endpoint",
+    "CredentialBinding",
+    "DeviceBinding",
     "ResourceExport",
     "ResourceImport",
-    "Command",
     "Operation",
     "SeccompProfile",
 ];
@@ -143,6 +149,7 @@ const COMMITTED_V3_ORDER: &[&str] = &[
     "Volume",
     "VolumeBinding",
     "Endpoint",
+    "EndpointBinding",
     "Host",
     "User",
     "activation-nixos.d2bus.org.NixosGeneration",
@@ -170,7 +177,6 @@ const COMMITTED_V3_ORDER: &[&str] = &[
     "EmergencyPolicy",
     "ResourceExport",
     "ResourceImport",
-    "Command",
     "Operation",
     "SeccompProfile",
 ];
@@ -335,6 +341,62 @@ fn render_artifacts(
         (NIX_PROCESS_ROLE_PROVIDERS_OUT.to_owned(), role_providers),
         (PROCESS_ROLES_OUT.to_owned(), process_roles),
     ])
+}
+
+/// Render the generated converted-resource-type authority from the
+/// declarations alone.
+///
+/// `gen-new-graph` renders its committed new-graph projection through this
+/// entry point, so the staged bytes are the same render the `--fix` path
+/// installs. Only the Rust authority artifact is returned: the Nix views
+/// beside it are rendered from committed orderings and the principal
+/// allocation, which the new graph does not read. The declaration-internal
+/// gates run here; the source-parity gate stays a separate cross-check the
+/// new-graph closure runs over the composition.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, String> {
+    let loaded = load_declarations(repo_root)?;
+    let registry = AuthorityRegistry {
+        declarations: loaded.types,
+        descriptors: BTreeMap::new(),
+        roles: loaded.roles,
+        sources: BTreeMap::new(),
+    };
+    let errors = declaration_internal_errors(&registry);
+    if !errors.is_empty() {
+        return Err(format!(
+            "resource-type-authority declaration violations:\n- {}",
+            errors.join("\n- ")
+        ));
+    }
+    render(&registry)
+}
+
+/// The declaration-internal violations: a type two crates declare, a role
+/// two crates declare, and a malformed owning `Provider/<name>` reference.
+/// These are properties of the declarations alone, so a declaration-only
+/// render refuses them without consulting a crate's compiled sources.
+fn declaration_internal_errors(registry: &AuthorityRegistry) -> Vec<String> {
+    let mut errors = Vec::new();
+    let mut declared_by: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (crate_name, types) in &registry.declarations {
+        for type_name in types {
+            declared_by
+                .entry(type_name.as_str())
+                .or_default()
+                .push(crate_name.as_str());
+        }
+    }
+    for (type_name, crates) in &declared_by {
+        if crates.len() > 1 {
+            errors.push(format!(
+                "type-declared-twice: {type_name} is declared by both {}and {}",
+                crates[0], crates[1]
+            ));
+        }
+    }
+    errors.extend(role_parity_errors(registry));
+    errors
 }
 
 /// The declared standard (unqualified) ResourceTypes in committed order, with
@@ -535,7 +597,7 @@ fn render_process_roles(registry: &AuthorityRegistry) -> Result<String, String> 
 /// registered descriptors from the tree.
 fn load(repo_root: &Path) -> Result<AuthorityRegistry, String> {
     let loaded = load_declarations(repo_root)?;
-    let sources = loaded.sources;
+    let sources = load_sources(repo_root, &loaded.types)?;
     let descriptors = load_descriptors(repo_root, &sources)?;
     Ok(AuthorityRegistry {
         declarations: loaded.types,
@@ -551,32 +613,25 @@ struct LoadedDeclarations {
     types: BTreeMap<String, BTreeSet<String>>,
     /// Crate name -> declared role rows, in declaration order.
     roles: BTreeMap<String, Vec<RoleDeclaration>>,
-    /// Crate name -> its concatenated source text.
-    sources: BTreeMap<String, String>,
 }
 
 /// Read every provider crate's declaration file, collecting the declared
-/// types, roles, and the crate's descriptor source text (U4).
+/// types and roles (U4).
+///
+/// The set of crates is [`declaration_paths`]', which refuses a provider
+/// crate carrying no declaration rather than dropping it: a renamed
+/// `resource-types.json` would otherwise shrink the type authority, the Nix
+/// registry, and the new-graph projection together with every gate still
+/// green over the smaller input.
+///
+/// A crate source is a separate input, read by [`load_sources`] for the
+/// descriptor parity gate alone, so the declaration-only render neither
+/// needs a `src` tree in its sandbox nor reads one it would discard.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_declarations(repo_root: &Path) -> Result<LoadedDeclarations, String> {
-    let packages_dir = repo_root.join(PACKAGES_DIR);
     let mut types = BTreeMap::new();
     let mut roles = BTreeMap::new();
-    let mut sources = BTreeMap::new();
-    let entries = fs::read_dir(&packages_dir).map_err(|error| {
-        format!("cannot read {}: {error}", packages_dir.display())
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read a packages entry: {error}"))?;
-        let crate_name = entry.file_name().to_string_lossy().into_owned();
-        if !crate_name.starts_with(PROVIDER_PREFIX) {
-
-            continue;
-        }
-        let declaration_path = entry.path().join(DECLARATION_FILE);
-        if !declaration_path.is_file() {
-            continue;
-        }
+    for (crate_name, declaration_path) in declaration_paths(repo_root, Declaration::ResourceTypes)? {
         let text = fs::read_to_string(&declaration_path).map_err(|error| {
             format!("cannot read the declaration {}: {error}", declaration_path.display())
         })?;
@@ -596,9 +651,26 @@ fn load_declarations(repo_root: &Path) -> Result<LoadedDeclarations, String> {
         let type_names = file.types.into_iter().map(|t| t.resource_type).collect();
         types.insert(crate_name.clone(), type_names);
         if !file.roles.is_empty() {
-            roles.insert(crate_name.clone(), file.roles);
+            roles.insert(crate_name, file.roles);
         }
-        let src_dir = repo_root.join(PACKAGES_DIR).join(&crate_name).join("src");
+    }
+    Ok(LoadedDeclarations { types, roles })
+}
+
+/// Read the declaring crates' Rust sources, the input the descriptor parity
+/// gate compares a declaration against.
+///
+/// The crate set is the one [`load_declarations`] already proved complete, so
+/// there is no second enumeration here that could skip a crate whose
+/// declaration file is missing.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn load_sources(
+    repo_root: &Path,
+    declaring: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut sources = BTreeMap::new();
+    for crate_name in declaring.keys() {
+        let src_dir = repo_root.join(PACKAGES_DIR).join(crate_name).join("src");
         let mut source_text = String::new();
         for path in collect_rs_files(&src_dir)? {
             source_text.push_str(
@@ -608,13 +680,9 @@ fn load_declarations(repo_root: &Path) -> Result<LoadedDeclarations, String> {
             );
             source_text.push('\n');
         }
-        sources.insert(crate_name, source_text);
+        sources.insert(crate_name.clone(), source_text);
     }
-    Ok(LoadedDeclarations {
-        types,
-        roles,
-        sources,
-    })
+    Ok(sources)
 }
 
 /// Extract the type names each declaring crate's descriptor registers from
@@ -962,11 +1030,322 @@ fn render(registry: &AuthorityRegistry) -> Result<String, String> {
 
 
 
+/// The canonical manifest inputs a declaration projection produces.
+///
+/// One provider yields one entry: the exact canonical declaration bytes a
+/// provider signs, and the digest that frames them. The bytes come from the
+/// plan, which derived them from the declaration, so packaging and
+/// configuration consume the same source and neither can restate the other's
+/// view.
+///
+/// The renderer is staged: the production entry point keeps the
+/// pre-declaration path until the cutover, so this is exercised by its
+/// owner-local tests rather than by a second generation command.
+#[cfg(test)]
+pub(crate) fn render_declaration_manifest_inputs(
+    plan: &PrivatePlanProjection,
+) -> BTreeMap<String, Vec<u8>> {
+    plan.manifest_inputs()
+        .iter()
+        .map(|input| (input.artifact_id().to_owned(), input.declaration_bytes().to_vec()))
+        .collect()
+}
+
+/// The manifest-input index a generator records beside the declarations.
+///
+/// The index is derived, so a provider that changes its method moves this
+/// table without a handwritten row to edit.
+#[cfg(test)]
+pub(crate) fn render_declaration_manifest_index(plan: &PrivatePlanProjection) -> String {
+    let mut out = String::new();
+    out.push_str("{\n");
+    for input in plan.manifest_inputs() {
+        out.push_str(&format!(
+            "  {} = {{\n    providerRef = {};\n    declarationDigest = {};\n    executableSetDigest = {};\n    configDigest = {};\n  }};\n",
+            nix_string(input.artifact_id()),
+            nix_string(input.provider_ref()),
+            nix_string(input.declaration_digest()),
+            nix_string(input.executable_set_digest()),
+            nix_string(input.config_digest()),
+        ));
+    }
+    out.push_str("}\n");
+    out
+}
+
+/// The one declaration every authority's test projects (KTD1/U4).
+///
+/// A Zone-singleton `VolumeBinding` controller and a namespace-first volume
+/// service, which is the smallest declaration that exercises a ResourceType
+/// export, a method export, a service export, a presentation capability, and
+/// the setup restrictions that capability requires.
+#[cfg(test)]
+pub(crate) mod declaration_fixture {
+    use std::collections::BTreeMap;
+
+    use d2b_contracts_provider::v3::{
+        ArtifactDigest, BinaryRef, ComponentDescriptor, ComponentExecution,
+        ComponentTargetCapability, ComponentType, ControllerInstanceScope, ControllerTargetKind,
+        DeclaredComponent, DeclaredMethod, DeclaredPlacement, DeclaredService, EffectPortClass,
+        PresentationCapability, ProviderDeclarationSpec, SetupRestriction,
+    };
+    use d2b_contracts_resource::v3::{
+        ArtifactId, ResourceTypeName, execution_policy::{BoundedToken, ExecutionDomain},
+        resource_schema::PlacementAnchor,
+    };
+    use d2b_contracts_provider::v3::projection::{
+        BuiltArtifact, GRAPH_PROJECTION_CONTRACT_VERSION, PrivatePlanProjection,
+        project_provider_graph,
+    };
+    use d2b_contracts_resource::v3::{canonical_digest, canonical_json_bytes};
+    use d2b_contracts_resource::v3::{
+        BindingSlot, ResourceRef, VolumeBindingRequest, VolumePresentation, ZoneId,
+        volume::AttachmentAccess,
+    };
+    use d2b_contracts::identity::deterministic_resource_uid;
+    use d2b_contracts_provider::v3::projection::ConsumerRequestInput;
+
+    /// The canonical root configuration schema the fixture components digest.
+    const CONFIG_SCHEMA: &[u8] = br#"{"type":"object"}"#;
+    const DIGEST_B: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000002";
+    const ARTIFACT: &str = "provider-volume-virtiofs";
+    const SERVICE_ID: &str = "volume-virtiofs.d2bus.org/export";
+
+    fn token(value: &str) -> BoundedToken {
+        BoundedToken::parse(value).expect("bounded token")
+    }
+
+    fn resource_type(value: &str) -> ResourceTypeName {
+        ResourceTypeName::parse(value).expect("registered resource type")
+    }
+
+    fn digest(value: &str) -> ArtifactDigest {
+        ArtifactDigest::parse(value).expect("canonical digest")
+    }
+
+    /// A raw SHA-256 digest in the contract spelling.
+    fn sha256_digest(bytes: &[u8]) -> ArtifactDigest {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(bytes);
+        let mut out = String::from("sha256:");
+        for byte in digest {
+            out.push_str(&format!("{byte:02x}"));
+        }
+        ArtifactDigest::parse(out).expect("a raw SHA-256 digest")
+    }
+
+    /// The D101 executable-set digest the build output hashes to, framed the
+    /// way the compiler's artifact check frames it.
+    fn d101_executable_set_digest(
+        executables: &std::collections::BTreeMap<String, ArtifactDigest>,
+    ) -> ArtifactDigest {
+        let object: std::collections::BTreeMap<String, String> = executables
+            .iter()
+            .map(|(name, digest)| (name.clone(), digest.as_str().to_owned()))
+            .collect();
+        let bytes = canonical_json_bytes(&object).expect("a canonical executable map");
+        ArtifactDigest::parse(canonical_digest("d2b:v3:provider-executable-set", &bytes))
+            .expect("a framed canonical digest")
+    }
+
+    fn artifact_id() -> ArtifactId {
+        ArtifactId::parse(ARTIFACT).expect("artifact identifier")
+    }
+
+    fn config_digest() -> ArtifactDigest {
+        BuiltArtifact::new(
+            artifact_id(),
+            GRAPH_PROJECTION_CONTRACT_VERSION,
+            digest(DIGEST_B),
+            digest(DIGEST_B),
+            CONFIG_SCHEMA.to_vec(),
+        )
+        .config_digest()
+    }
+
+    /// The build output the declaration is admitted against.
+    pub(crate) fn built_artifact() -> BuiltArtifact {
+        let mut executables = BTreeMap::new();
+        executables.insert("volume-virtiofs".to_owned(), sha256_digest(b"volume-virtiofs"));
+        let declared = d101_executable_set_digest(&executables);
+        BuiltArtifact::new(
+            artifact_id(),
+            GRAPH_PROJECTION_CONTRACT_VERSION,
+            declared.clone(),
+            declared,
+            CONFIG_SCHEMA.to_vec(),
+        )
+    }
+
+    fn controller() -> DeclaredComponent {
+        let descriptor = ComponentDescriptor::new(
+            token("volume-binding"),
+            ComponentType::Controller,
+            [resource_type("VolumeBinding")],
+            [],
+            [ExecutionDomain::System],
+            1,
+            config_digest(),
+            [],
+        )
+        .expect("controller descriptor")
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("volume-binding").expect("binary reference"),
+        })
+        .with_controller_placement(
+            ControllerInstanceScope::ZoneSingleton,
+            [ControllerTargetKind::Zone],
+        )
+        .expect("zone singleton placement")
+        .with_target_capabilities([ComponentTargetCapability::new(
+            ControllerTargetKind::Zone,
+            digest(DIGEST_B),
+            [],
+        )
+        .expect("zone target capability")])
+        .expect("zone target capabilities");
+        DeclaredComponent::new(
+            descriptor,
+            DeclaredPlacement::new([ControllerTargetKind::Zone], Some(PlacementAnchor::Zone))
+                .expect("zone placement"),
+            PresentationCapability::None,
+            [],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("declared controller component")
+    }
+
+    /// The service with exactly the declared methods.
+    pub(crate) fn service(methods: &[&str]) -> DeclaredComponent {
+        let descriptor = ComponentDescriptor::new(
+            token("volume-virtiofs"),
+            ComponentType::Service,
+            [],
+            methods.iter().map(|method| token(method)),
+            [ExecutionDomain::System],
+            1,
+            config_digest(),
+            [],
+        )
+        .expect("service descriptor")
+        .with_execution(ComponentExecution::Launchable {
+            binary_ref: BinaryRef::parse("virtiofsd-mount-helper").expect("binary reference"),
+        })
+        .with_target_capabilities([ComponentTargetCapability::new(
+            ControllerTargetKind::Host,
+            digest(DIGEST_B),
+            [EffectPortClass::Volume],
+        )
+        .expect("host target capability")])
+        .expect("host target capabilities");
+        let presentation = PresentationCapability::NamespaceFirstServiceSource;
+        DeclaredComponent::new(
+            descriptor,
+            DeclaredPlacement::new([ControllerTargetKind::Host], None).expect("host placement"),
+            presentation,
+            SetupRestriction::required_for(presentation).iter().copied(),
+            methods
+                .iter()
+                .map(|method| DeclaredMethod::new(token(method), None, presentation))
+                .collect(),
+            vec![DeclaredService::new(
+                SERVICE_ID,
+                methods.iter().map(|method| token(method)),
+            )
+            .expect("declared service")],
+            [],
+        )
+        .expect("declared service component")
+    }
+
+    /// The fixture declaration.
+    pub(crate) fn declaration(methods: &[&str]) -> ProviderDeclarationSpec {
+        ProviderDeclarationSpec::new(
+            artifact_id(),
+            [controller(), service(methods)],
+            [],
+        )
+        .expect("declaration spec")
+    }
+
+    /// The private plan the fixture declaration projects.
+    pub(crate) fn plan(methods: &[&str]) -> PrivatePlanProjection {
+        project_provider_graph(&[&declaration(methods)], &[built_artifact()], &[])
+            .expect("the fixture declaration projects")
+    }
+
+    /// The fixture's canonical consumer request: the configuration
+    /// shorthand's compiled form, keyed by the committed identities it is
+    /// admitted under.
+    pub(crate) fn consumer_request() -> ConsumerRequestInput {
+        let zone = ZoneId::parse("alpha").expect("zone identifier");
+        let request = VolumeBindingRequest::new(
+            ResourceRef::parse("Volume/data").expect("source reference"),
+            ResourceRef::parse("Process/worker").expect("consumer reference"),
+            BindingSlot::parse("root").expect("bounded slot"),
+            BoundedToken::parse("root").expect("bounded view"),
+            AttachmentAccess::ReadWrite,
+            VolumePresentation::filesystem("/data").expect("filesystem presentation"),
+        )
+        .expect("canonical volume binding request");
+        ConsumerRequestInput::new(
+            zone,
+            deterministic_resource_uid("alpha", "Volume", "data"),
+            deterministic_resource_uid("alpha", "Process", "worker"),
+            request,
+        )
+    }
+
+    /// The private plan the fixture declaration projects with one canonical
+    /// consumer request.
+    pub(crate) fn plan_with_request(methods: &[&str]) -> PrivatePlanProjection {
+        let request = consumer_request();
+        project_provider_graph(&[&declaration(methods)], &[built_artifact()], &[request])
+            .expect("the fixture declaration projects with a consumer request")
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 mod tests {
     use super::*;
     use std::fs;
+
+    /// The manifest inputs are the declaration's own canonical bytes, so a
+    /// provider that edits its declaration edits its signed manifest input
+    /// without a second authored copy.
+    #[test]
+    fn the_manifest_inputs_are_the_declarations_own_canonical_bytes() {
+        let plan = declaration_fixture::plan(&["export", "close"]);
+        let inputs = render_declaration_manifest_inputs(&plan);
+        assert_eq!(inputs.len(), 1);
+        let bytes = inputs.get("provider-volume-virtiofs").expect("one input per provider");
+        assert_eq!(
+            bytes.as_slice(),
+            d2b_contracts_resource::v3::canonical_json_bytes(
+                &declaration_fixture::declaration(&["export", "close"])
+            )
+            .expect("canonical declaration bytes")
+            .as_slice()
+        );
+        let index = render_declaration_manifest_index(&plan);
+        assert!(index.contains("\"provider-volume-virtiofs\""));
+        assert!(!index.contains("namespace-first-service-source"));
+        // The index is derived, so it is byte-stable for one declaration.
+        assert_eq!(index, render_declaration_manifest_index(&plan));
+    }
+
+    /// Changing one declared method moves the manifest input and its index.
+    #[test]
+    fn one_changed_method_moves_the_manifest_input() {
+        let before = render_declaration_manifest_index(&declaration_fixture::plan(&["export"]));
+        let after =
+            render_declaration_manifest_index(&declaration_fixture::plan(&["export", "close"]));
+        assert_ne!(before, after, "the index is derived from the declaration");
+    }
 
     /// A throwaway fixture tree under the OS temp dir.
     struct Fixture {
@@ -1259,7 +1638,6 @@ mod tests {
         "  \"Endpoint\"\n",
         "  \"ResourceExport\"\n",
         "  \"ResourceImport\"\n",
-        "  \"Command\"\n",
         "  \"Operation\"\n",
         "  \"SeccompProfile\"\n",
         "]\n",
@@ -1290,7 +1668,6 @@ mod tests {
             "Endpoint",
             "ResourceExport",
             "ResourceImport",
-            "Command",
             "Operation",
             "SeccompProfile",
         ];

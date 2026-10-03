@@ -155,20 +155,21 @@ complete -c d2b -n "__fish_d2b_using_subcommand debug" -l json -d 'Emit the stab
 complete -c d2b -n "__fish_d2b_using_subcommand debug" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand debug" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand debug" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -l deadline -d 'Bound all Zone requests and streams' -r
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -l json -d 'Emit the stable JSON envelope'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -l human -d 'Force human-readable terminal output'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -l no-deadline -d 'Suppress the command default deadline'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -s h -l help -d 'Print help'
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -f -a "get"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -f -a "list"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -f -a "status"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -f -a "prepare"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -f -a "destroy"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -f -a "doctor"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -f -a "reconcile"
-complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate" -f -a "validate"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -f -a "get"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -f -a "list"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -f -a "status"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -f -a "prepare"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -f -a "destroy"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -f -a "doctor"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -f -a "reconcile"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -f -a "validate"
+complete -c d2b -n "__fish_d2b_using_subcommand host; and not __fish_seen_subcommand_from get list status prepare destroy doctor reconcile validate reset" -f -a "reset" -d '`d2b host reset`: the offline, ownership-bounded clean break'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from get" -l json -d 'Emit the stable JSON envelope'
@@ -239,6 +240,16 @@ complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l human -d 'Force human-readable terminal output'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -l no-deadline -d 'Suppress the command default deadline'
 complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from validate" -s h -l help -d 'Print help'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reset" -l state-root -d 'The deployment root this reset is bounded to. It defaults to the broker\'s own state directory' -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reset" -l cgroup-root -d 'The cgroup hierarchy root the live-drain probe walks. It defaults to the broker\'s own managed slice' -r -F
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reset" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reset" -l deadline -d 'Bound all Zone requests and streams' -r
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reset" -l dry-run
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reset" -l apply
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reset" -l json -d 'Emit the stable JSON envelope'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reset" -l human -d 'Force human-readable terminal output'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reset" -l no-deadline -d 'Suppress the command default deadline'
+complete -c d2b -n "__fish_d2b_using_subcommand host; and __fish_seen_subcommand_from reset" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -l zone -d 'Address a declared Zone. Without this flag the nearest local runtime is selected' -r
 complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -l deadline -d 'Bound all Zone requests and streams' -r
 complete -c d2b -n "__fish_d2b_using_subcommand guest; and not __fish_seen_subcommand_from get list status start stop restart create update-spec delete console" -l json -d 'Emit the stable JSON envelope'

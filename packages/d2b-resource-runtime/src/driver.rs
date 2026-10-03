@@ -133,6 +133,40 @@ pub trait ResourceDriver: Send + 'static {
     /// actor mailbox on external work (R5, KTD12).
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, Self::Error>;
 
+    /// Pre-drain: block new use, then drain this resource's own claims,
+    /// BEFORE the generic children-first finalization (KTD10, R6, R36).
+    ///
+    /// The manager has already committed the durable deleting mark and
+    /// blocked new authority for this row by the time this runs, so the pass
+    /// starts from a fenced resource and only has to close what the resource
+    /// itself holds. A resource that keeps use open on something another row
+    /// depends on - a binding's source reservation and its helper legs - uses
+    /// this step to fence that use, detach the consumer while the required
+    /// helpers still exist, and finalize the helpers. Only a successful
+    /// pre-drain authorizes the generic child deletion that follows, so no
+    /// ordering can free a source while a consumer or helper still holds
+    /// admitted use.
+    ///
+    /// This is a lifecycle stage, not a wait: it must return as soon as it
+    /// has recorded what it did, and a helper or consumer that is not closed
+    /// yet is reported through a retryable failure so the actor requeues
+    /// another pass. No implementation may block on a descendant.
+    ///
+    /// It runs for EVERY resource whose durable deleting mark is committed and
+    /// for cancellation from EVERY state, not only a normal `Active`
+    /// teardown: a request cancelled before anything was reserved has nothing
+    /// to drain, and a relationship that never became active has no consumer
+    /// detach observation to wait for. Both converge here without waiting.
+    ///
+    /// Idempotent under retry, like the finalize step after it: a requeued
+    /// pass re-reads its own state and converges.
+    ///
+    /// Default: no drain work. A driver whose type has nothing to drain
+    /// converges in `delete` exactly as before this step existed.
+    async fn pre_drain(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
     /// Drain step: called by the actor immediately before
     /// [`ResourceDriver::delete`] for EVERY resource whose durable deleting
     /// mark is already committed (R10, F3). The driver performs the
@@ -168,6 +202,16 @@ pub trait DynResourceDriver: Send + 'static {
     async fn validate(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure>;
     async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, DriverFailure>;
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, DriverFailure>;
+    /// Pre-drain stage (KTD10); the actor runs it ahead of
+    /// [`DynResourceDriver::finalize`] on every resource.
+    ///
+    /// Defaults to a no-op: a resource with no reservation, no helper, and
+    /// no outstanding use has nothing to drain, and forcing every erased
+    /// driver to write an empty override would be noise that hides the
+    /// resources that do have something to drain.
+    async fn pre_drain(&mut self, _ctx: &mut ResourceContext) -> Result<(), DriverFailure> {
+        Ok(())
+    }
     /// Drain step; the actor runs it immediately before
     /// [`DynResourceDriver::delete`] on every resource.
     async fn finalize(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure>;
@@ -184,6 +228,16 @@ impl<D: ResourceDriver> DynResourceDriver for D {
         self.recover(ctx).await.map_err(|error| self.classify_error(&error))
     }
 
+
+    async fn pre_drain(&mut self, ctx: &mut ResourceContext) -> Result<(), DriverFailure> {
+        // The KTD10 pre-drain stage runs at the erased boundary the actor
+        // drives, ahead of the generic child finalization: a driver that
+        // overrides nothing here still gets the step, and a driver that
+        // overrides it cannot be skipped by a caller of `finalize`.
+        ResourceDriver::pre_drain(self, ctx)
+            .await
+            .map_err(|error| self.classify_error(&error))
+    }
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, DriverFailure> {
         self.reconcile(ctx).await.map_err(|error| self.classify_error(&error))
     }

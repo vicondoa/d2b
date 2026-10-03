@@ -6,12 +6,11 @@
   "required": [
     "bundleVersion",
     "generation",
-    "privilegesPath",
     "schemaVersion"
   ],
   "properties": {
     "artifactHashes": {
-      "description": "Per-artifact SHA-256 hashes for tamper detection of every private bundle artifact loaded by the resolver.\n\nKeys match the path strings stored in the bundle path fields: absolute paths for `privileges_path`, `storage_path`, and `realm_workloads_launcher_v2_path`. Values are `\"sha256:<hex64>\"` strings.\n\nWhen `None`, per-artifact hash verification is skipped (backwards compatibility with bundles that pre-date this field).",
+      "description": "Per-artifact SHA-256 hashes for tamper detection of every private bundle artifact loaded by the resolver.\n\nKeys match the path strings stored in the bundle path fields: absolute paths for `storage_path` and `realm_workloads_launcher_v2_path`. Values are `\"sha256:<hex64>\"` strings.\n\nWhen `None`, per-artifact hash verification is skipped (backwards compatibility with bundles that pre-date this field).",
       "type": [
         "object",
         "null"
@@ -40,10 +39,6 @@
           "$ref": "#/definitions/BundleGeneration"
         }
       ]
-    },
-    "privilegesPath": {
-      "description": "Private privileges.json artifact path.",
-      "type": "string"
     },
     "realmWorkloadsLauncherV2Path": {
       "description": "Argv-free provider-neutral launcher metadata served through the public API.",

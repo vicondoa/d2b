@@ -80,6 +80,13 @@ use crate::{
 /// The one resource type this factory serves (KTD4 Phase A).
 pub const ACTIVATION_TYPE_NAME: &str = NIXOS_GENERATION_RESOURCE_TYPE;
 
+/// This family's own compiled implementation identity.
+///
+/// It is the row this crate's provider declaration generates, so a verified
+/// deployment graph that does not publish it did not deploy this family and
+/// this family plans no runner for it.
+pub const ACTIVATION_IMPLEMENTATION: &str = "activation-nixos";
+
 /// The activation-runner child resource type (old `create_runner`).
 pub const RUNNER_TYPE_NAME: &str = "EphemeralProcess";
 
@@ -115,6 +122,9 @@ enum ActivationDriverErrorKind {
     Policy,
     /// The manager refused a child mutation or the owned-child read.
     ChildMutation,
+    /// The verified deployment graph this family accepted does not publish
+    /// this family's own implementation identity, so no runner is planned.
+    BootstrapGraphUnaccepted,
 }
 
 impl core::fmt::Display for ActivationDriverErrorKind {
@@ -123,6 +133,7 @@ impl core::fmt::Display for ActivationDriverErrorKind {
             Self::SpecInvalid => "activation-spec-invalid",
             Self::Policy => "activation-policy-refused",
             Self::ChildMutation => "activation-child-mutation-failed",
+            Self::BootstrapGraphUnaccepted => "activation-bootstrap-graph-unaccepted",
         })
     }
 }
@@ -344,6 +355,15 @@ pub struct ActivationDriverArgs {
     /// The daemon-supplied facet set the family's own effects implementation
     /// is built from.
     pub facets: crate::facets::ActivationEffectFacets,
+    /// The verified deployment graph this deployment published, when it
+    /// published one.
+    ///
+    /// U31 builds this beside the unchanged construction rather than in it:
+    /// a driver built through [`ActivationDriverFactory::new`] keeps the
+    /// pre-cutover behaviour, and the cutover installs
+    /// [`ActivationDriverFactory::with_verified_deployment_graph`] together
+    /// with the daemon's publication step in the same atomic step.
+    pub deployment_graph: Option<Arc<crate::controller::AcceptedDeploymentGraph>>,
 }
 
 /// [`ResourceDriverFactory`] for the `NixosGeneration` resource type.
@@ -351,6 +371,8 @@ pub struct ActivationDriverArgs {
 pub struct ActivationDriverFactory {
     types: [ResourceTypeName; 1],
     args: ActivationDriverArgs,
+    /// The verified deployment graph, when the composition installed one.
+    deployment_graph: Option<Arc<crate::controller::AcceptedDeploymentGraph>>,
     /// Test-support verifier override: production binds the crate's own
     /// fail-closed verifier; a test scripts the gate so the full
     /// facets -> factory -> driver -> handoff seam is observable through
@@ -363,6 +385,29 @@ impl ActivationDriverFactory {
     pub(crate) fn new(args: ActivationDriverArgs) -> Self {
         Self {
             types: [ResourceTypeName::new(ACTIVATION_TYPE_NAME)],
+            deployment_graph: args.deployment_graph.clone(),
+            args,
+            #[cfg(any(test, feature = "test-support"))]
+            verifier: None,
+        }
+    }
+
+    /// Construct over a verified deployment graph this target accepted.
+    ///
+    /// A driver built this way plans a runner only when the accepted graph
+    /// publishes this family's own implementation identity. That is the
+    /// family's half of "no provider begins effects under an unaccepted
+    /// bootstrap graph": an activation for a deployment that did not deploy
+    /// this family is refused before any runner is planned.
+    pub fn with_verified_deployment_graph(
+        args: ActivationDriverArgs,
+        graph: Arc<crate::controller::AcceptedDeploymentGraph>,
+    ) -> Self {
+        let mut args = args;
+        args.deployment_graph = Some(Arc::clone(&graph));
+        Self {
+            types: [ResourceTypeName::new(ACTIVATION_TYPE_NAME)],
+            deployment_graph: Some(graph),
             args,
             #[cfg(any(test, feature = "test-support"))]
             verifier: None,
@@ -380,6 +425,7 @@ impl ActivationDriverFactory {
     ) -> Self {
         Self {
             types: [ResourceTypeName::new(ACTIVATION_TYPE_NAME)],
+            deployment_graph: args.deployment_graph.clone(),
             args,
             verifier: Some(verifier),
         }
@@ -414,6 +460,7 @@ impl ResourceDriverFactory for ActivationDriverFactory {
                 self.args.facets.clone(),
             )),
             self.verifier(),
+            self.deployment_graph.clone(),
         ))
     }
 }
@@ -428,6 +475,9 @@ pub(crate) struct ActivationDriver {
     effects: Arc<dyn ActivationDriverEffects>,
     verifier: Arc<dyn ActivationApplicationVerifier>,
     controller: ActivationController,
+    /// The verified deployment graph this driver runs under, when the
+    /// composition installed one.
+    deployment_graph: Option<Arc<crate::controller::AcceptedDeploymentGraph>>,
     /// The owned runner child a settle watch is already registered for
     /// (R12 dependency edge: one registration per child).
     watched_runner: tokio::sync::Mutex<Option<ResourceKey>>,
@@ -441,14 +491,27 @@ impl ActivationDriver {
         zone: String,
         effects: Arc<dyn ActivationDriverEffects>,
         verifier: Arc<dyn ActivationApplicationVerifier>,
+        deployment_graph: Option<Arc<crate::controller::AcceptedDeploymentGraph>>,
     ) -> Self {
         Self {
             zone,
             effects,
             verifier,
             controller: ActivationController::new(),
+            deployment_graph,
             watched_runner: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// Whether the accepted deployment graph publishes this family.
+    ///
+    /// A driver with no accepted graph answers `true`: that is the
+    /// pre-cutover construction, and the U34 cutover installs the graph and
+    /// makes the answer mandatory in the same step.
+    fn publishes_this_family(&self) -> bool {
+        self.deployment_graph.as_ref().is_none_or(|graph| {
+            graph.publishes(ACTIVATION_IMPLEMENTATION)
+        })
     }
 
     fn error(&self, kind: ActivationDriverErrorKind, op: DriverOp) -> ActivationDriverError {
@@ -761,6 +824,23 @@ impl ResourceDriver for ActivationDriver {
         ctx: &mut ResourceContext,
     ) -> Result<ReconcileOutcome, Self::Error> {
         let spec = self.decoded_spec(ctx, DriverOp::Reconcile)?;
+        // U31: the family's half of "no provider begins effects under an
+        // unaccepted bootstrap graph". An accepted deployment graph that
+        // does not publish this family's implementation identity is a
+        // deployment that did not deploy this family, and the reconcile is
+        // refused before any runner is planned.
+        if !self.publishes_this_family() {
+            tracing::warn!(
+                zone = %self.zone,
+                generation = %ctx.key().name.as_str(),
+                "activation reconcile refused: the accepted deployment graph does not publish \
+                 this family"
+            );
+            return Err(self.error(
+                ActivationDriverErrorKind::BootstrapGraphUnaccepted,
+                DriverOp::Reconcile,
+            ));
+        }
         // Old `ordinal_from_resource`: the trailing bounded generation
         // number, else the durable row generation.
         let ordinal = ordinal_from_name(ctx.key().name.as_str()).unwrap_or(ctx.generation());
@@ -1068,7 +1148,7 @@ mod tests {
         // The driver's own typed seam, scripted: production builds the same
         // seam from the facets (the factory); tests drive the behavior
         // directly over the recording double.
-        Box::new(ActivationDriver::new("work".to_owned(), effects, verifier))
+        Box::new(ActivationDriver::new("work".to_owned(), effects, verifier, None))
     }
 
     fn status(ctx: &ResourceContext) -> ActivationDriverStatus {
@@ -1198,6 +1278,7 @@ mod tests {
         )]);
         let factory = ActivationDriverFactory::with_verifier(
             ActivationDriverArgs {
+            deployment_graph: None,
                 zone: "work".to_owned(),
                 facets: crate::test_support::recording_facets(broker.clone()),
             },
@@ -1256,6 +1337,7 @@ mod tests {
     async fn a_production_factory_created_driver_refuses_before_dispatch() {
         let broker = crate::test_support::RecordingBrokerDispatch::new();
         let factory = ActivationDriverFactory::new(ActivationDriverArgs {
+            deployment_graph: None,
             zone: "work".to_owned(),
             facets: crate::test_support::recording_facets(broker.clone()),
         });

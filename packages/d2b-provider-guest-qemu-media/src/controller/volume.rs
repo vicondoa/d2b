@@ -1,6 +1,9 @@
 //! Controller-created runtime Volume specification.
 
-use d2b_contracts_resource::v3::{BoundedToken, ResourceRef};
+use d2b_contracts_resource::v3::{
+    BindingSlot, BoundedToken, ResourceRef, volume::AttachmentAccess,
+    volume_binding::{VolumeBindingRequest, VolumePresentation},
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -8,6 +11,15 @@ use crate::types::runtime_volume_name;
 
 /// Runtime Volume finalizer.
 pub const RUNTIME_VOLUME_FINALIZER: &str = "runtime-qemu-media.d2bus.org/runtime-volume";
+
+/// The stable consumer slot the runner's runtime-volume use occupies.
+pub const RUNTIME_VOLUME_SLOT: &str = "runtime";
+
+/// The named view the runner reads its QMP and serial sockets through.
+pub const RUNTIME_VOLUME_RUNNER_VIEW: &str = "runner";
+
+/// The consumer-side mount path the runner's runtime volume is presented at.
+pub const RUNTIME_VOLUME_MOUNT_PATH: &str = "/run/qemu";
 
 /// Runtime Volume layout entry type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,6 +188,51 @@ impl RuntimeVolumeSpec {
             return Err(VolumeSpecError::Invalid);
         }
         Ok(())
+    }
+
+    /// Derive the runner's own storage request from this row.
+    ///
+    /// The row's store name is a digest of the owning Guest, so it is a store
+    /// identity rather than a reference name: the committed `Volume` reference
+    /// the graph admitted is supplied by the caller, while the view, the
+    /// access, and the destination all come from this row's own declaration.
+    ///
+    /// The runtime Volume is an ordinary source, so the runner's use of it is
+    /// an ordinary `VolumeBinding` request: the runner's named view, at the
+    /// runner's consumer slot, presented as a filesystem at the declared
+    /// destination. The QMP and serial sockets therefore reach the runner
+    /// through the same admitted relationship as every other storage use
+    /// rather than through a mount the Process spec hard-coded (R17-R20,
+    /// R34).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VolumeSpecError::Invalid`] when the row's own declared
+    /// values cannot form a typed request, which is a shape error rather than
+    /// an admission one.
+    pub fn runner_request(
+        &self,
+        volume_ref: ResourceRef,
+        consumer_ref: ResourceRef,
+    ) -> Result<VolumeBindingRequest, VolumeSpecError> {
+        if volume_ref.resource_type().as_str() != "Volume" {
+            return Err(VolumeSpecError::Invalid);
+        }
+        let slot = BindingSlot::parse(RUNTIME_VOLUME_SLOT)
+            .map_err(|_| VolumeSpecError::Invalid)?;
+        let view = BoundedToken::parse(RUNTIME_VOLUME_RUNNER_VIEW)
+            .map_err(|_| VolumeSpecError::Invalid)?;
+        let presentation = VolumePresentation::filesystem(RUNTIME_VOLUME_MOUNT_PATH)
+            .map_err(|_| VolumeSpecError::Invalid)?;
+        VolumeBindingRequest::new(
+            volume_ref,
+            consumer_ref,
+            slot,
+            view,
+            AttachmentAccess::ReadWrite,
+            presentation,
+        )
+        .map_err(|_| VolumeSpecError::Invalid)
     }
 }
 

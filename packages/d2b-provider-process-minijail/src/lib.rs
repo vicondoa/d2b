@@ -34,7 +34,7 @@ use d2b_process_conformance::{
     AdoptionCandidate, AdoptionCondition, AdoptionOutcome, CancellationBinding, IdentityBinding,
     LaunchTicket, LaunchedProcess, ProcessConformanceError, ProcessIdentityDigest,
     ProcessLaunchEffectPort, ProcessPhaseClass, ProcessProvider, ProcessProviderProfile,
-    ProcessStatusReport, ReadinessExpectation, StopClass, WaitReapOwner,
+    ProcessStatusReport, ReadinessExpectation, SandboxPlan, StopClass, WaitReapOwner,
 };
 use tracing::{debug, warn};
 
@@ -116,6 +116,56 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
         &self.port
     }
 
+    /// The one policy path this Provider enforces.
+    ///
+    /// A ticket that carries the resolved plan is validated against the plan's
+    /// own admitted execution rather than against a separately authored
+    /// `SandboxSpec`: the effective isolation classes, capability set, root
+    /// restrictions, filter, umask, and budget are the ones the
+    /// `ExecutionPolicy` contract admitted for this instance, and the
+    /// relationships are the prepared bindings the plan carries. A ticket with
+    /// no plan is the pre-plan path and is validated as it always was; U34
+    /// deletes that branch with the rest of the ticket authority.
+    fn validate_plan(&self, ticket: &LaunchTicket) -> Result<(), ProcessConformanceError> {
+        let Some(plan) = ticket.resolved_plan() else {
+            return Ok(());
+        };
+        if !plan.admits_start() {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                "assignment rejected: a required binding is not prepared"
+            );
+            return Err(ProcessConformanceError::ResolutionFailed);
+        }
+        if !plan
+            .prepared_against(plan.subject())
+            .is_ok_and(|()| ticket.process_ref() == plan.subject().process_ref())
+        {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                "assignment rejected: the plan was not prepared for this row"
+            );
+            return Err(ProcessConformanceError::ResolutionFailed);
+        }
+        // The compiled sandbox is derived from the admitted execution, so a
+        // provider can never enforce a posture the policy did not admit. The
+        // plan's effective namespaces must still be a subset of what this
+        // backend declares it realizes: an unsupported requirement fails
+        // closed rather than being ignored (R27).
+        let domain = ticket.domain();
+        if SandboxPlan::from_admitted_execution(plan.execution(), domain, false).is_err() {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                "assignment rejected: the admitted execution is not enforceable here"
+            );
+            return Err(ProcessConformanceError::SandboxRejected);
+        }
+        Ok(())
+    }
+
     fn validate(&self, ticket: &LaunchTicket) -> Result<(), ProcessConformanceError> {
         if let Err(error) = ticket.validate() {
             warn!(
@@ -189,6 +239,7 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
             );
             return Err(ProcessConformanceError::UserRefRequired);
         }
+        self.validate_plan(ticket)?;
         if let Some(gate) = self.platform_gate
             && let Err(error) = launch::validate_platform_gate(gate)
         {

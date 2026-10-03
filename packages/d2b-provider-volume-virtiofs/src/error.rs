@@ -37,6 +37,31 @@ pub enum VirtiofsBindingError {
     /// A status or finalizer mutation was rejected because the writer is
     /// not the virtiofs controller identity (KTD3).
     UnauthorizedWriter,
+    /// The Volume's source kind admits no serving view: a block image, a
+    /// tmpfs, a local path naming no storage row, or a closure source
+    /// with no admitted store-view generation.
+    SourceKindUnsupported,
+    /// The private socket path could not be derived from the binding's
+    /// own identity and the broker runtime root it composes.
+    ServingSocketPathUnresolved,
+    /// The committed row asks for a presentation this serving family cannot
+    /// realize. A block-device attachment is a representable relationship -
+    /// it commits its own device slot - but a virtiofs worker presents a
+    /// filesystem at a destination, so it refuses that row by name rather
+    /// than serving it at a destination invented for it.
+    PresentationUnsupported,
+    /// The privileged serving dispatch refused the request. The refusal's
+    /// own class is recorded at the refusal point; this code is what the
+    /// family's status carries.
+    ServingRefused,
+    /// The privileged serving dispatch did not answer. Nothing about the
+    /// relationship was observed, so nothing about it is concluded: the
+    /// pass stays outstanding and retries.
+    ServingUnavailable,
+    /// The privileged leg answered under an identity this committed row
+    /// does not derive: another worker reference, or another socket. It is
+    /// evidence about a different relationship and is refused by name.
+    WorkerIdentityMismatch,
 }
 
 impl VirtiofsBindingError {
@@ -54,11 +79,17 @@ impl VirtiofsBindingError {
             Self::SharedWriteUnsupported => "shared-write-unsupported",
             Self::StaleFence => "stale-fence",
             Self::UnauthorizedWriter => "unauthorized-writer",
+            Self::SourceKindUnsupported => "source-kind-unsupported",
+            Self::ServingSocketPathUnresolved => "serving-socket-path-unresolved",
+            Self::PresentationUnsupported => "presentation-unsupported",
+            Self::ServingRefused => "virtiofs-serving-refused",
+            Self::ServingUnavailable => "virtiofs-serving-unavailable",
+            Self::WorkerIdentityMismatch => "virtiofs-worker-identity-mismatch",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 17] = [
         Self::InvalidBinding,
         Self::ViewNotFound,
         Self::ViewRightsInsufficient,
@@ -70,6 +101,12 @@ impl VirtiofsBindingError {
         Self::SharedWriteUnsupported,
         Self::StaleFence,
         Self::UnauthorizedWriter,
+        Self::SourceKindUnsupported,
+        Self::ServingSocketPathUnresolved,
+        Self::PresentationUnsupported,
+        Self::ServingRefused,
+        Self::ServingUnavailable,
+        Self::WorkerIdentityMismatch,
     ];
 }
 

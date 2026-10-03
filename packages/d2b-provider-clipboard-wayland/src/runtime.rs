@@ -1,12 +1,18 @@
 //! Authenticated clipboard Provider runtime composition.
 
+use std::collections::BTreeMap;
+
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_toolkit::AuthenticatedSessionRouteBinding;
 
 use crate::{
     AuthenticatedPasteRoute, ClipboardAuditSink, ClipboardServiceError, DisplayDependencyEvidence,
     GuestSelectionEvent, PickerReceipt, PickerRequest, PickerResult, Policy,
-    service::{AuthenticatedClipboardSession, ClipboardServiceRole, ClipdHost},
+    service::{
+        AdmittedClipboardEndpoint, AuthenticatedClipboardSession, ClipboardEndpointFence,
+        ClipboardEndpointGrant, ClipboardEndpointRefusal, ClipboardEndpointRole,
+        ClipboardServiceRole, ClipdHost,
+    },
 };
 
 /// Daemon-owned effects needed to drain clipboard workers and authority.
@@ -26,6 +32,13 @@ pub enum ClipboardRuntimeError {
     SessionRoleInvalid,
     /// The display dependency could not be authenticated.
     DisplayDependencyUnavailable,
+    /// No admitted endpoint relationship carries the delivery channel this
+    /// operation needs.
+    ///
+    /// A missing or revoked relationship stops delivery here. It is never a
+    /// reason to reach another host channel: the alternative display routes
+    /// below are consulted only after an admitted relationship exists.
+    EndpointUnavailable(ClipboardEndpointRefusal),
     /// A clipboard service operation failed.
     Service(ClipboardServiceError),
 }
@@ -43,11 +56,18 @@ impl core::fmt::Display for ClipboardRuntimeError {
             Self::DisplayDependencyUnavailable => {
                 formatter.write_str("clipboard-runtime-display-unavailable")
             }
+            Self::EndpointUnavailable(refusal) => formatter.write_str(refusal.code()),
         }
     }
 }
 
 impl std::error::Error for ClipboardRuntimeError {}
+
+impl From<ClipboardEndpointRefusal> for ClipboardRuntimeError {
+    fn from(refusal: ClipboardEndpointRefusal) -> Self {
+        Self::EndpointUnavailable(refusal)
+    }
+}
 
 /// Finalization evidence for one clipboard Provider instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,9 +79,17 @@ pub struct ClipboardFinalizationReport {
 }
 
 /// Long-lived authenticated clipboard runtime.
+///
+/// The runtime holds the admitted `EndpointBinding` relationship per delivery
+/// channel ([`ClipboardEndpointRole`]). A channel with no admitted
+/// relationship, or one whose relationship the graph has revoked or is
+/// draining, cannot be delivered through: the gate runs before any host route
+/// is constructed, so a withdrawn endpoint stops the selection instead of
+/// redirecting it onto another host channel.
 pub struct ClipboardRuntime<E> {
     host: ClipdHost,
     effects: E,
+    endpoints: BTreeMap<ClipboardEndpointRole, ClipboardEndpointGrant>,
     finalized: bool,
 }
 
@@ -77,8 +105,143 @@ impl<E: ClipboardProcessEffectPort> ClipboardRuntime<E> {
             host: ClipdHost::new(policy, audit_capacity, display)
                 .map_err(ClipboardRuntimeError::Service)?,
             effects,
+            endpoints: BTreeMap::new(),
             finalized: false,
         })
+    }
+
+    /// Reconcile the admitted endpoint relationship of one delivery channel.
+    ///
+    /// A `None` relationship is a fail-closed revocation of that channel: it
+    /// drops the retained relationship, and the channel stops delivering.
+    pub fn reconcile_endpoint(
+        &mut self,
+        role: ClipboardEndpointRole,
+        admitted: Option<AdmittedClipboardEndpoint>,
+    ) -> Result<(), ClipboardRuntimeError> {
+        match admitted {
+            Some(admitted) if admitted.role() != role => {
+                tracing::debug!(?role, "endpoint reconcile refused: relationship belongs to another channel");
+                Err(ClipboardRuntimeError::EndpointUnavailable(
+                    ClipboardEndpointRefusal::channel_mismatch(),
+                ))
+            }
+            Some(admitted) => {
+                self.endpoints
+                    .insert(role, ClipboardEndpointGrant::new(admitted));
+                Ok(())
+            }
+            None => {
+                self.endpoints.remove(&role);
+                Ok(())
+            }
+        }
+    }
+
+    /// Borrow the retained grant of one delivery channel, when one is held.
+    pub fn endpoint(&self, role: ClipboardEndpointRole) -> Option<&ClipboardEndpointGrant> {
+        self.endpoints.get(&role)
+    }
+
+    /// Re-fence one retained relationship at newer committed state.
+    ///
+    /// The graph moving on is the ordinary case, not a re-admission: the
+    /// relationship keeps its identity while its committed fence advances, is
+    /// raised to a new reconnect generation, or is revoked. A revoked or
+    /// superseded grant stops carrying deliveries from the next call onward.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClipboardRuntimeError::EndpointUnavailable`] when the channel
+    /// holds no retained relationship to re-fence.
+    pub fn refence_endpoint(
+        &mut self,
+        role: ClipboardEndpointRole,
+        fence: ClipboardEndpointFence,
+    ) -> Result<(), ClipboardRuntimeError> {
+        let grant = self.endpoints.get(&role).cloned().ok_or(
+            ClipboardEndpointRefusal::relationship_absent(),
+        )?;
+        if grant.role() != role {
+            return Err(ClipboardEndpointRefusal::channel_mismatch().into());
+        }
+        self.endpoints.insert(role, grant.refenced(fence));
+        Ok(())
+    }
+
+    /// The one gate every endpoint-gated delivery runs before it constructs a
+    /// host route.
+    ///
+    /// A channel with no retained relationship, or one whose relationship no
+    /// longer admits delivery, is refused here. Nothing after this point can
+    /// substitute another host channel for the withdrawn one.
+    fn admitted_endpoint(
+        &self,
+        role: ClipboardEndpointRole,
+    ) -> Result<&AdmittedClipboardEndpoint, ClipboardRuntimeError> {
+        let grant = self
+            .endpoints
+            .get(&role)
+            .ok_or(ClipboardEndpointRefusal::relationship_absent())?;
+        if let Some(refusal) = grant.delivery_refusal() {
+            tracing::debug!(?role, refusal = refusal.code(), "delivery refused: endpoint relationship withdrawn");
+            return Err(refusal.into());
+        }
+        Ok(grant.admitted())
+    }
+
+    /// Capture one Guest selection through the admitted Guest-transfer
+    /// endpoint relationship.
+    ///
+    /// The endpoint gate runs first, so a withdrawn transfer relationship
+    /// stops the capture before the route is even authenticated; the
+    /// direction, role, and history checks below then run unchanged. Content
+    /// never participates in the gate: `mime` and `bytes` are consumed by the
+    /// policy after admission and cannot influence the relationship.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClipboardRuntimeError::EndpointUnavailable`] when the
+    /// Guest-transfer channel carries no admitted relationship, or when its
+    /// relationship no longer admits delivery.
+    pub fn capture_guest_route_over_endpoint(
+        &mut self,
+        route: AuthenticatedSessionRouteBinding,
+        mime: &str,
+        bytes: &[u8],
+        now_secs: u64,
+    ) -> Result<String, ClipboardRuntimeError> {
+        self.admitted_endpoint(ClipboardEndpointRole::GuestTransfer)?;
+        self.capture_guest_route(route, mime, bytes, now_secs)
+    }
+
+    /// Capture one host selection through the admitted host-selection-read
+    /// endpoint relationship.
+    ///
+    /// The endpoint gate runs before the host route is constructed, so a
+    /// missing or withdrawn read relationship stops the capture instead of
+    /// letting the display observer or display dependency route stand in for
+    /// it. The policy and direction checks the Provider has always applied -
+    /// display dependency readiness, host/bridge role, dependency user match,
+    /// host-capture policy, echo suppression, item byte ceiling, and the
+    /// fail-closed audit queue - then run unchanged on the admitted channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClipboardRuntimeError::EndpointUnavailable`] when the
+    /// host-selection-read channel carries no admitted relationship, or when
+    /// its relationship no longer admits delivery.
+    pub fn capture_host_route_over_endpoint(
+        &mut self,
+        route: AuthenticatedSessionRouteBinding,
+        mime: &str,
+        bytes: &[u8],
+        source_event: Option<GuestSelectionEvent>,
+        observer_user: Option<&ResourceRef>,
+        now_secs: u64,
+    ) -> Result<String, ClipboardRuntimeError> {
+        self.admitted_endpoint(ClipboardEndpointRole::HostSelectionRead)?;
+        self.capture_host_route(route, mime, bytes, source_event, observer_user, now_secs)
     }
 
     /// Borrow the service state for authenticated request dispatch.

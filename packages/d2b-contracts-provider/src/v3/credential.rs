@@ -28,8 +28,10 @@ use d2b_contracts_resource::v3::{
     },
 };
 
+pub mod delivery_authority;
 pub mod service;
 
+pub use delivery_authority::*;
 pub use service::*;
 
 /// The canonical ResourceType name for this module.

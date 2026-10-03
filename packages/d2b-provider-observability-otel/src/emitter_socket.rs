@@ -1,7 +1,8 @@
 //! Per-Zone Unix datagram receiver for bounded telemetry frames.
 
-use crate::ingress_policy::{Ingress, IngressOutcome, IngressPolicyGate};
+use crate::ingress_policy::{DeliveryRoute, IngressOutcome, IngressPolicyGate};
 use d2b_contracts_provider::v3::{redact_parsed_frame, validate_raw_frame};
+use d2b_contracts_resource::v3::FreshnessTuple;
 use rustix::fs::{Mode, fchmod, fstat};
 use tracing::debug;
 use std::{
@@ -138,8 +139,28 @@ impl EmitterSocket {
     /// # Errors
     ///
     /// Returns the `io::Error` the socket reports when the bound identity
-    /// check fails or a receive fails.
-    pub fn drain_once(&mut self) -> io::Result<usize> {
+    /// check fails, the admitted relationship refuses delivery, or a receive
+    /// fails.
+    ///
+    /// A refusal names the resource and the enforcing stage and carries no
+    /// frame content, socket path, or credential byte (R42). Delivery stops
+    /// there: the drain does not fall back to another transport.
+    pub fn drain_once(
+        &mut self,
+        route: &DeliveryRoute,
+        observed: &[FreshnessTuple],
+    ) -> io::Result<usize> {
+        if let Some(refusal) = route.refusal(observed) {
+            debug!(
+                provider = "observability-otel",
+                resource = %refusal.resource().to_canonical_string(),
+                stage = ?refusal.stage(),
+                reason = ?refusal.reason(),
+                "emitter drain refused: the admitted relationship stopped admitting use"
+            );
+            self.readiness = ReceiverReadiness::Failed;
+            return Err(io::Error::other(refusal));
+        }
         self.prune_expired();
         self.validate_bound_identity()?;
         let mut drained = 0;
@@ -177,12 +198,16 @@ impl EmitterSocket {
                     // Unix datagrams do not carry a stable per-sender
                     // connection identity. The shared socket scope is
                     // intentionally accounted as connection id zero.
-                    if !matches!(
-                        self.policy_gate
-                            .admit_parsed(Ingress::EmitterUnix, 0, &frame, bytes.len())
-                            .0,
-                        IngressOutcome::Accepted
-                    ) {
+                    let admitted = self
+                        .policy_gate
+                        .admit_parsed(route, observed, 0, &frame, bytes.len());
+                    if admitted.is_err() {
+                        self.readiness = ReceiverReadiness::Failed;
+                        return Err(io::Error::other(
+                            admitted.expect_err("an errored admission carries its refusal"),
+                        ));
+                    }
+                    if !matches!(admitted, Ok((IngressOutcome::Accepted, _))) {
                         debug!(
                             provider = "observability-otel",
                             "emitter datagram rejected by ingress policy"
@@ -386,12 +411,30 @@ fn validate_socket_parent(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingress_policy::Ingress;
+    use d2b_contracts_resource::v3::ResourceRef;
     use std::{
         os::unix::net::UnixDatagram,
         sync::atomic::{AtomicUsize, Ordering},
     };
 
     static SOCKET_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+    /// The admitted route the shared emitter socket drains under.
+    fn route() -> crate::DeliveryRoute {
+        crate::DeliveryRoute::for_endpoint(
+            ResourceRef::parse("Endpoint/ingest").expect("canonical Endpoint"),
+            Ingress::EmitterUnix,
+            crate::route_fixtures::admitted_endpoint_evidence(),
+        )
+        .expect("the admitted endpoint relationship is a route")
+    }
+
+    fn observed() -> Vec<d2b_contracts_resource::v3::FreshnessTuple> {
+        crate::route_fixtures::observed_for_all(&[
+            &crate::route_fixtures::admitted_endpoint_evidence(),
+        ])
+    }
 
     fn test_socket_path(prefix: &str) -> PathBuf {
         let sequence = SOCKET_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -426,7 +469,7 @@ mod tests {
                 &path,
             )
             .unwrap();
-        assert_eq!(receiver.drain_once().unwrap(), 1);
+        assert_eq!(receiver.drain_once(&route(), &observed()).unwrap(), 1);
         assert_eq!(receiver.readiness(), ReceiverReadiness::Ready);
         assert_eq!(
             receiver
@@ -459,7 +502,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(receiver.drain_once().unwrap(), 2);
+        assert_eq!(receiver.drain_once(&route(), &observed()).unwrap(), 2);
         assert_eq!(receiver.queued(), 1);
         assert!(
             String::from_utf8(receiver.pop().unwrap())
@@ -483,7 +526,7 @@ mod tests {
             )
             .unwrap();
         sender.send_to(b"attacker-text", &path).unwrap();
-        assert_eq!(receiver.drain_once().unwrap(), 2);
+        assert_eq!(receiver.drain_once(&route(), &observed()).unwrap(), 2);
         let frame = receiver.pop().unwrap();
         let rendered = String::from_utf8(frame).unwrap();
         assert!(!rendered.contains("/private/canary"));
@@ -576,7 +619,7 @@ mod tests {
         let frame = br#"{"signal":"metric","value":{"name":"d2b_otel_ingress_policy_total","labels":{"ingress":"emitter_unix","outcome":"accepted","error_class":"none"},"value":1}}"#;
         sender.send_to(frame, &path).unwrap();
         sender.send_to(frame, &path).unwrap();
-        assert_eq!(receiver.drain_once().unwrap(), 2);
+        assert_eq!(receiver.drain_once(&route(), &observed()).unwrap(), 2);
         assert_eq!(
             receiver.queued(),
             1,

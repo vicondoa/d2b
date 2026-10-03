@@ -1,6 +1,25 @@
 //! Opaque USBIP firewall and relay effect boundary.
+//!
+//! The boundary has two shapes. [`UsbipEffectPort`] is the pre-graph seam the
+//! not-yet-cutover production path uses: a Core-derived relay authority and a
+//! per-Network/per-device projection, with the physical backing decided by
+//! this crate's own claim table. U34 deletes it.
+//!
+//! [`UsbipClaimPort`] is the converted seam. It carries one admitted
+//! [`AdmittedDeviceClaim`] into every effect, so a relay, a host bind, or a
+//! firewall rule exists only as a bounded realization of a relationship the
+//! `Device` source arbitrated, and the projection is additionally fenced
+//! against the store incarnation that admission was evaluated
+//! under ([`ClaimProjectionFence`]). Releasing the relationship is the
+//! source's reservation to give up, so it is a distinct step that runs only
+//! after the relay has been stopped and the projection removed.
 
-use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
+use d2b_contracts_resource::v3::{
+    AdmissionStage, BindingRefusal, RefusalReason, ResourceGeneration, ResourceRef, ResourceUid,
+    StoreIncarnation,
+};
+
+use crate::arbitration::AdmittedDeviceClaim;
 
 /// Closed direction of one ownership-scoped firewall projection mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,6 +303,127 @@ impl core::fmt::Debug for RelayAuthorityLease {
     }
 }
 
+/// The fence one admitted-relationship projection mutation is measured
+/// against.
+///
+/// The generations are the resource facts a projection converges with; the
+/// store incarnation is the authority fact. A claim admitted before a store
+/// replacement is not the same authority as one admitted after it, so a
+/// projection written under the previous incarnation is refused instead of
+/// being re-applied over a relationship the source has since re-decided.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ClaimProjectionFence {
+    network_generation: ResourceGeneration,
+    service_generation: ResourceGeneration,
+    store: StoreIncarnation,
+}
+
+impl ClaimProjectionFence {
+    /// Bind one projection mutation to the claim's own evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RefusalReason::StaleAuthority`] when the claim was admitted
+    /// under a different store incarnation, which is the case where older
+    /// evidence must not decide this projection any more.
+    pub fn new(
+        claim: &AdmittedDeviceClaim,
+        network_generation: ResourceGeneration,
+        service_generation: ResourceGeneration,
+        store: &StoreIncarnation,
+    ) -> Result<Self, BindingRefusal> {
+        if claim.epoch() != Some(store) {
+            return Err(BindingRefusal::new(
+                AdmissionStage::Reserve,
+                RefusalReason::StaleAuthority,
+            ));
+        }
+        Ok(Self {
+            network_generation,
+            service_generation,
+            store: store.clone(),
+        })
+    }
+
+    /// Return the expected Network generation.
+    pub const fn network_generation(&self) -> ResourceGeneration {
+        self.network_generation
+    }
+
+    /// Return the expected USB Service generation.
+    pub const fn service_generation(&self) -> ResourceGeneration {
+        self.service_generation
+    }
+
+    /// Return the store incarnation this projection is fenced against.
+    pub const fn store(&self) -> &StoreIncarnation {
+        &self.store
+    }
+}
+
+impl core::fmt::Debug for ClaimProjectionFence {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ClaimProjectionFence(<redacted>)")
+    }
+}
+
+/// The effect boundary one admitted `Device` relationship drives.
+///
+/// Every method takes the admitted claim, so an implementation privately
+/// resolves the relationship's source reservation, ownership marker, host
+/// module, listener, and firewall intent from the graph rather than from a
+/// resource identity the Provider chose. The Provider receives no broker DTO,
+/// host identity, rule text, or device path, and it holds no device claim: the
+/// `Device` source reserved the capability and this port only realizes it.
+pub trait UsbipClaimPort {
+    /// Start the per-Network relay as a bounded leg of the admitted claim.
+    ///
+    /// A second owner fails here, before any listener or firewall effect.
+    fn start_relay_leg(
+        &mut self,
+        claim: &AdmittedDeviceClaim,
+        helper: &ResourceRef,
+        network_uid: &ResourceUid,
+        fence: &ClaimProjectionFence,
+    ) -> Result<RelayAuthorityLease, UsbipEffectError>;
+
+    /// Apply or remove the exact resolved ownership projection.
+    fn mutate_claim_firewall(
+        &mut self,
+        claim: &AdmittedDeviceClaim,
+        network_uid: &ResourceUid,
+        action: FirewallProjectionAction,
+        fence: &ClaimProjectionFence,
+        retained_token: Option<&FirewallToken>,
+    ) -> Result<FirewallConfirmation, UsbipEffectError>;
+
+    /// Observe only the exact projection the retained token represents.
+    fn observe_claim_firewall(
+        &mut self,
+        claim: &AdmittedDeviceClaim,
+        network_uid: &ResourceUid,
+        fence: &ClaimProjectionFence,
+        token: &FirewallToken,
+    ) -> Result<FirewallObservation, UsbipEffectError>;
+
+    /// Stop the relay leg while the reservation is still held.
+    ///
+    /// The relay has to be down before the relationship is handed back: a
+    /// live listener holding a released reservation is the same use-after-free
+    /// as a mount that outlives its volume.
+    fn stop_relay_leg(
+        &mut self,
+        claim: &AdmittedDeviceClaim,
+        helper: &ResourceRef,
+    ) -> Result<(), UsbipEffectError>;
+
+    /// Hand the relationship back so the source can release its reservation.
+    ///
+    /// This is the last step of teardown: it runs only after the projection is
+    /// removed or validated absent and the relay leg is stopped.
+    fn release_claim(&mut self, claim: &AdmittedDeviceClaim) -> Result<(), UsbipEffectError>;
+}
+
 /// Closed effect failures with no caller-controlled payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsbipEffectError {
@@ -305,6 +445,12 @@ pub enum UsbipEffectError {
     EffectRejected,
     /// A caller attempted a value outside the closed action set.
     UnknownProjectionAction,
+    /// The `Device` source refused the relationship, or the leg the helper
+    /// presented is not a bounded realization of it.
+    ///
+    /// The pair names the enforcing stage and the reason under R42; no
+    /// resource identity, path, or device detail crosses this boundary.
+    ClaimRefused(AdmissionStage, RefusalReason),
 }
 
 impl UsbipEffectError {
@@ -320,6 +466,7 @@ impl UsbipEffectError {
             Self::FirewallForeignConflict => "firewall-foreign-conflict",
             Self::EffectRejected => "effect-rejected",
             Self::UnknownProjectionAction => "unknown-projection-action",
+            Self::ClaimRefused(_, _) => "device-claim-refused",
         }
     }
 }

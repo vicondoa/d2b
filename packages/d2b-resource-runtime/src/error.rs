@@ -32,6 +32,7 @@
 /// The module declared name, asserted by the crate smoke test.
 pub const MODULE_NAME: &str = "error";
 
+use crate::authority_publish::PublicationRefusal;
 use crate::identity::ResourceKey;
 use crate::spec_store::SpecStoreError;
 use std::time::Duration;
@@ -749,6 +750,19 @@ pub enum ResourceError {
     /// results for drivers; `ResourceDeleting` never reaches this variant).
     #[error(transparent)]
     Store(SpecStoreError),
+    /// The broker half of an authority mutation did not produce a fence or
+    /// an acceptance (KTD6). The Zone is left fenced exactly as the refusal
+    /// says: a mutation is never committed against a fence that is not
+    /// there, and a publication is never recorded for a revision the broker
+    /// did not accept.
+    #[error(transparent)]
+    Publication(PublicationRefusal),
+    /// One durable authority mutation did not commit (KTD6). This is the
+    /// whole four-step outcome, so the store refusal and the broker refusal
+    /// reach a caller as one failure of the protocol rather than as two
+    /// independently retryable errors.
+    #[error(transparent)]
+    Publish(crate::authority_publish::PublishError),
     /// Mutation admission rejected the mutation at the manager boundary
     /// (U3). This is the admission point that replaces the consciously cut
     /// redb `SealedMutation` seal (KTD2): U8/U10 wire the real subject
@@ -819,6 +833,29 @@ impl From<crate::provider::ProviderDirectoryError> for ResourceError {
                     type_name: type_name.to_string(),
                     message: "driver must be registered before the plane opens".to_string(),
                 }
+            }
+            crate::provider::ProviderDirectoryError::RelationProjection(error) => {
+                Self::Provider {
+                    type_name: error.to_string(),
+                    message: "relation projection registration".to_string(),
+                }
+            }
+        }
+    }
+}
+
+/// A publish failure is the store refusal or the broker refusal behind the
+/// same four-step protocol, so it maps exactly as the store refusal alone
+/// did: `ResourceDeleting` is still the one typed deleting conflict a caller
+/// handles by its own variant, whether it arrived directly or through a
+/// publication.
+impl From<crate::authority_publish::PublishError> for ResourceError {
+    fn from(error: crate::authority_publish::PublishError) -> Self {
+        match error {
+            crate::authority_publish::PublishError::Store(store) => Self::from(store),
+            crate::authority_publish::PublishError::Refused(refused) => Self::Publication(refused),
+            crate::authority_publish::PublishError::Inconsistent(detail) => {
+                Self::Publication(PublicationRefusal::Refused(detail))
             }
         }
     }

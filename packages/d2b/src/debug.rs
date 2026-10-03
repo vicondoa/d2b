@@ -79,6 +79,17 @@ pub(crate) struct FailureSummary {
     pub(crate) stage: Option<String>,
     pub(crate) outcome: Option<String>,
     pub(crate) retryable: Option<bool>,
+    /// The closed cause the owning driver attached to this failure, when it
+    /// named one.
+    ///
+    /// A shared host-provider Driver reduces a Provider's own typed refusal to
+    /// one closed code and hands it to the row as the failure's note
+    /// (`SharedProviderEffectError::UnavailableWithCause`). Every other field
+    /// here describes the *shape* of the failure - which operation, which
+    /// stage, whether a retry can change it - and none of them says which
+    /// refusal it was, so a report that dropped the note reported every
+    /// Provider refusal of a shape identically.
+    pub(crate) note: Option<String>,
 }
 
 /// A type read the report could not complete.
@@ -251,6 +262,9 @@ fn render_node(node: &DebugNode, out: &mut String, indent: usize, expand_all: bo
             out.push_str(&format!("{pad}  means: {}\n", kind.means()));
             out.push_str(&format!("{pad}  likely cause: {}\n", kind.likely_cause()));
         }
+        if let Some(note) = &failure.note {
+            out.push_str(&format!("{pad}  driver cause: {note}\n"));
+        }
     } else if let Some(reason) = absent_reason(row) {
         out.push_str(&format!("{pad}  {reason}\n"));
     }
@@ -340,6 +354,7 @@ pub(crate) fn report_json(report: &DebugReport) -> Value {
                 "stage": failure.stage,
                 "outcome": failure.outcome,
                 "retryable": failure.retryable,
+                "note": failure.note,
             })).unwrap_or(Value::Null),
         })
     }
@@ -413,6 +428,7 @@ fn observed_row(value: &Value) -> Result<ObservedRow, String> {
                 .and_then(Value::as_str)
                 .map(str::to_owned),
             retryable: failure.get("retryable").and_then(Value::as_bool),
+            note: failure.get("note").and_then(Value::as_str).map(str::to_owned),
         });
     Ok(ObservedRow {
         reference,
@@ -814,6 +830,7 @@ mod tests {
             stage: Some("validate".to_owned()),
             outcome: Some("refused".to_owned()),
             retryable: Some(false),
+            note: None,
         });
         let observed = zone(vec![
             row("Guest/sandbox", "uid-1", None, "Ready", 1, Some(1)),
@@ -837,6 +854,45 @@ mod tests {
         assert!(
             !human.contains("rows Ready)"),
             "nothing collapses on the path to the failure: {human}"
+        );
+    }
+
+    /// A shared host-provider Driver hands its Provider's own closed refusal to
+    /// the row as the failure's note. Both reports have to carry it: the human
+    /// one is what an operator reads after a failed lane and the JSON one is
+    /// what a tool reads, and a report that dropped the note described every
+    /// Provider refusal of one shape identically.
+    #[test]
+    fn a_driver_named_cause_reaches_both_reports() {
+        let value = json!({
+            "type": "Device",
+            "metadata": { "name": "tpm0", "uid": "uid-9", "generation": 3 },
+            "status": {
+                "phase": "Failed",
+                "statusGeneration": 3,
+                "resource": {
+                    "driverFailure": {
+                        "code": "driver-not-yet",
+                        "operation": "Reconcile",
+                        "stage": "effect",
+                        "outcome": "not-yet",
+                        "retryable": true,
+                        "note": "device-tpm-admission-unavailable",
+                    },
+                },
+            },
+        });
+        let observed = observed_row(&value).expect("the stored row is readable");
+        let report = compose(&zone(vec![observed]), "work", None);
+        let human = render_human(&report, false);
+
+        assert!(
+            human.contains("cause: device-tpm-admission-unavailable"),
+            "the human report names the cause the driver attached: {human}"
+        );
+        assert_eq!(
+            report_json(&report)["roots"][0]["failure"]["note"],
+            json!("device-tpm-admission-unavailable"),
         );
     }
 

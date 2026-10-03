@@ -12,6 +12,7 @@ use std::os::fd::OwnedFd;
 
 use crate::error::ProcessConformanceError;
 use crate::identity::{ObservedIdentity, PidfdEvidence, ProcessIdentityDigest, WaitReapOwner};
+use crate::plan::{ProcessPlanRequest, ProcessPlanValues, ResolvedProcessPlan};
 use crate::ticket::LaunchTicket;
 
 /// What the effect adapter returns from a successful launch: the
@@ -106,6 +107,27 @@ pub enum StopClass {
 /// ticket and the derived opaque identity.
 #[allow(async_fn_in_trait)]
 pub trait ProcessLaunchEffectPort: Send + Sync {
+    /// Resolve one launch request into the plan the broker's accepted graph
+    /// admits.
+    ///
+    /// The default is deliberately unavailable. A Provider must not fabricate
+    /// a plan: the private values - the source paths, the destinations, the
+    /// identity, and the executable - exist only because the privileged effect
+    /// owner resolved them from its own graph, so an effect owner that has not
+    /// implemented this seam refuses rather than returning a plan assembled
+    /// from the caller's request (KTD8).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::ResolutionFailed`] by default.
+    async fn resolve_plan(
+        &self,
+        _request: &ProcessPlanRequest,
+        _values: &ProcessPlanValues,
+    ) -> Result<ResolvedProcessPlan, ProcessConformanceError> {
+        Err(ProcessConformanceError::ResolutionFailed)
+    }
+
     /// Launch the ticket's process and return its verified identity and
     /// mandatory pidfd evidence.
     async fn launch(

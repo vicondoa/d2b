@@ -1,22 +1,21 @@
-//! The Quota resource driver: the v3 `ResourceDriver` conversion of the Core
-//! baseline reconciler for `Quota` rows.
+//! Read-side helpers for one committed `Quota` row.
 //!
-//! `Quota` is a scarce-resource scope claim: the driver converges it as
-//! metadata once its desired state is admitted. The Host-global authority
-//! index that arbitrates the claim's class beside every other scarce class the
-//! session admits is controller-session machinery and stays in
-//! `d2b-core-controller`.
-//!
-//! The conversion is the shared declaration-only metadata driver of
-//! `d2b_resource_runtime::metadata`: the type realizes no target-local state,
-//! so the shared driver's validate, recover, reconcile, finalize, and delete
-//! verbs are the whole conversion, and the only fact this crate owns is the
-//! type's identity.
+//! The row's own conversion - the driver that publishes its ceilings - is in
+//! [`crate::serving`]. What stays here is the decode boundary, so the driver
+//! and the manager-boundary admission read the same committed bytes through
+//! one function rather than through two that could drift.
 
-use d2b_resource_types::metadata_descriptor;
-use d2b_resource_types::{DriverDescriptor, WellKnownType};
+use crate::quota::{QuotaError, QuotaPolicy};
 
-/// The `Quota` type's driver declaration.
-pub fn quota_descriptor() -> DriverDescriptor {
-    metadata_descriptor(WellKnownType::QUOTA)
+/// Read one committed `Quota` row's desired state as the Zone's limits.
+///
+/// The bytes are the canonical desired-state object the manager stored, and
+/// the decode is the one in [`crate::quota`]: a row whose ceilings this crate
+/// cannot read is refused rather than admitted as a Zone without limits, so
+/// the failure is visible at admission instead of at reconcile.
+///
+/// This is the contract's own error, not a provider-local string, so a caller
+/// names the same reason a status or a refusal would.
+pub fn quota_policy_of_spec(desired_state: &[u8]) -> Result<QuotaPolicy, QuotaError> {
+    QuotaPolicy::decode(desired_state)
 }

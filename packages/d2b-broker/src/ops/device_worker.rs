@@ -24,7 +24,10 @@ use std::path::{Path, PathBuf};
 
 use d2b_contracts_broker::broker_wire::RunnerRole;
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
-use d2b_core::bundle_resolver::{device_worker_posture, BundleResolver, DEVICE_TPM_PROVIDER_REF};
+use d2b_core::bundle_resolver::{device_worker_posture, BundleResolver};
+// The TPM provider constant is named only by the cfg(test) enumeration below.
+#[cfg(test)]
+use d2b_core::bundle_resolver::DEVICE_TPM_PROVIDER_REF;
 use d2b_core::processes::ProcessRole;
 use d2b_core::storage::StoragePathKind;
 
@@ -143,9 +146,9 @@ pub enum DeviceWorkerScopeError {
 
 impl std::fmt::Display for DeviceWorkerScopeError {
     /// The closed, path-free slug a launch refusal and its audit record carry.
-    /// A raw reference or uid is deliberately absent: the field it disagrees
-    /// on is already reported by [`Self::field`], and the claim is recorded
-    /// nowhere else.
+    /// A raw reference or uid is deliberately absent: the request field the
+    /// refusal disagrees on is named by `Self::field` and the claim by
+    /// `Self::requested`, and neither is recorded on this string.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::RowUnresolved => "device-worker-row-unresolved",
@@ -161,8 +164,13 @@ impl std::fmt::Display for DeviceWorkerScopeError {
     }
 }
 
+// The field/requested/resolved triple has no caller on the live spawn path:
+// the spawn arm refuses through `Display`. It is kept because runtime's
+// `resolve_device_worker_launch` still builds its refusal record from it and
+// this module's tests assert it.
 impl DeviceWorkerScopeError {
     /// The request field the refusal is filed under.
+    #[allow(dead_code, reason = "read only by runtime's resolve_device_worker_launch and this module's tests; the live spawn arm refuses through Display")]
     pub(crate) fn field(&self) -> &'static str {
         match self {
             Self::OwnerUidMissing { .. } | Self::OwnerUidMismatch { .. } => "owner_uid",
@@ -176,6 +184,7 @@ impl DeviceWorkerScopeError {
     }
 
     /// What the request claimed (or `missing`), for the refusal record.
+    #[allow(dead_code, reason = "read only by runtime's resolve_device_worker_launch and this module's tests; the live spawn arm refuses through Display")]
     pub(crate) fn requested(&self) -> String {
         match self {
             Self::RowUnresolved | Self::RowOwnerMissing | Self::OwnerMissing => {
@@ -192,6 +201,7 @@ impl DeviceWorkerScopeError {
     }
 
     /// What the verified bundle resolved instead.
+    #[allow(dead_code, reason = "read only by runtime's resolve_device_worker_launch and this module's tests; the live spawn arm refuses through Display")]
     pub(crate) fn resolved(&self) -> String {
         match self {
             Self::RowUnresolved => "verified-bundle-row".to_owned(),
@@ -350,6 +360,9 @@ pub struct DeviceWorkerLaunch {
 /// Resource API appears in no bundle) or several (the Guest owns several state
 /// Volumes): the caller must then keep the shared policy root it resolved
 /// rather than inventing one Device's directory.
+// Only the tests and the cfg(test) `PrepareStateDir` op name a Guest's single
+// TPM state Volume today.
+#[cfg(test)]
 pub(crate) fn unique_tpm_state_dir(
     devices: &[(ResourceRef, ResourceUid)],
     state_root: &Path,
@@ -370,6 +383,7 @@ pub(crate) fn unique_tpm_state_dir(
 /// one-shot flush binds its ctrl socket inside the Device's state Volume, and
 /// the video sidecar's socket lives in the video module's own `/run/d2b-video`
 /// runtime directory: neither is a directory the broker owns or opens.
+#[allow(dead_code, reason = "the only caller is runtime's unrouted resolve_device_worker_launch; the live spawn arm reads the launch's binds_runtime_socket field instead")]
 pub(crate) const fn binds_runtime_socket(role: &ProcessRole) -> bool {
     matches!(
         role,
@@ -868,6 +882,9 @@ pub(crate) fn device_guest_owner(bundle_bytes: &[u8], device: &str) -> Option<St
 /// Device committed through the Resource API is not in any bundle and is
 /// therefore never returned: callers must treat an empty or multi-entry result
 /// as "the bundle does not name one Device", never as "the Guest has none".
+// Only the tests and the cfg(test) `PrepareStateDir` op enumerate a Guest's
+// TPM Devices today.
+#[cfg(test)]
 pub(crate) fn tpm_devices_of_guest(
     resolver: &BundleResolver,
     guest: &str,
@@ -1091,7 +1108,6 @@ mod tests {
         let bundle_manifest = Bundle {
             bundle_version: 11,
             schema_version: "v2".to_owned(),
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
             realm_workloads_launcher_v2_path: None,
             generation: BundleGeneration {

@@ -1,0 +1,5 @@
+{
+  "crate": "d2b-provider-transport-vsock",
+  "provider": "transport-vsock",
+  "services": []
+}

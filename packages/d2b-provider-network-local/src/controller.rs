@@ -28,6 +28,7 @@ use d2b_provider_guest::GuestSpec;
 use crate::artifact::{
     ArtifactCatalogEntry, ArtifactResolutionError, resolve_net_vm_system_artifact,
 };
+use crate::binding::{MembershipPolicy, NetworkAdmittedConsumer};
 use crate::ifname::{
     NetworkIfRole, derive_network_child_name, derive_network_ifname, derive_network_route_name_for,
 };
@@ -270,6 +271,21 @@ impl NetworkAdmissionKey {
     pub const fn bundle_generation(&self) -> &ResourceBundleGenerationId {
         &self.bundle_generation
     }
+
+    /// Rebuild the complete immutable Network effect provenance.
+    ///
+    /// Every host effect and every derived locator on this Network folds in
+    /// the same five-part identity, so a per-consumer membership is fenced
+    /// against exactly the tuple its fabric realization was admitted with.
+    pub fn provenance(&self) -> NetworkProvenance {
+        NetworkProvenance::new(
+            self.zone_uid.clone(),
+            self.network_uid.clone(),
+            self.network_generation,
+            self.attachment_generation,
+            self.bundle_generation.clone(),
+        )
+    }
 }
 
 fn network_cidrs(spec: &NetworkSpec) -> Vec<Ipv4Cidr> {
@@ -297,7 +313,14 @@ fn network_cidr_host_address(cidr: &str, host: u8) -> Option<String> {
     Some(format!("{a}.{b}.{c}.{d}"))
 }
 
-/// Host-fabric names and CIDRs admitted for one immutable Network identity.
+/// Host-fabric names, CIDRs, and committed memberships admitted for one
+/// immutable Network identity.
+///
+/// The host fabric and the per-consumer memberships are two different
+/// admissions over the same committed rows: the fabric reserves a tap for
+/// every consumer the host admission admitted, while a committed `Network`
+/// row implies a relationship only for the execution targets it attaches, so
+/// only those render a consumer policy.
 #[derive(Clone, PartialEq, Eq)]
 pub struct NetworkAdmissionIntent {
     key: NetworkAdmissionKey,
@@ -309,15 +332,34 @@ pub struct NetworkAdmissionIntent {
     route_markers: BTreeMap<RouteTuple, String>,
     ownership_marker: String,
     external_nic: Option<(IfName, MacvtapMode, SharingPolicy)>,
+    memberships: Vec<MembershipPolicy>,
 }
 
 impl NetworkAdmissionIntent {
-    /// Derive all private host locators from committed Network identity.
+    /// Derive all private host locators and memberships from committed Network
+    /// identity.
+    ///
+    /// `consumers` are the workload consumers the host admission admitted onto
+    /// the shared fabric; each one holds a reserved tap, and nothing else does.
+    /// `relationships` are the committed `NetworkBinding` relationships the
+    /// accepted graph carries; each one names a consumer's exact typed
+    /// request, and that request is the only source of the consumer policy the
+    /// live render writes. A relationship whose consumer the host admission did
+    /// not admit is refused, and one whose execution target the committed
+    /// `Network` row does not attach renders no policy, because a source row
+    /// implies no relationship for a consumer it does not declare.
     pub fn new(
         key: NetworkAdmissionKey,
         spec: NetworkSpec,
-        guest_uids: Vec<ResourceUid>,
+        consumers: Vec<ResourceUid>,
+        relationships: Vec<NetworkAdmittedConsumer>,
     ) -> Result<Self, NetworkEffectError> {
+        let mut consumers = consumers;
+        consumers.sort();
+        consumers.dedup();
+        let mut relationships = relationships;
+        relationships.sort_by(|left, right| left.consumer_uid().cmp(right.consumer_uid()));
+        relationships.dedup_by(|left, right| left.consumer_uid() == right.consumer_uid());
         let mut interface_names = Vec::new();
         let mut interface_markers = BTreeMap::new();
         let provenance = NetworkProvenance::new(
@@ -327,6 +369,8 @@ impl NetworkAdmissionIntent {
             key.attachment_generation(),
             key.bundle_generation().clone(),
         );
+        let ownership_marker =
+            d2b_contracts_resource::v3::derive_network_ownership_marker(&provenance, "network");
         for (role, object) in [
             (NetworkIfRole::LanBridge, "bridge:lan"),
             (NetworkIfRole::UplinkBridge, "bridge:uplink"),
@@ -348,34 +392,79 @@ impl NetworkAdmissionIntent {
             );
             interface_names.push(ifname);
         }
-        let mut sorted_guest_uids = guest_uids;
-        sorted_guest_uids.sort();
-        sorted_guest_uids.dedup();
-        for guest_uid in &sorted_guest_uids {
-            let ifname = derive_network_ifname(
-                key.zone_uid(),
-                key.network_uid(),
-                NetworkIfRole::WorkloadGuestTap,
-                Some(guest_uid),
+        for consumer_uid in &consumers {
+            // One derivation, not two: the interface a workload consumer
+            // reaches on the shared fabric is the family's own membership
+            // derivation, so the tap this intent reserves and the interface an
+            // admitted membership claims cannot drift apart.
+            let ifname = crate::binding::membership_interface(&provenance, consumer_uid).map_err(
+                |error| {
+                    debug!(
+                        provider = "network-local",
+                        network_uid = key.network_uid().as_str(),
+                        guest_uid = consumer_uid.as_str(),
+                        error = %error,
+                        "guest tap name derivation failed"
+                    );
+                    NetworkEffectError::NetworkInterfaceCollision
+                },
+            )?;
+            interface_markers.insert(
+                ifname.clone(),
+                d2b_contracts_resource::v3::derive_network_ownership_marker(
+                    &provenance,
+                    &format!("tap:{}", consumer_uid.as_str()),
+                ),
+            );
+            interface_names.push(ifname);
+        }
+        let mut memberships = Vec::new();
+        for relationship in &relationships {
+            if !consumers.contains(relationship.consumer_uid()) {
+                warn!(
+                    provider = "network-local",
+                    network_uid = key.network_uid().as_str(),
+                    guest_uid = relationship.consumer_uid().as_str(),
+                    "admission refused: a committed membership names a consumer the host admission never admitted"
+                );
+                return Err(NetworkEffectError::NetworkAdmissionMismatch);
+            }
+            if !spec
+                .attachments()
+                .iter()
+                .any(|attachment| attachment.execution_ref() == relationship.target().reference())
+            {
+                debug!(
+                    provider = "network-local",
+                    network_uid = key.network_uid().as_str(),
+                    guest_uid = relationship.consumer_uid().as_str(),
+                    "committed membership renders no consumer policy: the Network row does not attach it"
+                );
+                continue;
+            }
+            // The policy the render reads is the one the committed request
+            // declares, derived here by the same derivation the admission
+            // registry uses, so the live render and the admitted membership
+            // cannot describe different traffic policy for one consumer.
+            let policy = MembershipPolicy::new(
+                relationship.request().consumer_ref(),
+                relationship.request().slot(),
+                relationship.consumer_uid(),
+                &provenance,
+                &ownership_marker,
+                relationship.request(),
             )
             .map_err(|error| {
                 debug!(
                     provider = "network-local",
                     network_uid = key.network_uid().as_str(),
-                    guest_uid = guest_uid.as_str(),
+                    guest_uid = relationship.consumer_uid().as_str(),
                     error = %error,
-                    "guest tap name derivation failed"
+                    "committed membership policy derivation failed"
                 );
-                NetworkEffectError::NetworkInterfaceCollision
+                NetworkEffectError::NetworkAdmissionMismatch
             })?;
-            interface_markers.insert(
-                ifname.clone(),
-                d2b_contracts_resource::v3::derive_network_ownership_marker(
-                    &provenance,
-                    &format!("tap:{}", guest_uid.as_str()),
-                ),
-            );
-            interface_names.push(ifname);
+            memberships.push(policy);
         }
         let external_nic = spec.external_attachment().map(|external| {
             (
@@ -476,8 +565,6 @@ impl NetworkAdmissionIntent {
             );
             return Err(NetworkEffectError::NetworkRouteCollision);
         }
-        let ownership_marker =
-            d2b_contracts_resource::v3::derive_network_ownership_marker(&provenance, "network");
         Ok(Self {
             key,
             cidrs: network_cidrs(&spec),
@@ -488,7 +575,13 @@ impl NetworkAdmissionIntent {
             route_markers,
             ownership_marker,
             external_nic,
+            memberships,
         })
+    }
+
+    /// Borrow the committed memberships the Network row renders.
+    pub fn memberships(&self) -> &[MembershipPolicy] {
+        &self.memberships
     }
 
     /// Borrow the exact identity tuple.
@@ -1195,14 +1288,12 @@ where
                 );
                 NetworkEffectError::ConfigVolume
             })?;
-        let provenance = NetworkProvenance::new(
-            input.admission.key().zone_uid().clone(),
-            input.admission.key().network_uid().clone(),
-            input.admission.key().network_generation(),
-            input.admission.key().attachment_generation(),
-            input.admission.key().bundle_generation().clone(),
-        );
-        let content = render_config_with_provenance(&input.spec, &provenance)?;
+        let provenance = input.admission.key().provenance();
+        // The rendered config carries the committed memberships the admission
+        // read off the accepted graph, not a policy handed in beside it: the
+        // one source of both is the committed relationship.
+        let content =
+            render_membership_config(&input.spec, &provenance, input.admission.intent().memberships())?;
         if content.provenance() != Some(&provenance) {
             warn!(
                 provider = "network-local",
@@ -1555,7 +1646,7 @@ pub fn guest_agent_process_spec(guest_name: &str) -> Result<ProcessSpec, Network
 
 /// Render per-Network data into the four config files only.
 pub fn render_config(spec: &NetworkSpec) -> Result<NetworkConfigContent, NetworkEffectError> {
-    render_config_inner(spec, None)
+    render_config_inner(spec, None, &[])
 }
 
 /// Render per-Network data with the immutable identity that authorized it.
@@ -1563,14 +1654,40 @@ pub fn render_config_with_provenance(
     spec: &NetworkSpec,
     provenance: &NetworkProvenance,
 ) -> Result<NetworkConfigContent, NetworkEffectError> {
-    render_config_inner(spec, Some(provenance))
+    render_config_inner(spec, Some(provenance), &[])
+}
+
+/// Render the four config files the committed memberships need.
+///
+/// The shared fabric's own bytes are unchanged: a membership adds only its own
+/// consumer interface and reservation, so two consumers on one Network differ
+/// in the per-consumer traffic policy and in the config digest while the
+/// bridges, routes, and ownership markers they share are realized once. An
+/// empty set renders exactly the fabric alone, which is what a Network row
+/// that declares no membership renders.
+pub fn render_membership_config(
+    spec: &NetworkSpec,
+    provenance: &NetworkProvenance,
+    memberships: &[MembershipPolicy],
+) -> Result<NetworkConfigContent, NetworkEffectError> {
+    render_config_inner(spec, Some(provenance), memberships)
 }
 
 fn render_config_inner(
     spec: &NetworkSpec,
     provenance: Option<&NetworkProvenance>,
+    memberships: &[MembershipPolicy],
 ) -> Result<NetworkConfigContent, NetworkEffectError> {
-    let dnsmasq = format!("lan={}\n", spec.lan_cidr().as_str()).into_bytes();
+    let mut dnsmasq = format!("lan={}\n", spec.lan_cidr().as_str());
+    for membership in memberships {
+        dnsmasq.push_str(&format!(
+            "consumer={}\ninterface={}\negress={}\n",
+            membership.consumer_ref().to_canonical_string(),
+            membership.presented_interface().as_str(),
+            if membership.allow_egress() { "allow" } else { "deny" },
+        ));
+    }
+    let dnsmasq = dnsmasq.into_bytes();
     let nftables = format!(
         "lan={}\nuplink={}\nblocklist={}\n",
         spec.lan_cidr().as_str(),
@@ -1589,19 +1706,22 @@ fn render_config_inner(
         spec.uplink_cidr().as_str()
     )
     .into_bytes();
-    let attachments = format!(
-        "[{}]",
-        spec.attachments()
-            .iter()
-            .map(|attachment| attachment.index().to_string())
-            .collect::<Vec<_>>()
-            .join(",")
-    )
-    .into_bytes();
+    let mut attachment_rows: Vec<String> = spec
+        .attachments()
+        .iter()
+        .map(|attachment| attachment.index().to_string())
+        .collect();
+    for membership in memberships {
+        attachment_rows.push(format!("member={}", membership.fabric_interface().as_str()));
+    }
+    let attachments = format!("[{}]", attachment_rows.join(",")).into_bytes();
     let mut digest_input = Vec::new();
     for bytes in [&dnsmasq, &nftables, &routing, &attachments] {
         digest_input.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
         digest_input.extend_from_slice(bytes);
+    }
+    for membership in memberships {
+        digest_input.extend_from_slice(&membership.digest());
     }
     if let Some(provenance) = provenance {
         let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(

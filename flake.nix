@@ -170,7 +170,6 @@
           cp -r ${./packages/d2b-provider-audio-pipewire} $out/packages/d2b-provider-audio-pipewire
           cp -r ${./packages/d2b-provider-audio-service} $out/packages/d2b-provider-audio-service
           cp -r ${./packages/d2b-provider-clipboard-wayland} $out/packages/d2b-provider-clipboard-wayland
-          cp -r ${./packages/d2b-provider-command} $out/packages/d2b-provider-command
           cp -r ${./packages/d2b-provider-config-nixos} $out/packages/d2b-provider-config-nixos
           cp -r ${./packages/d2b-provider-credential} $out/packages/d2b-provider-credential
           cp -r ${./packages/d2b-provider-credential-entra} $out/packages/d2b-provider-credential-entra
@@ -208,6 +207,7 @@
           cp -r ${./packages/d2b-provider-role} $out/packages/d2b-provider-role
           cp -r ${./packages/d2b-provider-role-binding} $out/packages/d2b-provider-role-binding
           cp -r ${./packages/d2b-provider-seccomp-profile} $out/packages/d2b-provider-seccomp-profile
+          cp -r ${./packages/d2b-provider-execution-policy} $out/packages/d2b-provider-execution-policy
           cp -r ${./packages/d2b-provider-shell-pool} $out/packages/d2b-provider-shell-pool
           cp -r ${./packages/d2b-provider-shell-session} $out/packages/d2b-provider-shell-session
           cp -r ${./packages/d2b-provider-toolkit} $out/packages/d2b-provider-toolkit
@@ -223,6 +223,7 @@
           cp -r ${./packages/d2b-provider-zone-link} $out/packages/d2b-provider-zone-link
           cp -r ${./packages/d2b-resource-api} $out/packages/d2b-resource-api
           cp -r ${./packages/d2b-resource-client} $out/packages/d2b-resource-client
+          cp -r ${./packages/d2b-resource-compiler} $out/packages/d2b-resource-compiler
           cp -r ${./packages/d2b-resource-types} $out/packages/d2b-resource-types
           cp -r ${./packages/d2b-resource-runtime} $out/packages/d2b-resource-runtime
           cp -r ${./packages/d2b-session} $out/packages/d2b-session
@@ -231,6 +232,8 @@
           cp -r ${./packages/d2b-zone-routing} $out/packages/d2b-zone-routing
           cp -r ${./packages/d2bd} $out/packages/d2bd
           cp -r ${./packages/d2bd-runtime} $out/packages/d2bd-runtime
+          mkdir -p $out/generated
+          cp -r ${./generated/new-graph} $out/generated/new-graph
           mkdir -p $out/docs/reference/schemas/v3/providers
           mkdir -p $out/docs/reference/policy
           cp ${./docs/reference/policy/principal-allocation.json} \
@@ -854,7 +857,6 @@
           top = name: bundle.${name}.fixtureData;
         in {
           files = {
-            "privileges.json" = top "privilegesJson";
             "realm-workloads-launcher-v2.json" = top "realmWorkloadsLauncherV2Json";
             "bundle.json" = top "bundle";
           };
@@ -955,7 +957,6 @@
           publicManifestPath = "manifest.json";
           hostPath = "host.json";
           processesPath = "processes.json";
-          privilegesPath = "privileges.json";
           closures = [
             {
               vm = "corp-vm";
@@ -983,6 +984,17 @@
         };
         fixtureBundlePath = pkgs.writeText "d2b-fixture-bundle.json"
           (builtins.toJSON fixtureBundle);
+        # The per-Zone verified deployment graph a Guest image carries, as the
+        # one constructor renders it. The Rust contract tests decode these
+        # bytes with the daemon's own verifier, so the fixture is the Nix-Rust
+        # boundary itself rather than a copy of it: a producer change that the
+        # verifier does not accept fails there, and a verifier that stops
+        # accepting what the producer renders fails with it.
+        fixtureDeploymentBootstrap = import
+          ./nixos-modules/deployment-bootstrap.nix { lib = nixpkgs.lib; };
+        fixtureGuestDeploymentGraph = pkgs.writeText
+          "d2b-fixture-deployment-bootstrap-work.json"
+          (fixtureDeploymentBootstrap.documentFor "work").documentJson;
         smokeFixture = let
           bundle = smokeEval.config.d2b._bundle;
         in pkgs.runCommand "d2b-fixture-smoke" { } ''
@@ -991,11 +1003,11 @@
           cp ${fixtureProcessesJson} $out/processes.json
           cp ${fixtureManifest} $out/manifest.json
           cp ${fixtureClosure} $out/closures/corp-vm.json
-          cp ${bundle.privilegesJson.path} $out/privileges.json
           cp ${bundle.realmWorkloadsLauncherV2Json.path} $out/realm-workloads-launcher-v2.json
           cp ${fixtureBundlePath} $out/bundle.json
           cp ${bundle.zoneResourceBundles.local-root.path} $out/zones/local-root/resource-bundle.json
           cp ${bundle.extraArtifacts."zoneStorage-local-root".path} $out/zones/local-root/storage.json
+          cp ${fixtureGuestDeploymentGraph} $out/deployment-bootstrap-work.json
         '';
         evalFixtureData = {
           minimal = renderEvalFixture {

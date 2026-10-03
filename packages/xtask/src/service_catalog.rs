@@ -1,4 +1,11 @@
 //! The per-crate service-to-provider catalog and the generated bus consumer.
+//!
+//! Every `packages/d2b-provider-*/service-catalog.json` declares the service
+//! packages a provider publishes. This module aggregates them into the
+//! catalog the zone-plane session contract compiles (`include!`d by
+//! `packages/d2b-contracts-zone-session/src/v3/mod.rs` straight out of the
+//! staged `generated/new-graph/` closure), runs the declaration sanity gate,
+//! and owns the drift and idempotence gates over the committed byte.
 
 use std::{
     collections::BTreeMap,
@@ -6,16 +13,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::authority_common::{admits_provider_identity, declaration_paths, Declaration};
+
+#[cfg(test)]
+use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
 
-/// The directory-glob root the per-crate declarations live under.
-const PACKAGES_DIR: &str = "packages";
-const PROVIDER_PREFIX: &str = "d2b-provider-";
-const DECLARATION_FILE: &str = "service-catalog.json";
-
-/// The repository-relative generated artifact path.
+/// The repository-relative generated artifact path: the staged closure copy
+/// the zone-session contract `include!`s, so the declaration render and the
+/// compiled production bytes are the same file rather than two.
 pub(crate) const GENERATED_ARTIFACT: &str =
-    "packages/d2b-contracts-zone-session/src/generated/service_provider_catalog.rs";
+    "generated/new-graph/service_provider_catalog.rs";
 
 /// One provider crate's service-catalog declaration.
 
@@ -38,8 +46,51 @@ struct DeclarationFile {
     services: Vec<String>,
 }
 
+/// The service catalog a declaration projection produces (KTD1/U4).
+///
+/// The rows are the declared services and the provider that answers each one,
+/// derived from the declaration. The per-crate `service-catalog.json` files
+/// this module still reads are the pre-declaration authoring form; the
+/// unchanged production entry point keeps consuming them until the cutover,
+/// and this renderer is what it will consume instead.
+#[cfg(test)]
+pub(crate) fn render_declaration_service_catalog(plan: &PrivatePlanProjection) -> String {
+    let mut out = String::new();
+    out.push_str("// @generated\n");
+    out.push_str("// Provenance: derived from the provider declaration (KTD1/U4). A\n");
+    out.push_str("// generated artifact is an output, not a second source.\n");
+    out.push('\n');
+    for row in plan.services() {
+        out.push_str(&format!(
+            "    {:?} => Some({:?}),\n",
+            row.service_id(),
+            row.provider_ref()
+        ));
+    }
+    out
+}
+
 /// The parsed per-crate catalog inputs, crate name -> declaration.
 type CatalogRegistry = BTreeMap<String, DeclarationFile>;
+
+/// Render the service-to-provider catalog from the declarations alone.
+///
+/// `gen-new-graph` renders its committed new-graph projection through this
+/// entry point. The declaration sanity gate runs first, so a staged catalog
+/// can never carry a service two crates claim or a provider ref its crate
+/// name does not imply, and nothing here reads a crate source.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, String> {
+    let registry = load(repo_root)?;
+    let errors = declaration_errors(&registry);
+    if !errors.is_empty() {
+        return Err(format!(
+            "service-catalog declaration violations:\n- {}",
+            errors.join("\n- ")
+        ));
+    }
+    render(&registry)
+}
 
 /// Run the catalog's gates: declaration sanity, drift, and regeneration
 /// idempotence. Wired into the layout check after the crate-layout check.
@@ -105,24 +156,17 @@ pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 /// Read every provider crate's declaration file into a crate-keyed map.
+///
+/// The crate set is [`declaration_paths`]', which refuses a provider crate
+/// carrying no catalog rather than dropping it: a renamed
+/// `service-catalog.json` would otherwise remove its crate's service packages
+/// from the generated catalog with the drift gate still green over the
+/// smaller input.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load(repo_root: &Path) -> Result<CatalogRegistry, String> {
-    let packages_dir = repo_root.join(PACKAGES_DIR);
     let mut out = CatalogRegistry::new();
-    let entries = fs::read_dir(&packages_dir).map_err(|error| {
-        format!("cannot read {}: {error}", packages_dir.display())
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read a packages entry: {error}"))?;
-        let crate_name = entry.file_name().to_string_lossy().into_owned();
-        if !crate_name.starts_with(PROVIDER_PREFIX) {
-
-            continue;
-        }
-        let declaration_path = entry.path().join(DECLARATION_FILE);
-        if !declaration_path.is_file() {
-            continue;
-        }
+    for (crate_name, declaration_path) in declaration_paths(repo_root, Declaration::ServiceCatalog)?
+    {
         let text = fs::read_to_string(&declaration_path).map_err(|error| {
             format!("cannot read the declaration {}: {error}", declaration_path.display())
         })?;
@@ -139,25 +183,27 @@ fn load(repo_root: &Path) -> Result<CatalogRegistry, String> {
 
 /// The declaration sanity violations:
 ///
-/// - a provider identity that does not match its owning crate's name (the
-///   suffix after `d2b-provider-` must be the declared provider identity);
+/// - a provider identity the contracts' resource-name grammar refuses;
 /// - a provider ref that does not name the declared provider identity;
 /// - a service package declared by two crates;
 /// - a non-bootstrap provider declaring a fixed UID (the only fixed UID
 ///   belongs to system-core).
+///
+/// The identity is not compared against the crate's directory name. A
+/// crate is named for the family it realizes and the identity it registers
+/// is a separate fact - `d2b-provider-guest-qemu-media` publishes
+/// `runtime-qemu-media` - so a directory-name comparison published
+/// references the product does not have and made the ones it does
+/// inexpressible. The ref check below is the one that still ties the
+/// declaration together: the identity and the reference it publishes must
+/// name each other.
 fn declaration_errors(registry: &CatalogRegistry) -> Vec<String> {
     let mut errors = Vec::new();
     let mut services: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (crate_name, file) in registry {
-        let expected_provider = crate_name
-            .strip_prefix(PROVIDER_PREFIX)
-            .unwrap_or(crate_name.as_str());
-        if file.provider != expected_provider {
-
-
-
+        if !admits_provider_identity(&file.provider) {
             errors.push(format!(
-                "provider-mismatch: {} declares provider \"{}\" but its crate name implies \"{expected_provider}\"",
+                "malformed-provider-identity: {} declares provider \"{}\"; a Provider identity is a resource name the contracts admit",
                 crate_name, file.provider
             ));
         }
@@ -262,6 +308,28 @@ fn generated_artifact_path(repo_root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The service catalog is the declared services and their providers, not
+    /// the per-crate `service-catalog.json` files the unchanged production
+    /// entry point still reads.
+    #[test]
+    fn the_service_catalog_is_derived_from_the_declaration() {
+        let plan = crate::resource_type_authority::declaration_fixture::plan(&["export", "close"]);
+        let rendered = render_declaration_service_catalog(&plan);
+        assert_eq!(
+            rendered,
+            render_declaration_service_catalog(&plan),
+            "the catalog is byte-stable"
+        );
+        assert!(
+            rendered.contains("\"volume-virtiofs.d2bus.org/export\" => Some(\"Provider/provider-volume-virtiofs\")"),
+            "the declared service routes to its declaring provider: {rendered}"
+        );
+        assert!(
+            !rendered.contains("d2b-provider-volume-local"),
+            "no per-crate declaration file contributed a row: {rendered}"
+        );
+    }
 
     /// A typo'd declaration key is refused at the boundary instead of being
     /// silently ignored (the daemon's fixed-UID row would otherwise vanish).

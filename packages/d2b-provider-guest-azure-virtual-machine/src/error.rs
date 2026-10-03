@@ -39,6 +39,12 @@ pub enum AzureVmError {
     DeadlineExpired,
     /// The effect outcome is ambiguous and must not be replayed.
     Ambiguous,
+    /// The admitted remote authority refused the operation.
+    ///
+    /// ARM was not contacted: a wrong target, a wrong subscription, a
+    /// presentation this remote backend does not realize, and a revoked or
+    /// superseded credential all land here (R35, R42).
+    RemoteRefused,
 }
 
 impl AzureVmError {
@@ -62,6 +68,7 @@ impl AzureVmError {
             Self::Cancelled => "cancelled",
             Self::DeadlineExpired => "deadline-expired",
             Self::Ambiguous => "azure-operation-ambiguous",
+            Self::RemoteRefused => "azure-vm-remote-refused",
         }
     }
 }

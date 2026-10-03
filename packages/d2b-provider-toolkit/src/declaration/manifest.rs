@@ -5,7 +5,9 @@
 //! used for both writing and checking rather than a general-purpose JSON
 //! formatter.
 
-use d2b_contracts_provider::v3::{ProviderContractError, ProviderManifest};
+use d2b_contracts_provider::v3::{
+    ProviderContractError, ProviderDeclarationSpec, ProviderManifest,
+};
 use d2b_contracts_resource::v3::canonical_json_bytes;
 use serde_json::Error as JsonError;
 
@@ -73,6 +75,24 @@ impl std::error::Error for VerificationError {}
 /// error rather than an authoring failure.
 pub fn emit_canonical(manifest: &ProviderManifest) -> Vec<u8> {
     canonical_json_bytes(manifest).expect("ProviderManifest must be canonicalizable")
+}
+
+/// Emit a provider declaration's data projection as exact `d2b-cjson/v1`
+/// bytes.
+///
+/// This is the bytes a generator consumes (KTD1, U4): the canonical manifest
+/// inputs, the schema inputs, the Nix projection, and the static composition
+/// source are all derived from it. The projection is deterministic - sorted
+/// object keys, integer-only numbers, NFC-validated strings, no BOM, and no
+/// trailing newline - so two runs over the same declaration produce the same
+/// file, and an unchanged declaration produces an unchanged artifact.
+///
+/// The spec holds identities and semantics only. It carries no signing key,
+/// no handler, no decoder or factory reference, and no runtime state, so the
+/// projection cannot be a way to introduce a compiled privileged handler or
+/// a private key into a generated file.
+pub fn emit_declaration_canonical(spec: &ProviderDeclarationSpec) -> Vec<u8> {
+    canonical_json_bytes(spec).expect("ProviderDeclarationSpec must be canonicalizable")
 }
 
 /// Validate the signed placement, target-artifact, and EffectPort contract

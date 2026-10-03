@@ -90,6 +90,11 @@ impl FakeEffects {
     pub fn set_session(&self, value: Option<Arc<dyn CredentialSession>>) {
         *self.session.lock() = value;
     }
+
+    /// The session this fake binds for the revocation call.
+    pub fn session(&self) -> Option<Arc<dyn CredentialSession>> {
+        self.session.lock().clone()
+    }
 }
 
 #[async_trait::async_trait]
@@ -140,7 +145,12 @@ pub fn facts(provider_ready: bool, execution_ready: bool) -> CredentialDependenc
 pub struct RecordingSession {
     generation: Option<ReconnectGeneration>,
     operations: Mutex<Vec<String>>,
+    /// Whether the Provider confirms the revocation. `false` reproduces the
+    /// real session's `Uncertain` answer when the route is not live or the
+    /// driver generation moved - the outcome that must withhold cleanup (R36).
+    confirms: bool,
 }
+
 
 impl RecordingSession {
     /// A session bound to `generation` (or unbound when `None`).
@@ -148,8 +158,21 @@ impl RecordingSession {
         Self {
             generation: generation.map(|value| ReconnectGeneration::new(value).unwrap()),
             operations: Mutex::new(Vec::new()),
+            confirms: true,
         }
     }
+
+    /// A session that cannot confirm a revocation, whatever generation the
+    /// request carries.
+    ///
+    /// This is the real `ComponentCredentialSession`'s `Uncertain` answer: the
+    /// route stopped being live, or the driver generation moved between the
+    /// caller's read and the call. It is distinct from an unbound session,
+    /// which fails the request's identity before any call is made.
+    pub fn uncertain(generation: Option<u64>) -> Self {
+        Self { confirms: false, ..Self::new(generation) }
+    }
+
 }
 
 #[async_trait::async_trait]
@@ -163,7 +186,7 @@ impl CredentialSession for RecordingSession {
         &self,
         request: &CredentialRevocationRequest,
     ) -> Result<CredentialRevocationOutcome, CredentialResourceRuntimeError> {
-        if Some(request.session_generation()) != self.generation {
+        if !self.confirms || Some(request.session_generation()) != self.generation {
             return Ok(CredentialRevocationOutcome::Uncertain);
         }
         let mut operations = self.operations.lock(); // async-gate-allow: test-support recorder lock
@@ -235,6 +258,7 @@ impl RecordingRuntime {
     pub fn set_session(&self, value: Option<Arc<dyn CredentialSession>>) {
         *self.session.lock() = value;
     }
+
 }
 
 #[async_trait]

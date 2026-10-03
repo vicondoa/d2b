@@ -27,7 +27,9 @@ pub mod vocabulary;
 pub mod test_support;
 
 pub use controller::{
-    ActivationApplicationVerifier, ActivationCaller, ActivationController, ActivationError,
+    AcceptedDeploymentGraph, ActivationApplicationVerifier, ActivationCaller, ActivationController,
+    ActivationError, DEPLOYMENT_GRAPH_DIGEST_DOMAIN, DEPLOYMENT_GRAPH_SCHEMA,
+    MAX_DEPLOYMENT_GRAPH_BYTES,
     ActivationTrust, ActivationTrustExpectation, ActivationVerificationError, CallerRole,
     FailClosedActivationVerifier, GenerationObservation, GenerationPhase, RunnerRequest,
     RunnerResult, SignedActivationApplicationVerifier, TrustStatus, activation_runner_name,

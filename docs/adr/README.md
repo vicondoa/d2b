@@ -59,6 +59,7 @@ workflow tooling are intentionally absent.
 - [0050 - Provider derivation artifact layout](0050-provider-derivation-artifact-layout.md)
 - [0051 - Security key semantic backing set](0051-security-key-semantic-backing-set.md)
 - [0054 - Single product Cargo workspace](0054-single-product-cargo-workspace.md)
+- [0055 - Unified resource graph bindings, operations, and authorization-only roles](0055-unified-resource-graph-bindings-operations-and-authority.md)
 
 ## Supporting records
 

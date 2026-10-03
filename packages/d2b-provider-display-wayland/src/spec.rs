@@ -1,5 +1,6 @@
 //! Validated Wayland resource specifications.
 
+use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 use d2b_contracts_resource::v3::ResourceRef;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -8,6 +9,7 @@ use crate::policy::FilterInput;
 
 const MAX_LABEL_BYTES: usize = 64;
 const POLICY_RESOURCE_TYPE: &str = "display-wayland.d2bus.org.WaylandPolicy";
+const EXECUTION_POLICY_RESOURCE_TYPE: &str = "ExecutionPolicy";
 
 /// Errors raised while validating a Wayland resource specification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +28,8 @@ pub enum WaylandSpecError {
     BorderTooWide,
     /// A policy named an interface outside the compiled catalog.
     UnknownInterface,
+    /// An admitted compositor display name did not name one socket component.
+    InvalidDisplay,
 }
 
 impl core::fmt::Display for WaylandSpecError {
@@ -38,6 +42,7 @@ impl core::fmt::Display for WaylandSpecError {
             Self::CrossDomainUntrusted => "cross-domain-not-trusted",
             Self::BorderTooWide => "wayland-border-too-wide",
             Self::UnknownInterface => "unknown-interface-rejected",
+            Self::InvalidDisplay => "wayland-display-invalid",
         })
     }
 }
@@ -242,6 +247,21 @@ pub struct WaylandSessionSpec {
     reconnect_generation: u64,
     virgl_video: bool,
     filter: FilterInput,
+    /// The single socket component the admitted compositor endpoint is
+    /// presented under.
+    ///
+    /// This is a name, not a locator: the compositor socket itself is reached
+    /// through the admitted `EndpointBinding` relationship, so an absolute or
+    /// nested value here cannot redirect a consumer to another socket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compositor_display: Option<BoundedToken>,
+    /// The authorized `ExecutionPolicy` the display workers run under.
+    ///
+    /// A session that names one may not launch or reuse a helper until that
+    /// policy row is admitted; a session that names none requests no
+    /// privilege beyond the worker rows' own declared sandbox.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_policy_ref: Option<ResourceRef>,
 }
 
 #[derive(Deserialize)]
@@ -257,13 +277,17 @@ struct WaylandSessionSpecWire {
     reconnect_generation: u64,
     virgl_video: bool,
     filter: FilterInput,
+    #[serde(default)]
+    compositor_display: Option<BoundedToken>,
+    #[serde(default)]
+    execution_policy_ref: Option<ResourceRef>,
 }
 
 impl TryFrom<WaylandSessionSpecWire> for WaylandSessionSpec {
     type Error = WaylandSpecError;
 
     fn try_from(value: WaylandSessionSpecWire) -> Result<Self, Self::Error> {
-        Ok(Self::new(
+        Self::new(
             value.guest_ref,
             value.host_ref,
             value.user_ref,
@@ -273,7 +297,9 @@ impl TryFrom<WaylandSessionSpecWire> for WaylandSessionSpec {
         )?
         .with_reconnect_generation(value.reconnect_generation)?
         .with_virgl_video(value.virgl_video)
-        .with_filter(value.filter))
+        .with_filter(value.filter)
+        .with_compositor_display(value.compositor_display)?
+        .with_execution_policy(value.execution_policy_ref)
     }
 }
 
@@ -323,6 +349,8 @@ impl WaylandSessionSpec {
             reconnect_generation: 1,
             virgl_video: false,
             filter: FilterInput::default(),
+            compositor_display: None,
+            execution_policy_ref: None,
         })
     }
 
@@ -350,6 +378,47 @@ impl WaylandSessionSpec {
     pub fn with_filter(mut self, filter: FilterInput) -> Self {
         self.filter = filter;
         self
+    }
+
+    /// Bind this session to the compositor display name its admitted
+    /// endpoint is presented under.
+    ///
+    /// The name is one bounded socket component. An absolute or nested value
+    /// names a path rather than a socket, so it is refused instead of being
+    /// trimmed into something the admitted endpoint never covered.
+    pub fn with_compositor_display(
+        mut self,
+        display: Option<BoundedToken>,
+    ) -> Result<Self, WaylandSpecError> {
+        if display
+            .as_ref()
+            .is_some_and(|token| token.as_str().is_empty())
+        {
+            return Err(WaylandSpecError::InvalidDisplay);
+        }
+        self.compositor_display = display;
+        Ok(self)
+    }
+
+    /// Bind this session to the authorized `ExecutionPolicy` its display
+    /// workers run under.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaylandSpecError::InvalidReference` when the reference is not
+    /// an `ExecutionPolicy`.
+    pub fn with_execution_policy(
+        mut self,
+        policy: Option<ResourceRef>,
+    ) -> Result<Self, WaylandSpecError> {
+        if policy
+            .as_ref()
+            .is_some_and(|policy| policy.resource_type().as_str() != EXECUTION_POLICY_RESOURCE_TYPE)
+        {
+            return Err(WaylandSpecError::InvalidReference);
+        }
+        self.execution_policy_ref = policy;
+        Ok(self)
     }
 
     /// Borrow the Guest reference.
@@ -387,6 +456,17 @@ impl WaylandSessionSpec {
         self.virgl_video
     }
 
+    /// Borrow the admitted compositor display name, when the session names
+    /// one.
+    pub const fn compositor_display(&self) -> Option<&BoundedToken> {
+        self.compositor_display.as_ref()
+    }
+
+    /// Borrow the authorized `ExecutionPolicy`, when the session names one.
+    pub const fn execution_policy_ref(&self) -> Option<&ResourceRef> {
+        self.execution_policy_ref.as_ref()
+    }
+
     /// Derive the stable session binding used by daemon-issued worker grants.
     pub fn session_digest(&self, controller_generation: u64) -> [u8; 32] {
         let mut digest = Sha256::new();
@@ -398,6 +478,13 @@ impl WaylandSessionSpec {
         digest.update([0]);
         digest.update(self.reconnect_generation.to_be_bytes());
         digest.update([0]);
+        if let Some(display) = &self.compositor_display {
+            digest.update(display.as_str().as_bytes());
+        }
+        digest.update([0]);
+        if let Some(policy) = &self.execution_policy_ref {
+            digest.update(policy.to_canonical_string().as_bytes());
+        }
         digest.update(controller_generation.to_be_bytes());
         digest.finalize().into()
     }

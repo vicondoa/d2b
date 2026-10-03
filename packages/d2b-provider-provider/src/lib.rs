@@ -15,6 +15,7 @@
 //! crate depends on no daemon type.
 
 
+mod declaration;
 mod driver;
 pub mod providers;
 
@@ -28,6 +29,7 @@ pub mod providers;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
+pub use declaration::{PROVIDER_ARTIFACT_ID, provider_bindings, provider_declaration};
 pub use driver::{
     FailClosedProviderDriverEffects, PROVIDER_TYPE_NAME, ProviderDriver, ProviderDriverArgs,
     ProviderDriverEffects, ProviderDriverFactory, ProviderDriverStatus, SYSTEM_CORE_HOST_REF,

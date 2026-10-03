@@ -399,12 +399,12 @@
       bootstrap = false;
     }
     {
-      provider = "transport-unix";
-      package = "d2b-provider-transport-unix";
-      source = "packages/d2b-provider-transport-unix/src/portal.rs";
-      test = "packages/d2b-provider-transport-unix/tests/transport.rs";
-      dossier = "docs/specs/providers/ADR-046-provider-transport-unix.md";
-      bazelTarget = "//packages/d2b-provider-transport-unix:all-tests";
+      provider = "transport-azure-relay";
+      package = "d2b-provider-transport-azure-relay";
+      source = "packages/d2b-provider-transport-azure-relay/src/relay_transport.rs";
+      test = "packages/d2b-provider-transport-azure-relay/tests/fake_relay_transport.rs";
+      dossier = "docs/specs/providers/ADR-046-provider-transport-azure-relay.md";
+      bazelTarget = "//packages/d2b-provider-transport-azure-relay:all-tests";
       unit = "U11";
       bootstrap = false;
     }
@@ -415,16 +415,6 @@
       test = "packages/d2b-provider-transport-vsock/tests/service.rs";
       dossier = "docs/specs/providers/ADR-046-provider-transport-vsock.md";
       bazelTarget = "//packages/d2b-provider-transport-vsock:all-tests";
-      unit = "U11";
-      bootstrap = false;
-    }
-    {
-      provider = "transport-azure-relay";
-      package = "d2b-provider-transport-azure-relay";
-      source = "packages/d2b-provider-transport-azure-relay/src/relay_transport.rs";
-      test = "packages/d2b-provider-transport-azure-relay/tests/fake_relay_transport.rs";
-      dossier = "docs/specs/providers/ADR-046-provider-transport-azure-relay.md";
-      bazelTarget = "//packages/d2b-provider-transport-azure-relay:all-tests";
       unit = "U11";
       bootstrap = false;
     }
@@ -473,9 +463,8 @@
     "credential-secret-service"
     "credential-entra"
     "credential-managed-identity"
-    "transport-unix"
-    "transport-vsock"
     "transport-azure-relay"
+    "transport-vsock"
     "observability-otel"
     "activation-nixos"
   ];

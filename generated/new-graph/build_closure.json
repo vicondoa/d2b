@@ -1,0 +1,55 @@
+{
+  "contractVersion": "d2b.zone.v3",
+  "declarationInputs": [
+    "packages/d2b-provider-*/operations.json",
+    "packages/d2b-provider-*/registrations.json",
+    "packages/d2b-provider-*/resource-types.json",
+    "packages/d2b-provider-*/service-catalog.json"
+  ],
+  "retiredAuthoritySources": [
+    "docs/reference/policy/broker-operations.json",
+    "docs/reference/policy/principal-allocation.json",
+    "gen_broker_operations::merge_catalog",
+    "gen_broker_operations::build_catalog",
+    "operation_row_authority::COMMITTED_SERVICE_FACET_SCOPES",
+    "nix_inventories::PROVIDER_PROJECTION_OWNERS"
+  ],
+  "contractCrates": [
+    {
+      "name": "d2b-contracts",
+      "version": "0.0.0-bootstrap"
+    },
+    {
+      "name": "d2b-contracts-resource",
+      "version": "0.0.0-bootstrap"
+    },
+    {
+      "name": "d2b-contracts-provider",
+      "version": "0.0.0-bootstrap"
+    },
+    {
+      "name": "d2b-resource-types",
+      "version": "0.0.0-bootstrap"
+    }
+  ],
+  "artifacts": [
+    {
+      "staged": "generated/new-graph/provider_registrations.rs",
+      "compiledInto": "packages/d2bd/src/resource_plane_v3.rs",
+      "declaration": "packages/d2b-provider-*/registrations.json",
+      "digest": "sha256:22c138d7d313d5bcb26ed3d6a2a34499981993080823d955778ea0d9439ab9ee"
+    },
+    {
+      "staged": "generated/new-graph/service_provider_catalog.rs",
+      "compiledInto": "packages/d2b-contracts-zone-session/src/v3/mod.rs",
+      "declaration": "packages/d2b-provider-*/service-catalog.json",
+      "digest": "sha256:a3cb4a2f6136c279ebedd79d5ccbf15e2443da5413fdc7b9795afe25ba2cf327"
+    },
+    {
+      "staged": "generated/new-graph/v3_converted_resource_types.rs",
+      "compiledInto": "packages/d2b-contracts/src/identity.rs",
+      "declaration": "packages/d2b-provider-*/resource-types.json",
+      "digest": "sha256:31387bb9ee94870a12cbab30c311f2ece74878dcd3487b480dd0db25ecf62fd9"
+    }
+  ]
+}

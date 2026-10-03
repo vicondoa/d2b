@@ -234,6 +234,9 @@ async fn manager_fixture() -> ManagerFixture {
     let args = d2b_resource_runtime::ResourceManagerArgs {
         zone: TEST_ZONE.to_owned(),
         store,
+        // No broker in this fixture: the recording publisher fences and
+        // accepts what the manager publishes.
+        authority: d2b_resource_runtime::test_support::RecordingPublisher::new(),
         providers: {
             let mut providers = d2b_resource_runtime::provider::ProviderDirectory::new();
             providers
@@ -250,6 +253,11 @@ async fn manager_fixture() -> ManagerFixture {
             .expect("host target"),
         target_resolver: Arc::new(HostOnlyResolver),
         backoff: std::time::Duration::from_millis(200),
+        // The manager-owned fixture registers no per-type relation projection,
+        // so the derived index carries ownership only. The typed relation
+        // construction is exercised over the converted declarations in U6's
+        // own integration test.
+        relation_extractors: d2b_resource_runtime::RelationExtractors::new(),
     };
     let (actor, _join) = ractor::Actor::spawn(None, d2b_resource_runtime::ResourceManager::new(), args)
         .await

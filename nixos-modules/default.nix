@@ -53,7 +53,6 @@ in
     ./site-json.nix
     ./host-json.nix
     ./realm-workloads-launcher-v2-json.nix
-    ./privileges-json.nix
     ../packages/d2b-provider-volume-local/nix/storage-json.nix
     ../packages/d2b-provider-volume-local/nix/zone-storage-json.nix
     ./host-polkit.nix

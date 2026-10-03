@@ -142,6 +142,7 @@ fn the_declaration_serves_the_session_row() {
     assert_eq!(
         descriptor.reads,
         &[
+            WellKnownType::EXECUTION_POLICY,
             WellKnownType::GUEST,
             WellKnownType::HOST,
             WellKnownType::USER,

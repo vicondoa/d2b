@@ -38,10 +38,21 @@ use d2b_audit::evidence_chain::{
     MAX_NESTED_DEPTH,
 };
 use d2b_contracts_broker::broker_wire::{
-    BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS, FdKind, ForwardContext, MAX_FRAME_FDS,
-    PublishTrustedContextResponse, PublishTrustedContextValues,
+    AdmittedEffectInvocation, AdmittedEffectRefusal, AdmittedEffectResponse, AdmittedDescriptor,
+    BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS, EffectCorrelation, FdKind, ForwardContext,
+    MAX_FRAME_FDS, PublishTrustedContextResponse, PublishTrustedContextValues, ZoneAuthorityState,
 };
-use d2b_contracts_resource::v3::CanonicalJsonObject;
+use d2b_contracts_resource::v3::{
+    AdmissionStage, AuthoritySubject, CallableOperation, CanonicalJsonObject, DesiredDigest,
+    RefusalReason, ResourceRef, ZoneDesiredSequence, execution_policy::BoundedToken,
+    operation::FdKind as ContractFdKind,
+};
+use d2b_core::execution_plan::{
+    AdmittedParameters, BindingPlanRequest, CorrelationRecord, EffectPlanRequest, ExecutionPlan,
+    ParameterRefusal, PlanRefusalKind, PrivateExecutionTable, admit_parameters,
+    parameters_digest, resolve_execution_plan,
+};
+use d2b_core::resource_authority::{AcceptedGraph, TransportIdentity};
 use serde_json::Value;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::pin::Pin;
@@ -58,6 +69,31 @@ pub const UNKNOWN_OPERATION: &str = "unknown-operation";
 pub const UNCOMMITTED_OPERATION: &str = "uncommitted-operation";
 /// The refusal code for a caller no committed grant covers.
 pub const UNGRANTED_CALLER: &str = "ungranted-caller";
+
+/// The refusal code for a new ordinary effect a fenced Zone does not admit.
+///
+/// A prepared candidate freezes the Zone's *new-effect* admission, not the
+/// operations a relationship already owns. This is the code the envelope
+/// refuses an ordinary dispatch with while the serialized authority worker says
+/// the Zone is fenced, so the fence is visible to the invocation path instead
+/// of being a fact only the publication path knows. It is deliberately not one
+/// of the peer dispatch-failure codes: the envelope authors it, and a handler
+/// cannot reach it.
+pub const AUTHORITY_FENCED: &str = "authority-fenced";
+
+/// Whether the broker admits a new ordinary effect for `zone` right now.
+///
+/// The answer belongs to the one serialized authority worker, so this is one
+/// command and one reply rather than a second copy of the fence. A broker with
+/// no projection store holds no fence to consult and admits as it always did,
+/// which is what keeps the unchanged pre-cutover entry point working while the
+/// publication path is staged beside it.
+pub(crate) async fn ordinary_effect_admitted(zone: &str) -> bool {
+    match crate::authority_projection::authority_projection() {
+        None => true,
+        Some(projection) => !projection.status(zone).await.is_fenced(),
+    }
+}
 /// The refusal code for an operation whose payload contract is the typed wire
 /// request rather than a caller-supplied payload object.
 pub const WIRE_INHERITED_OPERATION: &str = "wire-inherited-operation";
@@ -792,6 +828,12 @@ fn mint_locked(
         controller_generation: attestation.controller_generation,
         guest_generation: attestation.guest_generation,
         initiating_identity: initiating_identity.to_owned(),
+        // The accepted-authority fields are bound by the caller from the
+        // authority projection: the trusted-context store owns generations and
+        // epochs, and the projection owns the cursor, so neither store
+        // restates the other's half.
+        accepted_sequence: ZoneDesiredSequence::INITIAL,
+        accepted_digest: DesiredDigest::of(&[]),
         deadline_ms,
     })
 }
@@ -1320,6 +1362,18 @@ impl BrokerEnvelope {
                     chain.root_invocation_id().to_owned(),
                     operation,
                     UNGRANTED_CALLER,
+                ));
+            }
+            if !ordinary_effect_admitted(zone).await {
+                // The Zone's new-effect admission is frozen for a prepared
+                // candidate, or the broker restarted and has not been
+                // reconciled. Either way this is not a stale-context or an
+                // ungranted caller: the Zone is deliberately closed to new
+                // ordinary use and says so.
+                return Err(EnvelopeRefusal::new(
+                    chain.root_invocation_id().to_owned(),
+                    operation,
+                    AUTHORITY_FENCED,
                 ));
             }
             if !Self::request_fds_admitted(row, fds) {
@@ -2109,6 +2163,1145 @@ impl OperationDispatcher for KernelDispatcher {
         } else {
             self.forwarded.dispatch(invocation)
         }
+    }
+}
+
+// ===========================================================================
+// The admitted effect boundary (U10, KTD8)
+// ===========================================================================
+
+/// The refusal code for a Zone the broker holds no accepted, unfenced
+/// projection for.
+///
+/// An admitted effect runs against the broker's *accepted* graph, so a Zone
+/// that is unprovisioned, mid-snapshot, reconciling after a restart, or
+/// fenced by a prepared candidate has no authority for one. The refusal
+/// happens before any implementation is resolved, so nothing has been mutated
+/// on the host yet.
+pub const UNACCEPTED_PROJECTION: &str = "unaccepted-projection";
+
+/// The refusal code for a payload that reached for an authority-bearing
+/// value.
+///
+/// This is the plan's own closed screen (AE7, R50). A payload naming a host
+/// path, a command line, an environment map, a numerical credential, or a
+/// mount policy is refused by name, whether the offending field was declared
+/// by the operation's schema or not.
+pub const AUTHORITY_PARAMETER: &str = "authority-parameter";
+
+/// The refusal code for a parameter object the operation's declared payload
+/// contract does not admit.
+pub const UNDECLARED_PARAMETER: &str = "undeclared-parameter";
+
+/// The refusal code for a frame that is not an admitted-effect carrier, or
+/// that names a retired wire variant.
+///
+/// This is the AE22 refusal: a legacy typed request, a `Command`-shaped
+/// payload, or a retired configuration field is rejected at the frame, with
+/// no translation and no route into a legacy handler.
+pub const LEGACY_EFFECT_REQUEST: &str = "legacy-effect-request";
+
+/// The refusal code for a caller-expected dependency version the broker no
+/// longer observes (AE16).
+pub const STALE_DEPENDENCY: &str = "stale-dependency";
+
+/// The refusal code for an `Operation` no declared implementation serves.
+///
+/// There is no default handler and no family switch: an operation the
+/// generated hosting table does not carry is refused by name, which is what
+/// R33's "no fallback handler route" means at runtime rather than in prose.
+pub const UNKNOWN_IMPLEMENTATION: &str = "unknown-implementation";
+
+/// The refusal code for an `Operation` whose declared implementation is not
+/// the trusted one the broker resolved.
+pub const UNTRUSTED_IMPLEMENTATION: &str = "untrusted-implementation";
+
+/// The refusal code for a dependency the broker holds no private value for.
+pub const UNPROVEN_EFFECT: &str = "unproven-effect";
+
+/// The refusal code for an idempotency key presented again with a different
+/// parameter object.
+pub const IDEMPOTENCY_CONFLICT: &str = "idempotency-conflict";
+
+/// The refusal code for a nested leg whose chain does not name the subject
+/// the broker recorded for that root invocation (AE15).
+pub const CORRELATION_SUBJECT_REPLACED: &str = "correlation-subject-replaced";
+
+/// The refusal code for a returned descriptor set that disagrees with the
+/// `Operation`'s declared response contract.
+pub const RESULT_FD_CONTRACT: &str = "result-fd-contract";
+
+/// The closed set of codes the admitted-effect boundary refuses with.
+///
+/// The set is closed, and it reuses the envelope's own carrier codes where
+/// the two boundaries meet: the fd-leg code a request-descriptor
+/// disagreement is reported under, the stale-wire-version code a retired
+/// variant is reported under, the nested-depth code a call loop trips, and the
+/// handler codes a dispatched implementation's own failure keeps.
+pub const ADMITTED_EFFECT_REFUSALS: [&str; 18] = [
+    UNACCEPTED_PROJECTION,
+    AUTHORITY_PARAMETER,
+    UNDECLARED_PARAMETER,
+    LEGACY_EFFECT_REQUEST,
+    STALE_DEPENDENCY,
+    UNKNOWN_IMPLEMENTATION,
+    UNTRUSTED_IMPLEMENTATION,
+    UNPROVEN_EFFECT,
+    IDEMPOTENCY_CONFLICT,
+    CORRELATION_SUBJECT_REPLACED,
+    RESULT_FD_CONTRACT,
+    STALE_WIRE_VERSION,
+    FD_LEG,
+    NESTED_DEPTH_EXCEEDED,
+    HANDLER_REFUSED,
+    HANDLER_ERRORED,
+    HANDLER_TIMED_OUT,
+    HANDLER_CRASHED,
+];
+
+/// What one admitted dispatch produced: the wire answer plus the descriptors
+/// it names.
+///
+/// The wire type carries each descriptor's declared `name` and its observed
+/// `kind`, never the descriptor itself, so the live ones travel beside it in
+/// the same order. The accept loop attaches `descriptors[i]` as the frame's
+/// `i`-th `SCM_RIGHTS` entry, which is what makes "entry `i` answers declared
+/// entry `i`" a position the caller can rely on rather than an index it has to
+/// correlate.
+#[derive(Debug)]
+pub struct AdmittedEffectAnswer {
+    /// The answer as it crosses the origination leg.
+    pub response: AdmittedEffectResponse,
+    /// The descriptors the answer names, in the answer's own order.
+    pub descriptors: Vec<OwnedFd>,
+}
+
+/// One refused admitted effect, with the stage and the reason that refused
+/// it.
+///
+/// The resource, the relationship, and the enforcing stage travel beside the
+/// reason, never inside it, so a diagnostic cannot echo a path or a caller
+/// value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectRefusal {
+    /// The closed refusal code.
+    pub code: &'static str,
+    /// The stage that refused.
+    pub stage: AdmissionStage,
+    /// The typed reason it refused.
+    pub reason: RefusalReason,
+    /// The exact `Operation` the invocation named.
+    pub operation: ResourceRef,
+    /// The invocation identifier a success would have carried.
+    pub invocation_id: String,
+    /// The key of the logical effect.
+    pub idempotency_key: String,
+    /// The correlation the invocation presented, when it presented one.
+    pub correlation: Option<EffectCorrelation>,
+}
+
+impl EffectRefusal {
+    fn new(
+        invocation: &AdmittedEffectInvocation,
+        invocation_id: String,
+        code: &'static str,
+        stage: AdmissionStage,
+        reason: RefusalReason,
+    ) -> Self {
+        Self {
+            code,
+            stage,
+            reason,
+            operation: invocation.operation().clone(),
+            invocation_id,
+            idempotency_key: invocation.idempotency_key().as_str().to_owned(),
+            correlation: invocation.correlation().cloned(),
+        }
+    }
+
+    /// The wire refusal this boundary's refusal travels as.
+    pub fn to_wire(&self) -> AdmittedEffectRefusal {
+        AdmittedEffectRefusal {
+            code: self.code.to_owned(),
+            stage: self.stage,
+            reason: self.reason,
+        }
+    }
+
+    /// The payload-free audit fields one refusal record carries.
+    pub fn audit_fields(&self) -> Value {
+        serde_json::json!({
+            "operation": self.operation,
+            "invocation_id": self.invocation_id,
+            "idempotency_key": self.idempotency_key,
+            "reason": self.code,
+            "stage": self.stage,
+            "detail": self.reason,
+            "nested": self.correlation.is_some(),
+        })
+    }
+}
+
+/// The stable audit label one authority subject is recorded under.
+///
+/// A subject that names a resource is recorded by its canonical reference; a
+/// bootstrap or operator subject names none, so it is recorded by its class.
+fn subject_label(subject: &AuthoritySubject) -> String {
+    subject.resource_ref().map_or_else(
+        || format!("{:?}", subject.kind()),
+        ResourceRef::to_canonical_string,
+    )
+}
+
+/// Whether the broker holds an accepted projection for the Zone an admitted
+/// effect names.
+///
+/// The answer is the Zone's own posture, never a flag the caller supplied: a
+/// Zone that is unprovisioned, mid-snapshot, reconciling after a restart, or
+/// fenced by a prepared candidate admits no new ordinary effect. A broker
+/// that holds no projection at all holds no accepted graph either, and says so
+/// rather than serving authority it cannot show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectionPosture {
+    /// The Zone has an accepted, unfenced projection.
+    Accepted,
+    /// The Zone has no accepted, unfenced projection.
+    Unaccepted,
+}
+
+impl ProjectionPosture {
+    /// Read the Zone's posture from the broker's own projection.
+    pub async fn current(zone: &str) -> Self {
+        match crate::authority_projection::authority_projection() {
+            None => Self::Unaccepted,
+            Some(projection) => match projection.status(zone).await {
+                ZoneAuthorityState::Unfenced { .. } => Self::Accepted,
+                _ => Self::Unaccepted,
+            },
+        }
+    }
+
+    /// Whether this posture admits a new ordinary effect.
+    pub const fn admits(self) -> bool {
+        matches!(self, Self::Accepted)
+    }
+}
+
+/// One descriptor an admitted implementation returned, before its declared
+/// contract was checked.
+#[derive(Debug)]
+pub struct EffectDescriptor {
+    /// The declared fd-contract entry the descriptor answers.
+    pub name: BoundedToken,
+    /// The descriptor itself. The caller owns it once the reply is encoded.
+    pub fd: OwnedFd,
+    /// The kernel kind the broker observed on the descriptor.
+    pub kind: FdKind,
+}
+
+/// What one admitted implementation returned.
+#[derive(Debug)]
+pub struct AdmittedEffectOutcome {
+    /// The canonical result object.
+    pub result: CanonicalJsonObject,
+    /// The descriptors the implementation minted.
+    pub descriptors: Vec<EffectDescriptor>,
+}
+
+/// The future one admitted-effect implementation completes on.
+///
+/// The future is `'static` and owns everything it needs: the plan is moved
+/// into the handler, so an implementation holds the resolved private values
+/// for the whole dispatch and the broker holds no borrow across the
+/// suspension point.
+pub type EffectFuture = Pin<
+    Box<dyn Future<Output = Result<AdmittedEffectOutcome, DispatchFailure>> + Send + 'static>,
+>;
+
+/// One admitted effect as its declared implementation sees it.
+///
+/// Everything the handler needs is here and everything it must not have is
+/// absent: the plan it runs against, the admitted typed parameters, and the
+/// correlation of the leg. There is no payload, no launch posture, and no
+/// resolved policy, because none of those crossed the boundary.
+#[derive(Debug)]
+pub struct AdmittedEffect {
+    /// The invocation identifier the audit records key on.
+    pub invocation_id: String,
+    /// The exact `Operation` being run.
+    pub operation: ResourceRef,
+    /// The subject the effect is admitted for.
+    pub subject: AuthoritySubject,
+    /// The admitted typed non-authority parameters.
+    pub parameters: AdmittedParameters,
+    /// The correlation of this leg, when it is a nested one.
+    pub correlation: Option<EffectCorrelation>,
+    /// The descriptors the caller attached on the request leg, already
+    /// checked against the declared request contract.
+    pub request_fds: Vec<OwnedFd>,
+    /// The resolved private plan.
+    pub plan: ExecutionPlan,
+}
+
+/// One declared implementation an admitted effect dispatches to.
+///
+/// The seam is the runtime half of U9's generated hosting table: the table
+/// resolves a committed `Operation` to exactly one implementation, and an
+/// `Operation` the table does not carry is refused rather than routed
+/// somewhere else. A handler reads its [`ExecutionPlan`] and nothing else.
+pub trait AdmittedEffectHandler: Send + Sync {
+    /// The committed `Operation` this implementation answers.
+    fn operation(&self) -> &ResourceRef;
+
+    /// The declared contract of that `Operation`.
+    fn declared(&self) -> &CallableOperation;
+
+    /// Run one admitted effect against its resolved plan.
+    fn run(&self, effect: AdmittedEffect) -> EffectFuture;
+}
+
+/// The broker's in-process table of declared admitted-effect
+/// implementations.
+///
+/// The table is sealed: two implementations claiming one `Operation` are
+/// refused while it is built, and the table that hosts them did not exist
+/// yet, so a duplicate fails before dispatch rather than at first call.
+pub struct AdmittedEffectTable {
+    handlers: BTreeMap<ResourceRef, Arc<dyn AdmittedEffectHandler>>,
+}
+
+impl std::fmt::Debug for AdmittedEffectTable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AdmittedEffectTable")
+            .field("operations", &self.handlers.len())
+            .finish()
+    }
+}
+
+impl AdmittedEffectTable {
+    /// Build the table, refusing a duplicate `Operation` claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EffectTableError::DuplicateOperation`] when two declared
+    /// implementations answer for the same `Operation`.
+    pub fn new(
+        handlers: impl IntoIterator<Item = Arc<dyn AdmittedEffectHandler>>,
+    ) -> Result<Self, EffectTableError> {
+        let mut handlers_by_operation: BTreeMap<ResourceRef, Arc<dyn AdmittedEffectHandler>> =
+            BTreeMap::new();
+        for handler in handlers {
+            let operation = handler.operation().clone();
+            if handlers_by_operation
+                .insert(operation.clone(), handler)
+                .is_some()
+            {
+                return Err(EffectTableError::DuplicateOperation { operation });
+            }
+        }
+        Ok(Self {
+            handlers: handlers_by_operation,
+        })
+    }
+
+    /// The implementation that answers one `Operation`, when the table
+    /// carries it.
+    pub fn resolve(&self, operation: &ResourceRef) -> Option<&Arc<dyn AdmittedEffectHandler>> {
+        self.handlers.get(operation)
+    }
+
+    /// The committed contract the table answers one `Operation` with.
+    ///
+    /// The declared side of the private-execution join: the table is sealed,
+    /// so exactly one implementation claims each `Operation` it carries and
+    /// this is that implementation's own contract.
+    pub fn declared(&self, operation: &ResourceRef) -> Option<&CallableOperation> {
+        self.handlers
+            .get(operation)
+            .map(|handler| handler.declared())
+    }
+
+    /// Every `Operation` the table serves, in canonical order.
+    pub fn operations(&self) -> impl Iterator<Item = &ResourceRef> {
+        self.handlers.keys()
+    }
+}
+
+/// Why an admitted-effect table was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EffectTableError {
+    /// Two declared implementations answer for one `Operation`.
+    DuplicateOperation {
+        /// The contested `Operation`.
+        operation: ResourceRef,
+    },
+}
+
+impl core::fmt::Display for EffectTableError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::DuplicateOperation { operation } => {
+                write!(
+                    formatter,
+                    "operation `{operation}` is claimed by two implementations"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for EffectTableError {}
+
+/// One recorded root invocation: the subject it was admitted for, and the
+/// depth of the leg that recorded it.
+#[derive(Debug, Clone)]
+struct RootRecord {
+    subject: AuthoritySubject,
+    depth: u8,
+}
+
+/// How one recorded logical effect ended.
+#[derive(Debug, Clone)]
+pub enum RecordedEffectOutcome {
+    /// The effect ran and returned this result.
+    Completed {
+        /// The canonical result the original call returned.
+        result: CanonicalJsonObject,
+        /// The declared descriptors the original call returned.
+        descriptors: Vec<AdmittedDescriptor>,
+    },
+    /// The effect was refused for this reason.
+    Refused {
+        /// The closed refusal code.
+        code: &'static str,
+        /// The stage that refused.
+        stage: AdmissionStage,
+        /// The typed reason it refused.
+        reason: RefusalReason,
+    },
+}
+
+/// What the ledger holds for one logical effect.
+#[derive(Debug, Clone)]
+pub struct RecordedEffectRecord {
+    /// The invocation identifier the original call carried.
+    pub invocation_id: String,
+    /// The canonical digest of the parameters it was admitted with.
+    pub parameter_digest: String,
+    /// How it ended.
+    pub outcome: RecordedEffectOutcome,
+}
+
+/// One recorded logical effect.
+#[derive(Debug, Clone)]
+struct EffectRecord {
+    invocation_id: String,
+    parameter_digest: String,
+    outcome: RecordedEffectOutcome,
+}
+
+/// The broker's admitted-effect ledger.
+///
+/// It holds two facts, and both are load-bearing:
+///
+/// - one recorded outcome per idempotency key, so a retry is answered from
+///   the record rather than re-running a host mutation, and a key presented
+///   again with different parameters is a conflict rather than a second
+///   effect;
+/// - one recorded initiating subject per root invocation, so a nested leg is
+///   admitted only against the subject its own root was admitted for. A
+///   privileged transport therefore cannot substitute a more privileged
+///   subject for the one that started the work (AE15, R8).
+///
+/// Every method is synchronous and every guard is dropped before it returns,
+/// so no lock is ever held across a suspension point. The ledger is
+/// process-lifetime state, so a nested leg whose root was admitted by another
+/// process is refused here; the production cutover routes cross-process legs
+/// through the durable effect journal instead.
+#[derive(Debug, Default)]
+pub struct EffectLedger {
+    invocations: AtomicU64,
+    records: tokio::sync::Mutex<BTreeMap<(String, String), EffectRecord>>,
+    roots: tokio::sync::Mutex<BTreeMap<String, RootRecord>>,
+}
+
+impl EffectLedger {
+    /// An empty ledger.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Mint the next invocation identifier.
+    pub fn next_invocation_id(&self) -> String {
+        format!(
+            "effect-invocation-{}",
+            self.invocations.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    /// What the ledger holds for one logical effect, when it holds anything.
+    pub async fn record(&self, zone: &str, key: &str) -> Option<RecordedEffectRecord> {
+        let records = self.records.lock().await;
+        records
+            .get(&(zone.to_owned(), key.to_owned()))
+            .map(|record| RecordedEffectRecord {
+                invocation_id: record.invocation_id.clone(),
+                parameter_digest: record.parameter_digest.clone(),
+                outcome: record.outcome.clone(),
+            })
+    }
+
+    /// Record the initiating subject of one root invocation.
+    pub async fn record_root(&self, invocation_id: &str, subject: &AuthoritySubject, depth: u8) {
+        let mut roots = self.roots.lock().await;
+        roots.insert(
+            invocation_id.to_owned(),
+            RootRecord {
+                subject: subject.clone(),
+                depth,
+            },
+        );
+    }
+
+    /// The recorded initiating subject of one root invocation, and the depth
+    /// of the leg that recorded it.
+    pub async fn root(&self, invocation_id: &str) -> Option<(AuthoritySubject, u8)> {
+        let roots = self.roots.lock().await;
+        roots
+            .get(invocation_id)
+            .map(|record| (record.subject.clone(), record.depth))
+    }
+
+    /// Record the terminal outcome of one logical effect.
+    pub async fn record_outcome(
+        &self,
+        zone: &str,
+        key: &str,
+        invocation_id: &str,
+        parameter_digest: &str,
+        outcome: RecordedEffectOutcome,
+    ) {
+        let record = EffectRecord {
+            invocation_id: invocation_id.to_owned(),
+            parameter_digest: parameter_digest.to_owned(),
+            outcome,
+        };
+        let mut records = self.records.lock().await;
+        records.insert((zone.to_owned(), key.to_owned()), record);
+    }
+}
+
+/// One admitted invocation, resolved but not yet run.
+pub struct AdmittedEffectContext {
+    /// The invocation identifier the audit records key on.
+    pub invocation_id: String,
+    /// The declared implementation that answers this `Operation`.
+    pub handler: Arc<dyn AdmittedEffectHandler>,
+    /// The resolved private plan.
+    pub plan: ExecutionPlan,
+    /// The admitted typed parameters.
+    pub parameters: AdmittedParameters,
+    /// The correlation of this leg, when it is a nested one.
+    pub correlation: Option<EffectCorrelation>,
+    /// This leg's depth, zero for a root invocation.
+    pub depth: usize,
+}
+
+impl std::fmt::Debug for AdmittedEffectContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AdmittedEffectContext")
+            .field("invocation_id", &self.invocation_id)
+            .field("operation", self.plan.operation())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The broker's admitted-effect boundary.
+///
+/// One admission runs the same steps in the same order every time: the Zone
+/// must hold an accepted projection; the implementation must be the declared
+/// one; the parameters must pass the operation's declared contract and the
+/// authority screen; a retry must match the ledger; a nested leg's subject
+/// must be the one its root was admitted for; the plan must resolve against
+/// the accepted graph; and the request descriptors must match the declared
+/// contract. Only then does anything run. Every refusal happens before the
+/// handler is called, so a refused invocation has mutated nothing on the host.
+pub struct AdmittedEffectAdmission<'a> {
+    ledger: &'a EffectLedger,
+    table: &'a AdmittedEffectTable,
+    chain_audit: Option<&'a Arc<dyn ChainAuditSink>>,
+}
+
+impl std::fmt::Debug for AdmittedEffectAdmission<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AdmittedEffectAdmission")
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> AdmittedEffectAdmission<'a> {
+    /// Build the boundary over the broker's ledger, implementation table, and
+    /// evidence-chain sink.
+    pub fn new(
+        ledger: &'a EffectLedger,
+        table: &'a AdmittedEffectTable,
+        chain_audit: Option<&'a Arc<dyn ChainAuditSink>>,
+    ) -> Self {
+        Self {
+            ledger,
+            table,
+            chain_audit,
+        }
+    }
+
+    /// Admit one invocation without running it.
+    ///
+    /// The returned [`AdmittedEffectContext`] owns the resolved plan and the
+    /// implementation, so a caller that only wants to inspect what was
+    /// admitted never has to dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Refuses with one code of [`ADMITTED_EFFECT_REFUSALS`]: an unaccepted
+    /// projection, an authority-bearing or undeclared parameter, a
+    /// conflicting idempotency key, a nested leg whose subject is not the one
+    /// recorded for its root, any plan refusal, an unknown or untrusted
+    /// implementation, or a request descriptor set the declared contract does
+    /// not admit.
+    pub async fn admit(
+        &self,
+        posture: ProjectionPosture,
+        zone: &str,
+        accepted: &AcceptedGraph,
+        values: &PrivateExecutionTable,
+        invocation: &AdmittedEffectInvocation,
+        request_fds: &[OwnedFd],
+    ) -> Result<AdmittedEffectContext, EffectRefusal> {
+        let invocation_id = self.ledger.next_invocation_id();
+        let refuse = |code: &'static str, stage: AdmissionStage, reason: RefusalReason| {
+            EffectRefusal::new(invocation, invocation_id.clone(), code, stage, reason)
+        };
+
+        if !posture.admits() {
+            return Err(refuse(
+                UNACCEPTED_PROJECTION,
+                AdmissionStage::Authorize,
+                RefusalReason::StaleAuthority,
+            ));
+        }
+
+        // The implementation is resolved before the parameters are read, so
+        // a caller learns whether the effect exists at all before it learns
+        // anything about the shape of an effect it may not run. A name no
+        // declared implementation serves is refused here and nowhere else:
+        // there is no default handler and no family switch (R33).
+        let Some(handler) = self.table.resolve(invocation.operation()) else {
+            return Err(refuse(
+                UNKNOWN_IMPLEMENTATION,
+                AdmissionStage::Authorize,
+                RefusalReason::UntrustedImplementation,
+            ));
+        };
+        let callable = handler.declared();
+
+        // The typed parameters: closed in both directions, and screened for
+        // authority before anything else reads them.
+        let parameters = admit_parameters(callable, invocation.parameters()).map_err(|error| {
+            let authority = matches!(error, ParameterRefusal::AuthorityBearingField { .. });
+            refuse(
+                if authority {
+                    AUTHORITY_PARAMETER
+                } else {
+                    UNDECLARED_PARAMETER
+                },
+                AdmissionStage::Authorize,
+                error.reason(),
+            )
+        })?;
+
+        // A retry is answered from the ledger. A key presented again with a
+        // different parameter object is a conflict, not a replay.
+        let digest = parameters.digest();
+        if let Some(recorded) = self
+            .ledger
+            .record(zone, invocation.idempotency_key().as_str())
+            .await
+            && recorded.parameter_digest != digest
+        {
+            return Err(refuse(
+                IDEMPOTENCY_CONFLICT,
+                AdmissionStage::Authorize,
+                RefusalReason::ConflictingDeclaration,
+            ));
+        }
+
+        // A nested leg keeps the subject its root was admitted for. A root
+        // the broker never admitted carries no provable subject, so it is
+        // refused rather than taken at its word.
+        let mut depth = 0usize;
+        let correlation = match invocation.correlation() {
+            None => {
+                self.ledger
+                    .record_root(&invocation_id, invocation.subject(), 0)
+                    .await;
+                None
+            }
+            Some(presented) => {
+                let recorded = self.ledger.root(&presented.root_invocation_id).await;
+                let subject_matches = recorded
+                    .as_ref()
+                    .is_some_and(|(subject, _)| subject == invocation.subject());
+                if !subject_matches {
+                    return Err(refuse(
+                        CORRELATION_SUBJECT_REPLACED,
+                        AdmissionStage::Authorize,
+                        RefusalReason::IdentityNotAuthorized,
+                    ));
+                }
+                depth = recorded.map_or(0, |(_, root_depth)| root_depth as usize + 1);
+                if depth > MAX_NESTED_DEPTH {
+                    return Err(refuse(
+                        NESTED_DEPTH_EXCEEDED,
+                        AdmissionStage::Activate,
+                        RefusalReason::UnprovenEffect,
+                    ));
+                }
+                self.ledger
+                    .record_root(&invocation_id, invocation.subject(), depth as u8)
+                    .await;
+                Some(presented.clone())
+            }
+        };
+
+        // The plan: every private value resolved from the broker's own table
+        // and accepted graph, never from the invocation.
+        let legs: Vec<BindingPlanRequest> = invocation
+            .legs()
+            .iter()
+            .map(|leg| {
+                BindingPlanRequest::new(
+                    leg.binding.clone(),
+                    leg.rights,
+                    leg.presentation.clone(),
+                    leg.helper.clone(),
+                )
+            })
+            .collect();
+        let correlation_record = correlation.as_ref().map(|presented| {
+            CorrelationRecord::new(
+                presented.root_invocation_id.clone(),
+                presented.identities[0].clone(),
+                invocation.subject().clone(),
+                depth as u8,
+            )
+        });
+        let request = EffectPlanRequest::new(
+            invocation.operation().clone(),
+            callable.clone(),
+            invocation.subject().clone(),
+            legs,
+            parameters.clone(),
+            invocation.expected_dependencies().to_vec(),
+            TransportIdentity::Broker,
+            correlation_record,
+        )
+        .map_err(|_| {
+            refuse(
+                UNDECLARED_PARAMETER,
+                AdmissionStage::Authorize,
+                RefusalReason::ConflictingDeclaration,
+            )
+        })?;
+        let plan = resolve_execution_plan(&request, accepted, values).map_err(|error| {
+            let code = match error.kind() {
+                PlanRefusalKind::ImplementationUntrusted | PlanRefusalKind::ImplementationMismatch => {
+                    UNTRUSTED_IMPLEMENTATION
+                }
+                PlanRefusalKind::StaleAuthority => STALE_DEPENDENCY,
+                _ => UNPROVEN_EFFECT,
+            };
+            refuse(code, error.stage(), error.reason())
+        })?;
+
+        // The request descriptors are checked against the declared contract
+        // before the handler sees them, so an oversized or wrong-kind leg is
+        // refused rather than truncated by the transport.
+        if !request_descriptors_admitted(callable, request_fds) {
+            return Err(refuse(
+                FD_LEG,
+                AdmissionStage::Activate,
+                RefusalReason::MandatoryFacetUnsupported,
+            ));
+        }
+
+        Ok(AdmittedEffectContext {
+            invocation_id,
+            handler: Arc::clone(handler),
+            plan,
+            parameters,
+            correlation,
+            depth,
+        })
+    }
+
+    /// Admit and run one invocation, returning the wire answer and the
+    /// descriptors it names.
+    ///
+    /// # Errors
+    ///
+    /// Refuses with one code of [`ADMITTED_EFFECT_REFUSALS`]. A failure the
+    /// handler decided keeps the handler's own code; a returned descriptor
+    /// set that disagrees with the declared response contract is
+    /// [`RESULT_FD_CONTRACT`].
+    pub async fn run(
+        &self,
+        posture: ProjectionPosture,
+        zone: &str,
+        accepted: &AcceptedGraph,
+        values: &PrivateExecutionTable,
+        invocation: &AdmittedEffectInvocation,
+        request_fds: &[OwnedFd],
+    ) -> Result<AdmittedEffectAnswer, EffectRefusal> {
+        // A recorded outcome answers a retry without running anything: the
+        // host mutation happened once, and a second presentation of the same
+        // key returns the first call's answer rather than repeating it. The
+        // comparison happens first, so a key reused with different parameters
+        // is a conflict rather than a replay of the recorded effect.
+        let supplied = parameters_digest(invocation.parameters());
+        if let Some(recorded) = self
+            .ledger
+            .record(zone, invocation.idempotency_key().as_str())
+            .await
+        {
+            if recorded.parameter_digest != supplied {
+                return Err(EffectRefusal::new(
+                    invocation,
+                    recorded.invocation_id,
+                    IDEMPOTENCY_CONFLICT,
+                    AdmissionStage::Authorize,
+                    RefusalReason::ConflictingDeclaration,
+                ));
+            }
+            return match recorded.outcome {
+                RecordedEffectOutcome::Completed { result, descriptors } => {
+                    // A recorded answer that declared descriptors cannot be
+                    // reproduced: the ledger holds their names and kinds, not
+                    // live descriptors, and minting them again would repeat
+                    // the effect. So a retry of such an effect is refused by
+                    // name rather than answered with entries the frame does
+                    // not carry - a partial success is a lie, and the host
+                    // effect still happened exactly once either way.
+                    if !descriptors.is_empty() {
+                        return Err(EffectRefusal::new(
+                            invocation,
+                            recorded.invocation_id,
+                            RESULT_FD_CONTRACT,
+                            AdmissionStage::Activate,
+                            RefusalReason::MandatoryFacetUnsupported,
+                        ));
+                    }
+                    Ok(AdmittedEffectAnswer {
+                        response: AdmittedEffectResponse {
+                            invocation_id: recorded.invocation_id,
+                            operation: invocation.operation().clone(),
+                            idempotency_key: invocation.idempotency_key().clone(),
+                            result: Some(result),
+                            descriptors,
+                            refusal: None,
+                            correlation: invocation.correlation().cloned(),
+                        },
+                        descriptors: Vec::new(),
+                    })
+                }
+                RecordedEffectOutcome::Refused { code, stage, reason } => {
+                    Err(EffectRefusal::new(
+                        invocation,
+                        recorded.invocation_id,
+                        code,
+                        stage,
+                        reason,
+                    ))
+                }
+            };
+        }
+
+        let admitted = self
+            .admit(posture, zone, accepted, values, invocation, request_fds)
+            .await?;
+        let invocation_id = admitted.invocation_id.clone();
+        let key = invocation.idempotency_key().as_str().to_owned();
+        let digest = admitted.parameters.digest();
+        let refuse = |code: &'static str, stage: AdmissionStage, reason: RefusalReason| {
+            EffectRefusal::new(invocation, invocation_id.clone(), code, stage, reason)
+        };
+
+        // The handler owns the descriptors for the whole dispatch, so they
+        // are duplicated rather than borrowed: a borrow would not outlive the
+        // `'static` handler future, and a descriptor the caller still owns
+        // must survive the call.
+        let request_fds = request_fds
+            .iter()
+            .map(|fd| fd.try_clone())
+            .collect::<Result<Vec<OwnedFd>, std::io::Error>>()
+            .map_err(|_| {
+                refuse(
+                    FD_LEG,
+                    AdmissionStage::Activate,
+                    RefusalReason::MandatoryFacetUnsupported,
+                )
+            })?;
+
+        let outcome = admitted
+            .handler
+            .run(AdmittedEffect {
+                invocation_id: invocation_id.clone(),
+                operation: invocation.operation().clone(),
+                subject: invocation.subject().clone(),
+                parameters: admitted.parameters.clone(),
+                correlation: admitted.correlation.clone(),
+                request_fds,
+                plan: admitted.plan.clone(),
+            })
+            .await;
+
+        let record = |outcome: RecordedEffectOutcome| {
+            self.ledger
+                .record_outcome(zone, &key, &invocation_id, &digest, outcome)
+        };
+
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(failure) => {
+                let code = ADMITTED_EFFECT_REFUSALS
+                    .iter()
+                    .find(|candidate| **candidate == failure.code)
+                    .copied()
+                    .unwrap_or(HANDLER_ERRORED);
+                let refused = refuse(
+                    code,
+                    AdmissionStage::Activate,
+                    RefusalReason::SourcePolicyRefused,
+                );
+                record(RecordedEffectOutcome::Refused {
+                    code: refused.code,
+                    stage: refused.stage,
+                    reason: refused.reason,
+                })
+                .await;
+                self.record_chain(
+                    zone,
+                    invocation,
+                    &invocation_id,
+                    admitted.depth,
+                    ChainOutcome::Refused,
+                    Some(code),
+                );
+                return Err(refused);
+            }
+        };
+
+        // The returned descriptors are checked against the declaration before
+        // the reply is built: a descriptor no declared entry promised, a
+        // missing required entry, or a kind the entry did not declare is
+        // refused, and the caller never receives it.
+        // The table's declared contract is the only one an admitted effect
+        // can have: `admit` resolved the implementation by the invocation's
+        // own `Operation`, so re-reading it here cannot name a different
+        // contract.
+        let descriptors = match response_descriptors_admitted(admitted.handler.declared(), &outcome)
+        {
+            Ok(descriptors) => descriptors,
+            Err(reason) => {
+                let refused = refuse(RESULT_FD_CONTRACT, AdmissionStage::Activate, reason);
+                record(RecordedEffectOutcome::Refused {
+                    code: refused.code,
+                    stage: refused.stage,
+                    reason: refused.reason,
+                })
+                .await;
+                self.record_chain(
+                    zone,
+                    invocation,
+                    &invocation_id,
+                    admitted.depth,
+                    ChainOutcome::Refused,
+                    Some(RESULT_FD_CONTRACT),
+                );
+                return Err(refused);
+            }
+        };
+
+        record(RecordedEffectOutcome::Completed {
+            result: outcome.result.clone(),
+            descriptors: descriptors.clone(),
+        })
+        .await;
+        self.record_chain(
+            zone,
+            invocation,
+            &invocation_id,
+            admitted.depth,
+            ChainOutcome::Succeeded,
+            None,
+        );
+        // The descriptors themselves leave with the answer, in the same order
+        // the wire names them: the frame's SCM_RIGHTS attachment list is
+        // position-aligned with `descriptors`, so a caller joins entry `i` to
+        // attachment `i`. The ledger keeps only the names and kinds, because
+        // a recorded outcome is replayed on a later retry and must not hold a
+        // live descriptor open to do it.
+        let returned: Vec<OwnedFd> = outcome
+            .descriptors
+            .iter()
+            .map(|descriptor| descriptor.fd.try_clone())
+            .collect::<Result<Vec<OwnedFd>, std::io::Error>>()
+            .map_err(|_| {
+                EffectRefusal::new(
+                    invocation,
+                    invocation_id.clone(),
+                    FD_LEG,
+                    AdmissionStage::Activate,
+                    RefusalReason::MandatoryFacetUnsupported,
+                )
+            })?;
+        Ok(AdmittedEffectAnswer {
+            response: AdmittedEffectResponse {
+                invocation_id,
+                operation: invocation.operation().clone(),
+                idempotency_key: invocation.idempotency_key().clone(),
+                result: Some(outcome.result),
+                descriptors,
+                refusal: None,
+                correlation: admitted.correlation,
+            },
+            descriptors: returned,
+        })
+    }
+
+    /// Append one admitted-effect chain record, when a sink is wired.
+    fn record_chain(
+        &self,
+        zone: &str,
+        invocation: &AdmittedEffectInvocation,
+        invocation_id: &str,
+        depth: usize,
+        outcome: ChainOutcome,
+        code: Option<&'static str>,
+    ) {
+        let Some(sink) = self.chain_audit else {
+            return;
+        };
+        let record = ChainRecord {
+            ts_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            record_class: if invocation.is_nested() {
+                ChainRecordClass::Correlation
+            } else {
+                ChainRecordClass::Root
+            },
+            leg: ChainLeg::Broker,
+            invocation_id: invocation_id.to_owned(),
+            depth: depth as u32,
+            initiating_identity: subject_label(invocation.subject()),
+            invoking_identity: subject_label(invocation.subject()),
+            operation: invocation.operation().to_canonical_string(),
+            zone: zone.to_owned(),
+            outcome,
+            code: code.map(str::to_owned),
+        };
+        if let Err(error) = sink.record(&record) {
+            tracing::error!(error = %error, "admitted-effect chain audit record failed");
+        }
+    }
+}
+
+/// The kernel kind one descriptor presents, or `None` for an anon-inode
+/// descriptor (a pidfd, a memfd), whose fstat mode carries no file type.
+fn observed_kind(fd: &OwnedFd) -> Option<FdKind> {
+    BrokerEnvelope::fd_kind_of(fd)
+}
+
+/// Whether the request descriptors one invocation attached match the
+/// operation's declared request fd contract.
+///
+/// The comparison is positional and total: a missing required entry, an extra
+/// descriptor, a set over the frame ceiling, or a descriptor whose observed
+/// kernel kind the declared kind does not admit all refuse.
+fn request_descriptors_admitted(callable: &CallableOperation, fds: &[OwnedFd]) -> bool {
+    let declared = callable.fds().request();
+    if fds.len() > declared.len() || fds.len() > MAX_FRAME_FDS {
+        return false;
+    }
+    if declared
+        .iter()
+        .skip(fds.len())
+        .any(|contract| contract.required())
+    {
+        return false;
+    }
+    declared
+        .iter()
+        .zip(fds)
+        .all(|(contract, fd)| kernel_kind_admits(contract.kind(), fd))
+}
+
+/// The wire descriptors one returned set is, after its declared contract was
+/// checked.
+///
+/// The count must match exactly, every returned descriptor must name an entry
+/// the declaration published, and no entry may go unanswered: a required
+/// descriptor the implementation did not return is a refusal, not a success
+/// with fewer handles.
+fn response_descriptors_admitted(
+    callable: &CallableOperation,
+    outcome: &AdmittedEffectOutcome,
+) -> Result<Vec<AdmittedDescriptor>, RefusalReason> {
+    let declared = callable.fds().response();
+    if outcome.descriptors.len() != declared.len() {
+        return Err(RefusalReason::MandatoryFacetUnsupported);
+    }
+    let mut descriptors = Vec::with_capacity(declared.len());
+    for (contract, descriptor) in declared.iter().zip(&outcome.descriptors) {
+        if descriptor.name != *contract.name() {
+            return Err(RefusalReason::MandatoryFacetUnsupported);
+        }
+        // The declared kind has to be one the descriptor actually presents,
+        // and the kind the implementation reported has to be the kind the
+        // broker observed: a handler that labels a descriptor as something
+        // it is not would otherwise launder a wrong kind into the reply.
+        if !kernel_kind_admits(contract.kind(), &descriptor.fd)
+            || observed_kind(&descriptor.fd) != Some(descriptor.kind)
+        {
+            return Err(RefusalReason::MandatoryFacetUnsupported);
+        }
+        descriptors.push(AdmittedDescriptor {
+            name: contract.name().clone(),
+            kind: descriptor.kind,
+        });
+    }
+    Ok(descriptors)
+}
+
+/// Whether one descriptor's observed kernel kind is one its declared
+/// contract kind admits.
+fn kernel_kind_admits(declared: ContractFdKind, fd: &OwnedFd) -> bool {
+    let Some(observed) = observed_kind(fd) else {
+        // An anon-inode descriptor (a pidfd, a memfd) reports no file type
+        // through fstat, so the declared kinds that name an anon-inode admit
+        // it and nothing else does.
+        return matches!(declared, ContractFdKind::Pidfd | ContractFdKind::Memfd);
+    };
+    match declared {
+        ContractFdKind::File => observed == FdKind::Regular,
+        ContractFdKind::Socket => observed == FdKind::Socket,
+        ContractFdKind::Pipe => observed == FdKind::Fifo,
+        ContractFdKind::Directory => observed == FdKind::Directory,
+        ContractFdKind::Pidfd | ContractFdKind::Memfd => false,
     }
 }
 

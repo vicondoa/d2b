@@ -11,7 +11,10 @@ use d2b_provider_toolkit::{
 };
 
 use crate::driver::{UsbipComponent, UsbipDriverEffects};
-use crate::facets::{UsbipBrokerFacets, UsbipEffectFacets, UsbipRuntime};
+use crate::facets::{
+    UnwiredUsbipClaimPorts, UnwiredUsbipHelperLegs, UsbipBrokerFacets, UsbipEffectFacets,
+    UsbipRuntime,
+};
 
 /// Recording [`UsbipDriverEffects`] double.
 ///
@@ -104,11 +107,29 @@ impl UsbipRuntime for RecordingRuntime {
 /// dispatch facet is a fail-closed double: the plane tests never invoke a
 /// bind/unbind, so a call is a test bug rather than a silent success.
 pub fn recording_facets(runtime: Arc<RecordingRuntime>) -> UsbipEffectFacets {
+    facets(runtime, Arc::new(UnwiredUsbipHelperLegs), Arc::new(UnwiredUsbipClaimPorts))
+}
+
+/// Build a USBIP facet set over the caller's own converted-path facets.
+///
+/// This is the seam a test drives the converted claim path through: the
+/// helper-leg facet answers with the admitted relationship and bounded leg the
+/// test minted, and the claim-port facet answers with the effects it records.
+/// A plane with neither holds the by-name refusals instead, so a test that
+/// asks for a realization without supplying authority gets a refusal rather
+/// than a silent success.
+pub fn facets(
+    runtime: Arc<RecordingRuntime>,
+    admission: Arc<dyn crate::facets::UsbipHelperLegSource>,
+    claims: Arc<dyn crate::facets::UsbipClaimPortSource>,
+) -> UsbipEffectFacets {
     UsbipEffectFacets {
         runtime,
         broker: UsbipBrokerFacets {
             dispatch: Arc::new(FailClosedDispatch),
         },
+        admission,
+        claims,
     }
 }
 

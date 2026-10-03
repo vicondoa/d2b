@@ -18,6 +18,25 @@ use d2b_provider_toolkit::{
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, time::Duration};
 
+/// The Provider's declared service, endpoint, and refusal vocabulary (U28).
+///
+/// [`declaration`] is the Provider's one service-method and one
+/// endpoint-grant source: session admission resolves a route's role through
+/// it, and the host delivery gate admits an `EndpointBinding` relationship
+/// through it. It is re-exported here so the composed host reads the same
+/// declarations the service admission does.
+pub mod declaration;
+pub use declaration::{
+    AdmittedClipboardEndpoint, CLIPBOARD_BRIDGE_SERVICE, CLIPBOARD_MANAGEMENT_SERVICE,
+    CLIPBOARD_PICKER_SERVICE, CLIPBOARD_SERVICES, ClipboardEndpointBinding,
+    ClipboardEndpointError, ClipboardEndpointEvidence, ClipboardEndpointFence,
+    ClipboardEndpointGrant, ClipboardEndpointPhase, ClipboardEndpointRefusal,
+    ClipboardEndpointRole, ClipboardHostEndpoints, DeclaredClipboardService,
+    admit_clipboard_endpoint,
+    clipboard_endpoint_bindings, clipboard_service_declaration, clipboard_service_declares,
+    clipboard_service_role,
+};
+
 /// Authenticated clipboard service package selected by ComponentSession.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardServiceRole {
@@ -57,16 +76,15 @@ impl AuthenticatedClipboardSession {
         let provider_matches = route
             .provider_ref()
             .is_some_and(|provider| provider.to_canonical_string() == crate::PROVIDER_REF);
-        let service_matches = matches!(
-            route.service().as_str(),
-            crate::MANAGEMENT_SERVICE | crate::BRIDGE_SERVICE | crate::PICKER_SERVICE
-        );
+        // The declared service source decides the role (U28): a route is only
+        // a clipboard session when the Provider declares the package it names.
+        let role = declaration::clipboard_service_role(route.service().as_str());
         let provider_generation = route
             .provider_generation()
             .ok_or(ClipboardServiceError::SessionUnauthenticated)?
             .get();
         if !provider_matches
-            || !service_matches
+            || role.is_none()
             || provider_generation == 0
             || route.reconnect_generation().get() == 0
         {
@@ -76,12 +94,7 @@ impl AuthenticatedClipboardSession {
         if !matches!(subject_type, "Guest" | "User" | "Provider") {
             return Err(ClipboardServiceError::SessionUnauthenticated);
         }
-        let role = match route.service().as_str() {
-            crate::MANAGEMENT_SERVICE => ClipboardServiceRole::Management,
-            crate::BRIDGE_SERVICE => ClipboardServiceRole::Bridge,
-            crate::PICKER_SERVICE => ClipboardServiceRole::Picker,
-            _ => return Err(ClipboardServiceError::SessionUnauthenticated),
-        };
+        let role = role.ok_or(ClipboardServiceError::SessionUnauthenticated)?;
         Ok(Self {
             subject_ref: route.subject_ref().clone(),
             zone: route.zone().clone(),
@@ -117,8 +130,10 @@ impl AuthenticatedClipboardSession {
     ) -> Result<Self, ClipboardServiceError> {
         if route
             .provider_ref()
-            .is_none_or(|provider| provider.to_canonical_string() != "Provider/display-wayland")
-            || route.service().as_str() != "d2b.display.v3"
+            .is_none_or(|provider| {
+                provider.to_canonical_string() != declaration::DISPLAY_DESKTOP_PROVIDER_REF
+            })
+            || route.service().as_str() != declaration::DISPLAY_DESKTOP_SERVICE
             || route.evidence_class()
                 != d2b_contracts_resource::v3::identity::EvidenceClass::UnixPeer
             || route.locality() != d2b_contracts_resource::v3::identity::Locality::Local
@@ -149,8 +164,10 @@ impl AuthenticatedClipboardSession {
     ) -> Result<Self, ClipboardServiceError> {
         if route
             .provider_ref()
-            .is_none_or(|provider| provider.to_canonical_string() != "Provider/display-wayland")
-            || route.service().as_str() != "d2b.display.v3"
+            .is_none_or(|provider| {
+                provider.to_canonical_string() != declaration::DISPLAY_DESKTOP_PROVIDER_REF
+            })
+            || route.service().as_str() != declaration::DISPLAY_DESKTOP_SERVICE
             || route.evidence_class()
                 != d2b_contracts_resource::v3::identity::EvidenceClass::UnixPeer
             || route.locality() != d2b_contracts_resource::v3::identity::Locality::Local

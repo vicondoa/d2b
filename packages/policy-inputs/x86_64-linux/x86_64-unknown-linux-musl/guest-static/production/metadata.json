@@ -2,8 +2,8 @@
   "authority": "cargo-locked-metadata",
   "defaultFeatures": false,
   "features": [],
-  "lockSha256": "9db1081561f765badba0a9f7432156f246cbd3f50b5ba8bd558917b4a354b835",
-  "policyPackageCount": 467,
+  "lockSha256": "7bc3e16325835c0a18fc125aab145c65fcb7fa34327f59e3784ccd592fb743f9",
+  "policyPackageCount": 468,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
     "aead@0.5.2#registry+https://github.com/rust-lang/crates.io-index",
@@ -89,7 +89,6 @@
     "d2b-provider-audio-pipewire@0.0.0-bootstrap#path",
     "d2b-provider-audio-service@0.0.0-bootstrap#path",
     "d2b-provider-clipboard-wayland@0.0.0-bootstrap#path",
-    "d2b-provider-command@0.0.0-bootstrap#path",
     "d2b-provider-config-nixos@0.0.0-bootstrap#path",
     "d2b-provider-credential-entra@0.0.0-bootstrap#path",
     "d2b-provider-credential-managed-identity@0.0.0-bootstrap#path",
@@ -103,6 +102,7 @@
     "d2b-provider-display-wayland@0.0.0-bootstrap#path",
     "d2b-provider-emergency-policy@0.0.0-bootstrap#path",
     "d2b-provider-endpoint@0.0.0-bootstrap#path",
+    "d2b-provider-execution-policy@0.0.0-bootstrap#path",
     "d2b-provider-guest-azure-container-apps@0.0.0-bootstrap#path",
     "d2b-provider-guest-azure-virtual-machine@0.0.0-bootstrap#path",
     "d2b-provider-guest-cloud-hypervisor@0.0.0-bootstrap#path",
@@ -144,6 +144,7 @@
     "d2b-provider@0.0.0-bootstrap#path",
     "d2b-resource-api@0.0.0-bootstrap#path",
     "d2b-resource-client@0.0.0-bootstrap#path",
+    "d2b-resource-compiler@0.0.0-bootstrap#path",
     "d2b-resource-runtime@0.0.0-bootstrap#path",
     "d2b-resource-types@0.0.0-bootstrap#path",
     "d2b-session-unix@0.0.0-bootstrap#path",
@@ -473,7 +474,7 @@
     "zvariant_derive@5.15.0#registry+https://github.com/rust-lang/crates.io-index",
     "zvariant_utils@4.2.0#registry+https://github.com/rust-lang/crates.io-index"
   ],
-  "productionPackageCount": 467,
+  "productionPackageCount": 468,
   "resolveNodeCount": 0,
   "roots": [
     "d2bd",

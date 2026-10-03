@@ -22,10 +22,13 @@
 
 #![deny(missing_docs)]
 
+mod declaration;
 mod driver;
 
 mod effects_service;
 mod facets;
+mod execution_parent;
+
 mod probe;
 
 // The test-support doubles: the scripted HostDriverEffects recording
@@ -40,9 +43,14 @@ mod probe;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
+pub use declaration::host_bindings;
 pub use driver::host_descriptor;
 pub use effects_service::{HOST_EFFECTS_SERVICE, HostEffectsServiceFactory};
 pub use facets::{HostEffectFacets, MinijailPlatformGateSource};
+pub use execution_parent::{
+    ExecutionParentRefusal, HostExecutionFacts, HostExecutionParent, HostExecutionParentInput,
+    classify_host_execution_parent,
+};
 pub use probe::{PIPEWIRE_RUNTIME_SOCKET, USBIP_CORE_MODULE, USBIP_HOST_MODULE, production_probe};
 // The gate type the family's facets carry: re-exported through the owning
 // crate so a daemon composition module can name it without importing the

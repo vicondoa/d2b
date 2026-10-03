@@ -11,7 +11,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use d2b_contracts_resource::v3::ResourceRef;
-use d2b_provider_audio_pipewire::{AUDIO_REPAIR_INTERVAL_SECS, AudioServiceSpec};
+use d2b_provider_audio_pipewire::{
+    AUDIO_CAPTURE_OPERATION, AUDIO_DECLARED_METHODS, AUDIO_PLAYBACK_OPERATION,
+    AUDIO_REPAIR_INTERVAL_SECS, AudioServiceSpec, service_declares_channel, validate_audio_service,
+};
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
 use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
@@ -30,6 +33,41 @@ pub const AUDIO_SERVICE_PROVIDER_REF: &str = d2b_provider_audio_pipewire::PROVID
 /// The preserved reconcile resync cadence of the type.
 pub const AUDIO_SERVICE_RESYNC: Duration = Duration::from_secs(AUDIO_REPAIR_INTERVAL_SECS);
 
+/// The closed operation vocabulary the audio family declares for its
+/// Service.
+///
+/// One entry per stream direction, and one direction per declared method
+/// pair: a Service row that names anything outside this set is refused at
+/// admission, so the set is the single declared source of what an
+/// `AudioService` can be asked to do and no second table restates it.
+pub const AUDIO_SERVICE_OPERATIONS: [&str; 2] =
+    [AUDIO_PLAYBACK_OPERATION, AUDIO_CAPTURE_OPERATION];
+
+/// Whether one committed Service row declares one provider operation.
+pub fn service_declares_operation(spec: &AudioServiceSpec, operation: &str) -> bool {
+    spec.operations.iter().any(|declared| declared == operation)
+}
+
+/// Every declared method the Service row's operations authorize.
+///
+/// The Service's own declaration is derived from its operations, so the
+/// methods a caller may invoke and the operations the row committed cannot
+/// drift apart.
+pub fn service_declared_methods(spec: &AudioServiceSpec) -> Vec<&'static str> {
+    AUDIO_DECLARED_METHODS
+        .iter()
+        .map(|method| method.name())
+        .filter(|name| {
+            let channel = AUDIO_DECLARED_METHODS
+                .iter()
+                .find(|candidate| candidate.name() == *name)
+                .map(|candidate| candidate.channel())
+                .expect("the method came from the declared vocabulary");
+            service_declares_channel(spec, channel)
+        })
+        .collect()
+}
+
 /// The `AudioService` driver behavior and declaration.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AudioService;
@@ -46,12 +84,30 @@ impl InteractionType for AudioService {
         AUDIO_SERVICE_RESYNC
     }
 
-    /// The service spec decodes with its typed `providerRef` re-inserted.
+    /// The service spec decodes with its typed `providerRef` re-inserted and
+    /// every operation it names is one the audio family declares.
+    ///
+    /// A row that names an operation outside the declared vocabulary would
+    /// otherwise describe a capability nothing in this family implements.
     fn validate(
         &self,
         envelope: &InteractionSpecEnvelope,
     ) -> Result<(), InteractionEffectError> {
-        envelope.spec_with_provider_ref::<AudioServiceSpec>().map(|_| ())
+        let spec = envelope.spec_with_provider_ref::<AudioServiceSpec>()?;
+        validate_audio_service(&spec).map_err(|error| {
+            InteractionEffectError::InvalidSpec(error.to_string())
+        })?;
+        if spec.operations.is_empty()
+            || !spec
+                .operations
+                .iter()
+                .all(|operation| AUDIO_SERVICE_OPERATIONS.contains(&operation.as_str()))
+        {
+            return Err(InteractionEffectError::InvalidSpec(
+                "audio-service operation is outside the declared vocabulary".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     /// A service reads nothing while reconciling.

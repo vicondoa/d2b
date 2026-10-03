@@ -6,22 +6,24 @@
 # Plan: ph1-p1-swtpm-persistence - the long-lived swtpm sidecar argv shape is locked here.
 # No `--daemon` entry: swtpm socket is foreground by default and `--daemon` takes no
 # argument, so the pre-0.10 `--daemon=false` spelling the installed swtpm rejects is gone.
-# The `uid=`/`gid=` owner entries are opt-in (`SwtpmArgvInput::uid/gid`), and
-# this golden exercises them. The namespaced device-worker launch passes
-# `None`: swtpm chowns each socket to the id it is given, and inside that
-# launch's user namespace the chown is refused - "Could not change ownership of
-# UnixIO socket to 0:0 Operation not permitted" - so swtpm exits 1 before it
-# binds the data socket, leaving no log, no pid file and no NVRAM. Omitting the
-# entries leaves the socket owned by the uid swtpm itself runs as.
+# No `uid=`/`gid=` owner entry: a launch no longer carries a caller-chosen
+# numerical broker identity. swtpm chowns each socket to the id it is given, and
+# inside the launch's user namespace that chown is refused - "Could not change
+# ownership of UnixIO socket to 0:0 Operation not permitted" - so swtpm exits 1
+# before it binds the data socket, leaving no log, no pid file and no NVRAM. Each
+# socket is therefore created owned by the uid swtpm itself runs as, which is what
+# `mode=0660` and the state directory's ACL are written against.
+# No free-form argument tail either: every filesystem input below comes from the
+# worker's admitted state binding, and an argument naming a device node is refused.
 /nix/store/SWTPMSWTPMSWTPMSWTPMSWTPM-swtpm-0.10.0/bin/swtpm
 socket
 --tpm2
 --tpmstate
 dir=/var/lib/d2b/vms/corp-vm/tpm
 --ctrl
-type=unixio,path=/var/lib/d2b/vms/corp-vm/tpm/ctrl.sock,mode=0660,uid=1100,gid=1100
+type=unixio,path=/var/lib/d2b/vms/corp-vm/tpm/ctrl.sock,mode=0660
 --server
-type=unixio,path=/run/d2b/vms/corp-vm/swtpm.sock,mode=0660,uid=1100,gid=1100
+type=unixio,path=/run/d2b/vms/corp-vm/swtpm.sock,mode=0660
 --flags
 startup-clear
 --log

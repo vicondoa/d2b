@@ -135,6 +135,72 @@ pub(crate) use d2bd_runtime::unix_transport::{
     connect_seqpacket, connect_seqpacket_with_timeout, drain_rejected_peer_input, read_frame,
     set_frame_read_deadline, write_json_frame, write_json_frame_deadlined,
 };
+
+/// The daemon-side exact-endpoint ACL dispatch facet (U18, R23).
+///
+/// The Endpoint family's binding driver builds the typed request and reconciles
+/// the answer; this object is the privileged wire path it rides. It dispatches
+/// over the daemon's broker socket with the daemon's `AdminUid` authority, so
+/// the request arrives as a claim the broker checks - it recomputes the
+/// authority binding and re-derives the consumer principal from the verified
+/// Zone bundle before it touches an ACL entry - and the `(device, inode)` and
+/// effective rights that come back are the broker's own answers.
+pub(crate) struct DaemonEndpointAccessDispatch {
+    state: Arc<ServerState>,
+}
+
+impl DaemonEndpointAccessDispatch {
+    /// Bind the dispatch to the daemon's broker seam.
+    pub(crate) fn new(state: Arc<ServerState>) -> Self {
+        Self { state }
+    }
+}
+
+#[async_trait::async_trait]
+impl d2b_provider_endpoint::EndpointAccessDispatch for DaemonEndpointAccessDispatch {
+    async fn dispatch(
+        &self,
+        verb: d2b_contracts_broker::broker_wire::EndpointAccessVerb,
+        request: d2b_contracts_broker::broker_wire::EndpointAccessRequest,
+    ) -> Result<
+        d2b_contracts_broker::broker_wire::EndpointAccessResponse,
+        d2b_provider_endpoint::EndpointAccessDispatchError,
+    > {
+        use d2b_contracts_broker::broker_wire::BrokerResponse;
+        use d2b_provider_endpoint::EndpointAccessDispatchError;
+
+        let variant = match verb {
+            d2b_contracts_broker::broker_wire::EndpointAccessVerb::Observe => {
+                BrokerRequest::EndpointObserve(request)
+            }
+            d2b_contracts_broker::broker_wire::EndpointAccessVerb::Grant => {
+                BrokerRequest::EndpointGrantAccess(request)
+            }
+            d2b_contracts_broker::broker_wire::EndpointAccessVerb::Revoke => {
+                BrokerRequest::EndpointRevokeAccess(request)
+            }
+        };
+        match dispatch_broker_request_as(
+            &self.state,
+            variant,
+            BrokerCallerRole::AdminUid {
+                uid: self.state.daemon_uid,
+            },
+        ) {
+            Ok(BrokerResponse::EndpointAccess(response)) => Ok(response),
+            Ok(BrokerResponse::Error(response)) => Err(EndpointAccessDispatchError::Refused(
+                format!("endpoint-access-{}", response.kind),
+            )),
+            // Any other answer is not an answer about this endpoint, so it is
+            // reported as a leg that did not answer rather than as a refusal
+            // the relationship could act on.
+            Ok(_) | Err(_) => Err(EndpointAccessDispatchError::Unavailable(
+                "the broker did not answer the exact-endpoint request".to_owned(),
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 use d2bd_runtime::wire_response_helpers::response_remediation;
 pub(crate) use d2bd_runtime::wire_response_helpers::{
@@ -1699,7 +1765,7 @@ mod zone_link_gateway_composition_tests {
     #[test]
     fn non_relay_provider_is_refused_before_gateway_composition() {
         let mut link = link_resource();
-        link["spec"]["transportProviderRef"] = Value::String("Provider/transport-unix".to_owned());
+        link["spec"]["transportProviderRef"] = Value::String("Provider/transport-vsock".to_owned());
         assert!(!is_gateway_zone_link(&link));
         let error = ZoneLinkGatewayComposition::from_committed_resources(
             ZoneId::parse("child").unwrap(),
@@ -4573,6 +4639,24 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         .map_err(|_| TypedError::InternalConfig {
             detail: "guest process bundle unavailable".to_owned(),
             source: None,
+        })?;
+    // U31: the Guest publishes its own verified target-local authority before
+    // it serves anything. It reads and verifies the deployment graph its own
+    // image closure delivered, keeps only its own Zone's bindings, and grants
+    // no host surface and no credential custody; a graph it cannot verify
+    // or a publication that asks for host authority refuses the Guest
+    // before its ComponentSession listener is reachable.
+    publish_guest_target_authority(Path::new(GUEST_DEPLOYMENT_ROOT), &runtime)
+        .await
+        .map_err(|detail| {
+        tracing::error!(
+            error = %detail,
+                "Guest target-local authority refused; refusing to serve the target"
+            );
+            TypedError::InternalConfig {
+                detail,
+                source: None,
+            }
         })?;
     let gateway_zone_link = load_gateway_guest_zone_link_options(
         options.gateway_zone_link_config_path.as_deref(),
@@ -8159,7 +8243,7 @@ fn dispatch_unsafe_local_launcher(
     resolved: &workload_dispatch::ResolvedExec,
 ) -> Result<public_wire::LauncherExecDisposition, TypedError> {
     use d2b_contracts_control::unsafe_local_wire::{
-        HelperLaunchRequest, HelperOperationDisposition,
+        HelperGraphAdmission, HelperLaunchRequest, HelperOperationDisposition, UnsafeLocalPosture,
     };
     let target = resolved.identity.canonical_target.clone();
     let workload = authoritative_unsafe_local_resource_identity(state).map_err(|_| {
@@ -8170,10 +8254,28 @@ fn dispatch_unsafe_local_launcher(
             verb: "launch".to_owned(),
         }
     })?;
+    // The launch runs under the admission the graph issued for this
+    // committed row and this authenticated caller, under the family's one
+    // declared posture. The helper realizes no destination and no named
+    // view, so the launch depends on no presentation facet; the registry and
+    // the helper each refuse a launch whose admission says otherwise.
+    let admission = HelperGraphAdmission::new(
+        workload.clone(),
+        requester_uid,
+        UnsafeLocalPosture::ExplicitNoIsolation,
+        Vec::new(),
+    )
+    .map_err(|_| TypedError::RuntimeCapabilityUnsupported {
+        vm: target.to_canonical(),
+        runtime_kind: "unsafe-local".to_owned(),
+        capability: "admitted-requester-identity".to_owned(),
+        verb: "launch".to_owned(),
+    })?;
     let request = HelperLaunchRequest {
         request_id: next_internal_helper_request_id(),
         operation_id: operation_id.clone(),
         workload,
+        admission,
         target,
         item_id: resolved.item_id.clone(),
         argv: resolved.argv.clone(),
@@ -8466,6 +8568,7 @@ mod network_tap_provenance_tests {
             ),
             spec,
             vec![first_guest.clone(), second_guest.clone()],
+            Vec::new(),
         )
         .unwrap()
         .proof();
@@ -12102,6 +12205,10 @@ fn map_shell_authority_error(error: ShellTerminalError) -> TypedError {
         | ShellTerminalError::AttachmentUnknown => {
             shell_failed(d2bd_runtime::typed_error::ComponentSessionShellErrorKind::StaleSession)
         }
+        ShellTerminalError::EndpointBindingMismatch
+        | ShellTerminalError::StaleReconnect => shell_failed(
+            d2bd_runtime::typed_error::ComponentSessionShellErrorKind::StaleSession,
+        ),
         ShellTerminalError::NotAuthorized => TypedError::AuthzNotAdmin {
             verb: "shell".to_owned(),
         },
@@ -14532,12 +14639,564 @@ async fn committed_provider_seed_identity(
     Ok((uid, generation))
 }
 
+
+/// The verified deployment bootstrap surface (U31, KTD7).
+///
+/// Re-exported from the crate root so this package's owning integration test
+/// drives the same construction the daemon installs, rather than a
+/// test-local imitation of it.
+pub use crate::foundation_seed::{
+    BootstrapAuthorityRow, BootstrapRefusal, DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN,
+    DEPLOYMENT_BOOTSTRAP_FILE, DEPLOYMENT_BOOTSTRAP_SCHEMA, DEFAULT_DEPLOYMENT_ROOT,
+    DeploymentBootstrap, DeploymentIdentity, DeploymentIdentitySwitch, PublicationLayer,
+    PublicationPlan, PublicationStage, PublicationStep, SwitchRefusal,
+    compiled_implementations, required_foundation_bindings,
+};
+// ---------------------------------------------------------------------------
+// The verified deployment bootstrap (U31, KTD7)
+// ---------------------------------------------------------------------------
+
+/// Publish the verified new deployment graph before any provider starts.
+///
+/// This is the daemon's whole bootstrap contribution. It runs once, at the
+/// head of the resource-plane open, before the generation publication, before
+/// any Zone plane opens its store, and before any provider's controller is
+/// activated. A refusal here is terminal for the resource plane: a tampered
+/// graph, a document of another contract version, an implementation this
+/// build does not compile, a publication order that cannot be satisfied, or
+/// a verified graph missing one of the foundation RoleBindings all mean the
+/// daemon has no accepted root to run providers under, and it does not fall
+/// back to one that admits everything.
+async fn publish_deployment_bootstrap() -> Result<
+    PublishedDeployment,
+    resource_runtime::ResourceRuntimeError,
+> {
+    use crate::foundation_seed::DeploymentBootstrap;
+
+    let root = DeploymentBootstrap::deployment_root();
+    let bytes = crate::foundation_seed::read_deployment_bootstrap_bytes(&root)
+        .await
+        .map_err(|error| {
+        tracing::error!(
+            error = %error,
+            deployment_root = %root.display(),
+            "verified deployment graph refused; refusing to start any provider"
+        );
+        resource_runtime::ResourceRuntimeError::HandlerNotReady
+    })?;
+    let graph = DeploymentBootstrap::decode(&bytes, crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE)
+        .map_err(|error| {
+        tracing::error!(
+            error = %error,
+            deployment_root = %root.display(),
+            "verified deployment graph refused; refusing to start any provider"
+        );
+        resource_runtime::ResourceRuntimeError::HandlerNotReady
+    })?;
+    let declarations = crate::foundation_seed::core_declarations();
+    let published = graph.publish(&declarations).map_err(|error| {
+        tracing::error!(
+            error = %error,
+            "verified deployment graph refused publication; refusing to start any provider"
+        );
+        resource_runtime::ResourceRuntimeError::HandlerNotReady
+    })?;
+    tracing::info!(
+        deployment_root = %root.display(),
+        store_incarnation = %published.store_incarnation().as_str(),
+        implementations = published.implementations().len(),
+        foundation_steps = published
+            .plan()
+            .layer(crate::foundation_seed::PublicationLayer::Foundations)
+            .len(),
+        provider_steps = published
+            .plan()
+            .layer(crate::foundation_seed::PublicationLayer::DeclaredProviders)
+            .len(),
+        "verified deployment graph published before ordinary providers"
+    );
+    Ok(PublishedDeployment {
+        activation: activation_family_view(&bytes)?,
+    })
+}
+
+/// The Activation family's own view of the verified deployment graph.
+///
+/// The family verifies the same document the daemon verified and binds the
+/// implementation identities the compiled declarations already name, so
+/// there is no separate configurable allowlist on either side.
+fn activation_family_view(
+    bytes: &[u8],
+) -> Result<
+    std::sync::Arc<d2b_provider_activation_nixos::AcceptedDeploymentGraph>,
+    resource_runtime::ResourceRuntimeError,
+> {
+    let compiled = crate::foundation_seed::compiled_implementations();
+    d2b_provider_activation_nixos::ActivationController::new()
+        .accept_deployment_graph(bytes, &compiled)
+        .map(std::sync::Arc::new)
+        .map_err(|error| {
+            tracing::error!(
+                error = %error,
+                "the Activation family refused the verified deployment graph"
+            );
+            resource_runtime::ResourceRuntimeError::HandlerNotReady
+        })
+}
+
+/// What the daemon published: the verified graph, the deployment root it was
+/// read from, and the Activation family's own accepted view of the same
+/// bytes.
+struct PublishedDeployment {
+    /// The Activation family's own accepted view of the verified graph.
+    ///
+    /// The verified [`crate::foundation_seed::PublishedBootstrap`] itself is
+    /// consumed by [`publish_deployment_bootstrap`]: it is the authority the
+    /// plane's providers and effects read. The family view is the piece the
+    /// plane's drivers carry.
+    activation: std::sync::Arc<d2b_provider_activation_nixos::AcceptedDeploymentGraph>,
+}
+
+/// The deployment root the Guest image closure delivers this Guest's own
+/// verified deployment graph into.
+///
+/// The document arrives at `<root>/deployment-bootstrap.json` through the
+/// Guest image's own `/etc` closure, the same mechanism that delivers the
+/// ComponentSession keys, so it is store content inside the closure the
+/// broker StoreSyncs and digests rather than writable per-boot state a
+/// Guest has to trust about itself. [`serve_guest`] reads it from here and
+/// re-verifies it before a single row is read out of it.
+pub const GUEST_DEPLOYMENT_ROOT: &str = "/etc/d2b/deployment";
+
+/// Publish the Guest's own verified target-local authority.
+///
+/// The Guest reads and verifies the deployment graph its own image closure
+/// delivers - a document naming the Guest's own Zone, never the Host's -
+/// and publishes only what belongs to the target: its own Zone, the
+/// bindings the verified graph carries for that Zone, and no host surface
+/// and no credential custody. The publication carries the Guest's own store
+/// incarnation, so a Guest that cannot read a verified graph for itself
+/// serves nothing rather than serving under the host's authority.
+async fn publish_guest_target_authority(
+    deployment_root: &Path,
+    runtime: &d2bd_runtime::guest_mode::GuestRuntime,
+) -> Result<(), String> {
+    let identity = runtime.identity();
+    let zone = identity.zone().clone();
+    let graph = guest_deployment_bootstrap(deployment_root, &zone).await?;
+    let bindings = graph
+        .accepted_graph()
+        .map_err(|error| error.to_string())?
+        .role_bindings()
+        .map(|(reference, _)| reference.to_canonical_string())
+        .collect::<Vec<_>>();
+    let authority = d2bd_runtime::target_runtime::TargetAuthority::target_local(
+        zone,
+        graph.store_incarnation.clone(),
+        bindings,
+    );
+    runtime
+        .resource_runtime()
+        .publish_target_authority(authority.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    runtime
+        .publish_target_authority(authority)
+        .map_err(|error| error.to_string())?;
+    tracing::info!(
+        guest_ref = %identity.guest_ref().name().as_str(),
+        deployment_root = %deployment_root.display(),
+        "Guest published its verified target-local authority"
+    );
+    Ok(())
+}
+
+/// Read and verify the deployment graph delivered to one Guest.
+///
+/// This is the daemon's verified document with one difference: the Zone it
+/// names is the Guest's own rather than the Host's system Zone. The
+/// schema tag, the canonical preimage, and the framed digest domain are the
+/// ones the daemon verifies, so the two halves agree about what a verified
+/// deployment graph is; a Guest is never handed authority because its image
+/// was handed a document. Verification happens before any row is read out
+/// of the graph, and the Zone the verified document names must be the Zone
+/// the Guest was started for.
+async fn guest_deployment_bootstrap(
+    root: &Path,
+    zone: &ZoneId,
+) -> Result<crate::foundation_seed::DeploymentBootstrap, String> {
+    use crate::foundation_seed::{
+        DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN, DEPLOYMENT_BOOTSTRAP_SCHEMA, DeploymentBootstrap,
+        read_deployment_bootstrap_bytes,
+    };
+
+    let bytes = read_deployment_bootstrap_bytes(root)
+        .await
+        .map_err(|error| error.to_string())?;
+    let graph: DeploymentBootstrap = serde_json::from_slice(&bytes).map_err(|_| {
+        format!(
+            "deployment bootstrap refused: {} is not a deployment graph",
+            crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE
+        )
+    })?;
+    if graph.schema_version != DEPLOYMENT_BOOTSTRAP_SCHEMA {
+        return Err(format!(
+            "deployment bootstrap refused: schema {} is not this release's contract",
+            graph.schema_version
+        ));
+    }
+    // The bytes the self-hash covers are the daemon's own reconstruction of
+    // them, not a second spelling: verification removes the digest field the
+    // publisher had not yet written and canonicalizes what is left.
+    let preimage = DeploymentBootstrap::canonical_bytes_without_digest(&graph)
+        .map_err(|error| error.to_string())?;
+    let observed = d2b_contracts_resource::v3::framed_canonical_digest(
+        DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN,
+        &preimage,
+    );
+    if observed != graph.graph_digest {
+        return Err(format!(
+            "deployment bootstrap refused: the graph's self-hash {} does not cover its own bytes",
+            graph.graph_digest
+        ));
+    }
+    if graph.zone.as_str() != zone.as_str() {
+        return Err(format!(
+            "deployment bootstrap refused: the graph describes Zone {}, not the Guest's own Zone {}",
+            graph.zone.as_str(),
+            zone.as_str()
+        ));
+    }
+    Ok(graph)
+}
+
+#[cfg(test)]
+mod guest_deployment_bootstrap_tests {
+    use super::*;
+    use d2b_contracts_resource::v3::CanonicalJsonValue;
+    use d2bd_runtime::target_runtime::AdmissionLimits;
+
+    /// A transcription of the per-Zone deployment graph the Nix producer
+    /// renders for Zone `work`, used by the cases that need a document
+    /// without the Nix fixture in scope.
+    ///
+    /// This is a copy, so it cannot tell that the producer still renders
+    /// these bytes. `the_guest_boot_path_accepts_the_producers_own_zone_publication`
+    /// and its sibling below close that gap in the gated lane: they read the
+    /// constructor's own `documentFor "work"` output out of the fixture and
+    /// drive this same boot path over it, so a producer change that left
+    /// this copy stale fails there. Refresh it with the fixture's
+    /// `deployment-bootstrap-work.json`.
+    const WORK_ZONE_DOCUMENT: &str = concat!(
+    r#"{"graphDigest":"sha256:3e0db4853b89f2126441dc58f15e3255cae072e2f7e66466afb06fb62966c787","#,
+    r#""implementations":["activation-nixos","audio-binding","audio-service","credential","device","device-security-key","device-usbip","endpoint","guest","host","network-local","process","process-systemd","shell-pool","shell-session","user","volume","volume-binding","wayland-policy","wayland-session"],"#,
+    r#""roleBindings":[{"admitted":{"roleRef":"Role/operation-publisher","subjects":["Provider/system-minijail"]},"reference":"RoleBinding/system-minijail-self-operation-publisher"}],"#,
+    r#""roles":[{"admitted":{"operationRefs":[],"rules":[{"executionRefs":[],"resourceNames":[],"resourceTypes":["Operation"],"sessionVerbs":[],"subresources":[],"verbs":["create"],"zones":[]}]},"reference":"Role/operation-publisher"}],"#,
+    r#""schemaVersion":"d2b-deployment-bootstrap/1","stateVolume":"Volume/d2b-state","#,
+    r#""storeIncarnation":"foundation-1","zone":"work"}"#
+    );
+
+    /// The delivery root one Guest reads, under a scratch directory that is
+    /// this test's own.
+    ///
+    /// The scratch root carries the process id, because the name alone is not
+    /// unique to a test: every case here names a fixed root under the
+    /// process-wide `TMPDIR`, and `bazel test --runs_per_test=N` runs N copies
+    /// of this binary at the same time against that same `TMPDIR`. A fixed
+    /// root is then one shared directory, and this helper both recreates it
+    /// and the cases below delete it again on the way out, so one run's
+    /// teardown removed the delivered graph another run was still about to
+    /// read and that Guest boot path refused with "deployment-bootstrap.json
+    /// is absent". The id is the same per-process qualifier the other
+    /// scratch helpers in this crate already use.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn deployment_root(name: &str, document: Option<&str>) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "d2b-guest-bootstrap-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("guest deployment root");
+        if let Some(document) = document {
+            std::fs::write(
+                root.join(crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE),
+                document,
+            )
+            .expect("delivered deployment graph");
+        }
+        root
+    }
+
+    fn identity(zone: &str) -> d2bd_runtime::guest_mode::GuestIdentity {
+        d2bd_runtime::guest_mode::GuestIdentity::new(
+            ResourceRef::parse("Guest/workload").expect("Guest ref"),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("Guest UID"),
+            ZoneId::parse(zone).expect("Zone"),
+            d2bd_runtime::guest_mode::BootIdentity::from_kernel_boot_id("guest-bootstrap-test")
+                .expect("boot identity"),
+            d2b_contracts_resource::v3::identity::SessionPurpose::parse(
+                d2bd_runtime::guest_mode::GUEST_COMPONENT_SESSION_PURPOSE,
+            )
+            .expect("purpose"),
+            SchemaFingerprint::parse(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            )
+            .expect("schema"),
+            ReconnectGeneration::new(1).expect("reconnect generation"),
+            1,
+            1,
+            1,
+        )
+        .expect("Guest identity")
+    }
+
+    async fn guest_runtime(zone: &str) -> d2bd_runtime::guest_mode::GuestRuntime {
+        d2bd_runtime::guest_mode::GuestRuntime::new(
+            identity(zone),
+            PathBuf::from("/run/d2b/guest-broker.sock"),
+            997,
+            AdmissionLimits::guest_default(),
+        )
+        .await
+        .expect("Guest runtime")
+    }
+
+    /// The producer's construction for a document naming another Zone: the
+    /// canonical preimage with the Zone replaced, hashed over the same
+    /// framed domain and carrying its own digest. Built the way the Guest
+    /// image builds it, so a refusal below is the Zone the document names
+    /// and not a broken self-hash.
+    fn document_for_zone(document: &str, zone: &str) -> String {
+        let mut value = CanonicalJsonValue::parse(document.as_bytes())
+            .expect("canonical document")
+            .as_object()
+            .expect("document object")
+            .clone();
+        value.insert(
+            "zone".to_owned(),
+            CanonicalJsonValue::String(zone.to_owned()),
+        );
+        value.remove("graphDigest");
+        let digest = d2b_contracts_resource::v3::framed_canonical_digest(
+            crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN,
+            &CanonicalJsonValue::Object(value.clone()).to_canonical_bytes(),
+        );
+        value.insert("graphDigest".to_owned(), CanonicalJsonValue::String(digest));
+        String::from_utf8(CanonicalJsonValue::Object(value).to_canonical_bytes())
+            .expect("canonical document bytes")
+    }
+
+    #[tokio::test]
+    async fn a_guest_publishes_target_local_authority_from_its_own_zone_graph() {
+        let root = deployment_root("work", Some(WORK_ZONE_DOCUMENT));
+        let runtime = guest_runtime("work").await;
+
+        publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect("the delivered Zone graph publishes the Guest's own authority");
+
+        let authority = runtime
+            .require_target_authority()
+            .expect("a published Guest authority");
+        assert_eq!(authority.zone.as_str(), "work");
+        assert_eq!(authority.store_incarnation.as_str(), "foundation-1");
+        assert_eq!(
+            authority.bindings,
+            vec!["RoleBinding/system-minijail-self-operation-publisher".to_owned()],
+            "the Guest carries the bindings its own Zone's verified graph names, and no host surface",
+        );
+        assert!(
+            !authority.credential_custody,
+            "a Guest publication never takes credential custody",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[tokio::test]
+    async fn a_graph_naming_another_zone_is_refused() {
+        let root = deployment_root(
+            "other-zone",
+            Some(&document_for_zone(WORK_ZONE_DOCUMENT, "other")),
+        );
+        let runtime = guest_runtime("work").await;
+
+        let refusal = publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect_err("a graph for another Zone never publishes");
+
+        assert!(
+            refusal.contains("describes Zone other"),
+            "the refusal names the Zone the graph actually describes: {refusal}",
+        );
+        assert!(
+            !runtime.has_target_authority(),
+            "a refused graph leaves the Guest with no authority at all",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[tokio::test]
+    async fn a_graph_whose_digest_does_not_cover_its_preimage_is_refused() {
+        let tampered = WORK_ZONE_DOCUMENT.replace(
+            "\"storeIncarnation\":\"foundation-1\"",
+            "\"storeIncarnation\":\"foundation-2\"",
+        );
+        let root = deployment_root("tampered", Some(&tampered));
+        let runtime = guest_runtime("work").await;
+
+        let refusal = publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect_err("an edited preimage never publishes");
+
+        assert!(
+            refusal.contains("self-hash"),
+            "the refusal names the self-hash that no longer covers the bytes: {refusal}",
+        );
+        assert!(
+            !runtime.has_target_authority(),
+            "an unverifiable graph leaves the Guest with no authority at all",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[tokio::test]
+    async fn a_guest_with_no_delivered_graph_publishes_nothing() {
+        let root = deployment_root("absent", None);
+        let runtime = guest_runtime("work").await;
+
+        publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect_err("there is no default graph for a Guest to fall back on");
+
+        assert!(
+            !runtime.has_target_authority(),
+            "a Guest with no delivered graph serves nothing",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// The per-Zone publication the Nix producer itself renders, as bytes.
+    ///
+    /// `WORK_ZONE_DOCUMENT` above is a transcription of these bytes, and a
+    /// transcription cannot tell that the producer still renders them. The
+    /// fixture aggregate materializes the constructor's own output, so the
+    /// cases below verify and publish what a real Guest image closure
+    /// carries. Unset outside the gated lane, which is the only place the
+    /// fixture exists.
+    fn rendered_work_zone_document() -> Option<String> {
+        let root = std::env::var_os("D2B_FIXTURES")?;
+        let path = std::path::Path::new(&root).join("deployment-bootstrap-work.json");
+        Some(
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display())),
+        )
+    }
+
+    /// The Guest boot path accepts the producer's own publication for the
+    /// Zone it names, and the implementations it publishes are exactly the
+    /// ones this build compiles.
+    ///
+    /// This is the cross-language claim the transcription cannot make: the
+    /// `implementations` the Nix constructor reads out of the per-crate
+    /// `registrations.json` declarations and the compiled registration table
+    /// the daemon generates from those same declarations are one list. If
+    /// either side gains or drops an identity, the publication stops
+    /// matching the build and this fails here rather than at a deployment
+    /// that publishes an implementation nothing implements.
+    #[tokio::test]
+    async fn the_guest_boot_path_accepts_the_producers_own_zone_publication() {
+        let Some(document) = rendered_work_zone_document() else {
+            eprintln!("SKIP: D2B_FIXTURES unset (not the gated fixture step)");
+            return;
+        };
+        let root = deployment_root("producer-work", Some(&document));
+        let runtime = guest_runtime("work").await;
+
+        publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect("the producer's own Zone publication boots this Guest");
+
+        let graph = guest_deployment_bootstrap(&root, &ZoneId::parse("work").expect("Zone"))
+            .await
+            .expect("the same bytes verify for the Zone they name");
+        assert_eq!(
+            graph.implementations,
+            crate::foundation_seed::compiled_implementations()
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<String>>(),
+            "the publication names exactly the implementations this build compiles",
+        );
+
+        let authority = runtime
+            .require_target_authority()
+            .expect("a published Guest authority");
+        assert_eq!(authority.zone.as_str(), "work");
+        assert_eq!(
+            authority.bindings,
+            graph
+                .accepted_graph()
+                .expect("the rendered rows are accepted canonical rows")
+                .role_bindings()
+                .map(|(reference, _)| reference.to_canonical_string())
+                .collect::<Vec<_>>(),
+            "the Guest publishes the bindings the producer wrote and no host surface",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// The producer's own bytes, with one authority row renamed after the
+    /// digest was stamped, are refused by name at the Guest boot path.
+    ///
+    /// The edit is the one an attacker with write access to the image would
+    /// make, and it is invisible to a reader that does not recompute the
+    /// self-hash: the document still parses, still carries this release's
+    /// schema tag, and still names a Zone the Guest accepts.
+    #[tokio::test]
+    async fn an_edited_producer_publication_is_refused_by_name_at_boot() {
+        let Some(document) = rendered_work_zone_document() else {
+            eprintln!("SKIP: D2B_FIXTURES unset (not the gated fixture step)");
+            return;
+        };
+        let edited = document.replace(
+            "\"reference\":\"Role/operation-publisher\"",
+            "\"reference\":\"Role/anything\"",
+        );
+        assert_ne!(
+            edited, document,
+            "the edit must land on the rendered document, not on a string it does not contain"
+        );
+        let root = deployment_root("producer-work-edited", Some(&edited));
+        let runtime = guest_runtime("work").await;
+
+        let refusal = publish_guest_target_authority(&root, &runtime)
+            .await
+            .expect_err("an authority row renamed after verification never publishes");
+
+        assert!(
+            refusal.contains("self-hash"),
+            "the refusal names the self-hash that no longer covers the bytes: {refusal}",
+        );
+        assert!(
+            !runtime.has_target_authority(),
+            "a refused graph leaves the Guest with no authority at all",
+        );
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+}
+
 async fn open_resource_plane(
     state: &ServerState,
     resolver: &BundleResolver,
     provider_ready: bool,
     rendezvous: &Arc<crate::forward_rendezvous::ForwardRendezvous>,
 ) -> Result<Arc<resource_runtime::ResourcePlane>, resource_runtime::ResourceRuntimeError> {
+    // U31: the verified deployment graph is published before the generation
+    // publication, before any Zone plane opens its store, and before any
+    // provider's controller is activated. A refusal here fails the plane
+    // open outright: no provider begins effects under an unaccepted
+    // bootstrap graph.
+    let published = publish_deployment_bootstrap().await?;
     if !provider_ready {
         return Err(resource_runtime::ResourceRuntimeError::ProviderPathUnavailable);
     }
@@ -14789,6 +15448,22 @@ async fn open_resource_plane(
                 resource_runtime::ResourceRuntimeError::HandlerNotReady
             })?;
             inputs.zone = _zone.clone();
+            // The Zone's own verified bundle, applied by the plane before its
+            // manager spawns so the Zone's declared `Role` and `RoleBinding`
+            // rows are durable, published, and loaded before anything reads
+            // this Zone's authority. The remaining rows keep arriving through
+            // the plane's own ingest below, which is where the manager
+            // exists to reconcile them.
+            inputs.bundle = Some(materialization_bundle.clone());
+            // U31: the family's own accepted view of the verified deployment
+            // graph, so the Activation family refuses to plan a runner for a
+            // deployment that did not publish it.
+            inputs.deployment_graph = Some(std::sync::Arc::clone(&published.activation));
+            // U18: the daemon state the Endpoint family's privileged broker
+            // dispatch is built over. Only the daemon holds the broker socket
+            // and the caller role, so the family receives a dispatch facet
+            // rather than a socket or a principal.
+            inputs.server_state = Some(std::sync::Arc::new(state.clone()));
             // The Provider driver reads the zone's live controller-session
             // evidence (the same seam the G5 reader bridge uses), never a
             // durable status copy.
@@ -21727,11 +22402,10 @@ mod public_status_tests {
     /// Write a self-hashed v3 zone-native bundle; the zone-resource-bundle
     /// hash the loader verifies for `schemaVersion >= 2`.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn write_v3_native_bundle(bundle_path: &Path, privileges_path: &Path, generator: &str) {
+    fn write_v3_native_bundle(bundle_path: &Path, generator: &str) {
         let mut bundle = json!({
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": privileges_path.display().to_string(),
             "zones": [],
             "artifactHashes": {},
             "generation": {
@@ -21804,7 +22478,6 @@ mod public_status_tests {
         let bundle_path = root.join("bundle.json");
         let processes_path = root.join("processes.json");
         let host_path = root.join("host.json");
-        let privileges_path = root.join("privileges.json");
         let closures_dir = root.join("closures");
         fs::create_dir_all(&closures_dir).expect("closures dir");
         let vm_a_state_dir = vm_a_state_dir
@@ -21945,15 +22618,6 @@ mod public_status_tests {
             &host_path,
         )
         .expect("copy host fixture");
-        fs::write(
-            &privileges_path,
-            serde_json::to_vec_pretty(&json!({
-                "schemaVersion": "v2",
-                "operations": []
-            }))
-            .expect("privileges json"),
-        )
-        .expect("write privileges");
 
         let vm_a_toplevel = root.join("store/vm-a-system");
         let vm_b_toplevel = root.join("store/vm-b-system");
@@ -22006,12 +22670,11 @@ mod public_status_tests {
         )
         .expect("write vm-b closure");
 
-        write_v3_native_bundle(&bundle_path, &privileges_path, "public-status-test");
+        write_v3_native_bundle(&bundle_path, "public-status-test");
 
         for path in [
             &bundle_path,
             &host_path,
-            &privileges_path,
             &processes_path,
             &public_manifest_path,
             &closures_dir.join("vm-a.json"),
@@ -24790,18 +25453,17 @@ mod broker_dispatch_tests {
     /// bundles) with a self-consistent `bundleHash`, mirroring the
     /// `sha256(bundle with artifactHashes:null, no bundleHash)` contract
     /// `verify_bundle_hash` enforces for `schemaVersion >= 2`.
-    fn write_v3_native_bundle(bundle_path: &Path, privileges_path: &Path, generator: &str) {
-        write_v3_native_bundle_with_optional_host(bundle_path, privileges_path, None, generator)
+    fn write_v3_native_bundle(bundle_path: &Path, generator: &str) {
+        write_v3_native_bundle_with_optional_host(bundle_path, None, generator)
     }
 
     /// Like [`write_v3_native_bundle`] but declaring a hashed `host.json`
-    /// contract artifact beside the privileges artifact, for tests that exercise
+    /// contract artifact, for tests that exercise
     /// the declared host contract (the NetworkManager unmanaged drop-in)
     /// through the bundle resolver.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_v3_native_bundle_with_optional_host(
         bundle_path: &Path,
-        privileges_path: &Path,
         host_path: Option<&Path>,
         generator: &str,
     ) {
@@ -24823,7 +25485,6 @@ mod broker_dispatch_tests {
         let mut bundle = json!({
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": privileges_path.display().to_string(),
             "zones": [],
             "artifactHashes": artifact_hashes,
             "generation": {
@@ -24897,7 +25558,6 @@ mod broker_dispatch_tests {
         let manifest_path = bundle_dir.join("vms.json");
         let processes_path = bundle_dir.join("processes.json");
         let bundle_path = bundle_dir.join("bundle.json");
-        let privileges_path = bundle_dir.join("privileges.json");
         let api_socket = root.join("vm-a.api.sock");
 
         write_json_file(
@@ -24990,16 +25650,11 @@ mod broker_dispatch_tests {
                 ]
             }),
         );
-        write_json_file(
-            &privileges_path,
-            &json!({ "schemaVersion": "v2", "operations": [] }),
-        );
-        write_v3_native_bundle(&bundle_path, &privileges_path, "tests");
+        write_v3_native_bundle(&bundle_path, "tests");
         for path in [
             &manifest_path,
             &processes_path,
             &bundle_path,
-            &privileges_path,
         ] {
             fs::set_permissions(path, fs::Permissions::from_mode(0o640))
                 .expect("chmod minimal bundle fixture");
@@ -25057,7 +25712,6 @@ mod broker_dispatch_tests {
         let manifest_path = bundle_dir.join("vms.json");
         let processes_path = bundle_dir.join("processes.json");
         let bundle_path = bundle_dir.join("bundle.json");
-        let privileges_path = bundle_dir.join("privileges.json");
 
         write_json_file(
             &manifest_path,
@@ -25122,16 +25776,11 @@ mod broker_dispatch_tests {
             }),
         );
         write_json_file(&processes_path, &processes);
-        write_json_file(
-            &privileges_path,
-            &json!({ "schemaVersion": "v2", "operations": [] }),
-        );
-        write_v3_native_bundle(&bundle_path, &privileges_path, "tests");
+        write_v3_native_bundle(&bundle_path, "tests");
         for path in [
             &manifest_path,
             &processes_path,
             &bundle_path,
-            &privileges_path,
         ] {
             fs::set_permissions(path, fs::Permissions::from_mode(0o640))
                 .expect("chmod custom bundle fixture");
@@ -28635,13 +29284,6 @@ mod broker_dispatch_tests {
                 d2b_core::bundle::Bundle {
                     bundle_version: 1,
                     schema_version: "v3".to_owned(),
-                    privileges_path: state
-                        .config
-                        .artifacts
-                        .bundle_path
-                        .with_file_name("privileges.json")
-                        .display()
-                        .to_string(),
                     storage_path: None,
                     realm_workloads_launcher_v2_path: None,
                     generation: d2b_core::bundle::BundleGeneration {
@@ -28791,22 +29433,16 @@ mod broker_dispatch_tests {
         let root = test_daemon_state_dir(test_name);
         let bundle_dir = root.join("bundle-fixture");
         let bundle_path = bundle_dir.join("bundle.json");
-        let privileges_path = bundle_dir.join("privileges.json");
         let host_path = bundle_dir.join("host.json");
         if let Some(host_contract) = host_contract {
             write_json_file(&host_path, host_contract);
         }
-        write_json_file(
-            &privileges_path,
-            &json!({ "schemaVersion": "v2", "operations": [] }),
-        );
         write_v3_native_bundle_with_optional_host(
             &bundle_path,
-            &privileges_path,
             host_contract.map(|_| host_path.as_path()),
             "tests",
         );
-        let mut fixture_paths = vec![&bundle_path, &privileges_path];
+        let mut fixture_paths = vec![&bundle_path];
         if host_contract.is_some() {
             fixture_paths.push(&host_path);
         }
@@ -30116,7 +30752,6 @@ mod broker_dispatch_tests {
         let manifest_path = bundle_dir.join("vms.json");
         let processes_path = bundle_dir.join("processes.json");
         let bundle_path = bundle_dir.join("bundle.json");
-        let privileges_path = bundle_dir.join("privileges.json");
         // Copy the shared host fixture to a test-owned file at 0o640 so
         // secure_open_and_read's mode check passes for the BundleVerifyPolicy.
         let host_path = bundle_dir.join("host.json");
@@ -30214,16 +30849,11 @@ mod broker_dispatch_tests {
                 ]
             }),
         );
-        write_json_file(
-            &privileges_path,
-            &json!({ "schemaVersion": "v2", "operations": [] }),
-        );
-        write_v3_native_bundle(&bundle_path, &privileges_path, "tests");
+        write_v3_native_bundle(&bundle_path, "tests");
         for path in [
             &manifest_path,
             &processes_path,
             &bundle_path,
-            &privileges_path,
         ] {
             fs::set_permissions(path, fs::Permissions::from_mode(0o640))
                 .expect("chmod obs bundle fixture");

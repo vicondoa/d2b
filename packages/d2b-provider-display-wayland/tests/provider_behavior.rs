@@ -1,7 +1,8 @@
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_display_wayland::{
-    DisplayController, DisplayIdentity, DisplayLabelPosition, FilterInput, Phase, PolicyWarning,
-    PrincipalPool, ProcessObservation, WaylandPolicy, WaylandPolicySnapshot, WaylandSessionSpec,
+    DisplayController, DisplayIdentity, DisplayLabelPosition, DisplayProcessRole, FilterInput,
+    Phase, PolicyWarning, PrincipalPool, ProcessObservation, WaylandPolicy, WaylandPolicySnapshot,
+    WaylandSessionSpec,
 };
 
 fn refs() -> (ResourceRef, ResourceRef, ResourceRef, ResourceRef) {
@@ -408,4 +409,467 @@ fn display_runner_contract_disables_legacy_scheduling() {
     assert_eq!(contract.repair_interval_secs(), 30);
     assert_eq!(contract.max_repair_interval_secs(), 60);
     assert!(contract.watched_configuration_is_dependency());
+}
+
+// -- endpoint authority (U26) ---------------------------------------------
+
+/// A committed session uid: the durable identity the session's child rows and
+/// endpoint relationships are derived from.
+fn session_uid(seed: &str) -> d2b_contracts_resource::v3::ResourceUid {
+    d2b_contracts_resource::v3::ResourceUid::parse(seed).unwrap()
+}
+
+fn zone() -> d2b_contracts_resource::v3::ZoneId {
+    d2b_contracts_resource::v3::ZoneId::parse("local").unwrap()
+}
+
+fn session_spec() -> WaylandSessionSpec {
+    let (guest, host, user, policy) = refs();
+    WaylandSessionSpec::new(guest, host, user, policy, identity(), true).unwrap()
+}
+
+/// The endpoint rows one session derives, keyed by their resource reference,
+/// decoded back into the endpoint contract the relationships are evaluated
+/// against.
+fn derived_endpoints(
+    spec: &WaylandSessionSpec,
+    uid: &d2b_contracts_resource::v3::ResourceUid,
+    generation: u64,
+) -> Vec<(ResourceRef, d2b_provider_display_wayland::EndpointSpec)> {
+    d2b_provider_display_wayland::session_children::display_owned_child_intents(
+        &zone(),
+        &ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/demo").unwrap(),
+        uid,
+        spec,
+        generation,
+    )
+    .unwrap()
+    .into_iter()
+    .filter(|intent| intent.target().resource_type().as_str() == "Endpoint")
+    .map(|intent| {
+        let value: serde_json::Value = serde_json::from_slice(intent.canonical_resource()).unwrap();
+        (
+            intent.target().clone(),
+            d2b_provider_display_wayland::decode_endpoint_spec(&value["spec"]).unwrap(),
+        )
+    })
+    .collect()
+}
+
+/// One admitted relationship proved against the session's own derived rows.
+fn admit(
+    spec: &WaylandSessionSpec,
+    uid: &d2b_contracts_resource::v3::ResourceUid,
+    binding: &d2b_provider_display_wayland::DisplayEndpointBinding,
+    generation: u64,
+) -> Result<(), d2b_provider_display_wayland::WorkerEffectError> {
+    let endpoints = derived_endpoints(spec, uid, generation);
+    let source = endpoints
+        .iter()
+        .find(|(reference, _)| reference == binding.source_ref())
+        .map(|(_, endpoint_spec)| endpoint_spec)
+        .cloned()
+        .expect("the derived source row");
+    let observed = d2b_provider_display_wayland::DisplayEndpointObservation {
+        spec: &source,
+        source_generation: generation,
+        consumer_generation: generation,
+        consumer_user: Some(spec.user_ref().clone()),
+    };
+    d2b_provider_display_wayland::admit_display_endpoint(
+        &zone(),
+        spec,
+        uid,
+        binding,
+        &observed,
+        uid,
+        uid,
+    )
+    .map(|_| ())
+}
+
+#[test]
+fn every_worker_reaches_only_the_endpoint_its_relationship_names() {
+    let spec = session_spec();
+    let uid = session_uid("11111111-1111-4111-8111-111111111111");
+    let bindings =
+        d2b_provider_display_wayland::display_endpoint_bindings(&uid, &spec).unwrap();
+
+    let compositor = bindings
+        .iter()
+        .find(|binding| binding.role() == DisplayProcessRole::HostProxy)
+        .expect("the proxy consumes the host compositor");
+    assert_eq!(
+        compositor.source_ref().resource_type().as_str(),
+        "Endpoint"
+    );
+    assert_eq!(
+        compositor.source_ref(),
+        &d2b_provider_display_wayland::durable_compositor_endpoint_ref(&uid).unwrap()
+    );
+    assert_eq!(
+        compositor.request().slot().as_str(),
+        d2b_provider_display_wayland::COMPOSITOR_BINDING_SLOT
+    );
+    assert_eq!(
+        compositor.request().attachment(),
+        d2b_contracts_resource::v3::EndpointAttachmentKind::Connect
+    );
+    assert_eq!(
+        compositor.request().purpose().as_str(),
+        d2b_provider_display_wayland::COMPOSITOR_BINDING_PURPOSE
+    );
+
+    let frontend = bindings
+        .iter()
+        .find(|binding| binding.role() == DisplayProcessRole::GuestFrontend)
+        .expect("the frontend consumes the proxy's own endpoint");
+    assert_eq!(
+        frontend.request().slot().as_str(),
+        d2b_provider_display_wayland::PROXY_BINDING_SLOT
+    );
+    assert_eq!(
+        frontend.request().attachment(),
+        d2b_contracts_resource::v3::EndpointAttachmentKind::Attach
+    );
+    assert_ne!(frontend.source_ref(), compositor.source_ref());
+
+    // Every derived relationship is admitted against the session's own rows.
+    for binding in &bindings {
+        admit(&spec, &uid, binding, 3).expect("the derived relationship is admitted");
+    }
+
+    // The compositor row admits exactly the proxy row and no other subject.
+    let (_, compositor_endpoint) = derived_endpoints(&spec, &uid, 3)
+        .into_iter()
+        .find(|(reference, _)| reference == compositor.source_ref())
+        .unwrap();
+    assert_eq!(
+        compositor_endpoint
+            .consumer_policy()
+            .allowed_subjects(),
+        &[compositor.consumer_ref().clone()]
+    );
+}
+
+/// One observation of a committed endpoint row at one generation.
+fn observed(
+    generation: u64,
+    user: Option<ResourceRef>,
+    endpoint_spec: &d2b_provider_display_wayland::EndpointSpec,
+) -> d2b_provider_display_wayland::DisplayEndpointObservation<'_> {
+    d2b_provider_display_wayland::DisplayEndpointObservation {
+        spec: endpoint_spec,
+        source_generation: generation,
+        consumer_generation: generation,
+        consumer_user: user,
+    }
+}
+
+#[test]
+fn a_wrong_compositor_endpoint_user_or_generation_is_refused() {
+    let spec = session_spec();
+    let uid = session_uid("22222222-2222-4222-8222-222222222222");
+    let bindings =
+        d2b_provider_display_wayland::display_endpoint_bindings(&uid, &spec).unwrap();
+    let compositor = bindings
+        .iter()
+        .find(|binding| binding.role() == DisplayProcessRole::HostProxy)
+        .unwrap();
+    let (_, endpoint) = derived_endpoints(&spec, &uid, 3)
+        .into_iter()
+        .find(|(reference, _)| reference == compositor.source_ref())
+        .unwrap();
+
+    let admit_with =
+        |observation: d2b_provider_display_wayland::DisplayEndpointObservation<'_>| {
+            d2b_provider_display_wayland::admit_display_endpoint(
+                &zone(),
+                &spec,
+                &uid,
+                compositor,
+                &observation,
+                &uid,
+                &uid,
+            )
+        };
+
+    assert!(
+        admit_with(observed(3, Some(spec.user_ref().clone()), &endpoint)).is_ok(),
+        "the session's own compositor row is admitted"
+    );
+
+    // A consumer row admitted for another User cannot reach this session's
+    // compositor endpoint.
+    assert!(
+        admit_with(observed(
+            3,
+            Some(ResourceRef::parse("User/mallory").unwrap()),
+            &endpoint
+        ))
+        .is_err()
+    );
+    // A consumer row with no admitted User at all is refused too.
+    assert!(admit_with(observed(3, None, &endpoint)).is_err());
+
+    // An endpoint row admitted for another reconnect generation is refused:
+    // the derived row's fingerprint binds it to this session's generation.
+    let other_generation = WaylandSessionSpec::new(
+        spec.guest_ref().clone(),
+        spec.host_ref().clone(),
+        spec.user_ref().clone(),
+        spec.policy_ref().clone(),
+        DisplayIdentity::new("work-vm", "#7fc8ff", "#45475a", "#f38ba8").unwrap(),
+        true,
+    )
+    .unwrap()
+    .with_reconnect_generation(2)
+    .unwrap();
+    let (_, other_endpoint) = derived_endpoints(&other_generation, &uid, 3)
+        .into_iter()
+        .find(|(reference, _)| reference == compositor.source_ref())
+        .unwrap();
+    assert!(
+        admit_with(observed(3, Some(spec.user_ref().clone()), &other_endpoint)).is_err(),
+        "an endpoint admitted for another reconnect generation cannot be reused"
+    );
+
+    // A compositor endpoint produced by another Host is not this session's
+    // endpoint, so it is refused even when everything else matches.
+    let other = WaylandSessionSpec::new(
+        spec.guest_ref().clone(),
+        ResourceRef::parse("Host/other-host").unwrap(),
+        spec.user_ref().clone(),
+        spec.policy_ref().clone(),
+        DisplayIdentity::new("work-vm", "#7fc8ff", "#45475a", "#f38ba8").unwrap(),
+        true,
+    )
+    .unwrap();
+    let (_, foreign) = derived_endpoints(&other, &uid, 3)
+        .into_iter()
+        .find(|(reference, _)| reference == compositor.source_ref())
+        .unwrap();
+    assert!(admit_with(observed(3, Some(spec.user_ref().clone()), &foreign)).is_err());
+}
+
+#[test]
+fn an_absolute_display_string_cannot_expand_admitted_access() {
+    let (guest, host, user, policy) = refs();
+    let wire = |display: &str| {
+        serde_json::json!({
+            "guestRef": guest.to_canonical_string(),
+            "hostRef": host.to_canonical_string(),
+            "userRef": user.to_canonical_string(),
+            "policyRef": policy.to_canonical_string(),
+            "identity": {
+                "label": "work-vm",
+                "activeColor": "#7fc8ff",
+                "inactiveColor": "#45475a",
+                "urgentColor": "#f38ba8",
+                "borderEnabled": true,
+                "borderWidth": 2,
+                "labelEnabled": true,
+                "labelText": "work-vm",
+                "labelPosition": "top-left"
+            },
+            "crossDomainTrusted": true,
+            "virglVideo": false,
+            "filter": {
+                "debugLogging": false,
+                "allowGlobals": [],
+                "denyGlobals": [],
+                "maxVersions": {},
+                "dmabufAllow": [],
+                "dmabufDeny": []
+            },
+            "compositorDisplay": display,
+        })
+    };
+
+    for absolute in [
+        "/run/user/1000/wayland-0",
+        "/tmp/attacker.sock",
+        "wayland-0/../wayland-1",
+        "../wayland-1",
+        "",
+    ] {
+        assert!(
+            serde_json::from_value::<WaylandSessionSpec>(wire(absolute)).is_err(),
+            "an absolute or nested display string must not decode: {absolute}"
+        );
+    }
+
+    let spec: WaylandSessionSpec = serde_json::from_value(wire("wayland-1")).unwrap();
+    assert_eq!(
+        spec.compositor_display().map(|token| token.as_str()),
+        Some("wayland-1")
+    );
+    let uid = session_uid("33333333-3333-4333-8333-333333333333");
+    let bindings =
+        d2b_provider_display_wayland::display_endpoint_bindings(&uid, &spec).unwrap();
+    let compositor = bindings
+        .iter()
+        .find(|binding| binding.role() == DisplayProcessRole::HostProxy)
+        .unwrap();
+    assert_eq!(
+        compositor.request().purpose().as_str(),
+        "wayland-1",
+        "the display name labels the admitted relationship"
+    );
+    assert!(admit(&spec, &uid, compositor, 1).is_ok());
+
+    // Naming another display does not redirect the relationship: the endpoint
+    // row this session derives for it is the only row that matches.
+    let (_, endpoint) = derived_endpoints(&spec, &uid, 1)
+        .into_iter()
+        .find(|(reference, _)| reference == compositor.source_ref())
+        .unwrap();
+    let sibling = d2b_provider_display_wayland::EndpointSpec::new(
+        endpoint.provider_ref().clone(),
+        endpoint.producer_ref().clone(),
+        endpoint.endpoint_class(),
+        endpoint.transport(),
+        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("wayland-9").unwrap(),
+        endpoint.service_fingerprint().cloned(),
+        endpoint.locality(),
+        endpoint.visibility(),
+        *endpoint.attachment_policy(),
+        endpoint.consumer_policy().clone(),
+        endpoint.lifecycle_policy(),
+    )
+    .unwrap();
+    let refused = d2b_provider_display_wayland::DisplayEndpointObservation {
+        spec: &sibling,
+        source_generation: 1,
+        consumer_generation: 1,
+        consumer_user: Some(spec.user_ref().clone()),
+    };
+    assert!(
+        d2b_provider_display_wayland::admit_display_endpoint(
+            &zone(),
+            &spec,
+            &uid,
+            compositor,
+            &refused,
+            &uid,
+            &uid,
+        )
+        .is_err(),
+        "a socket name that differs from the derived endpoint row is refused"
+    );
+}
+
+#[test]
+fn worker_rows_ask_for_no_privilege_beyond_their_declared_sandbox() {
+    let spec = session_spec();
+    let uid = session_uid("44444444-4444-4444-8444-444444444444");
+    let intents = d2b_provider_display_wayland::session_children::display_owned_child_intents(
+        &zone(),
+        &ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/demo").unwrap(),
+        &uid,
+        &spec,
+        2,
+    )
+    .unwrap();
+    let workers = intents
+        .iter()
+        .filter(|intent| intent.target().resource_type().as_str() == "Process")
+        .count();
+    assert_eq!(workers, 2);
+    for intent in &intents {
+        let value: serde_json::Value = serde_json::from_slice(intent.canonical_resource()).unwrap();
+        if value["type"] != serde_json::json!("Process") {
+            continue;
+        }
+        assert_eq!(value["spec"]["userRef"], serde_json::json!(spec.user_ref().to_canonical_string()));
+        assert_eq!(value["spec"]["sandbox"]["capabilityClasses"], serde_json::json!([]));
+        assert_eq!(value["spec"]["sandbox"]["namespaceClasses"], serde_json::json!([]));
+        assert_eq!(value["spec"]["sandbox"]["environmentClass"], serde_json::json!("minimal"));
+        assert_eq!(value["spec"]["sandbox"]["noNewPrivileges"], serde_json::json!(true));
+        assert_eq!(value["spec"]["sandbox"]["readOnlyRoot"], serde_json::json!(true));
+        assert_eq!(value["spec"]["mounts"], serde_json::json!([]));
+        assert_eq!(value["spec"]["deviceUsage"], serde_json::json!([]));
+    }
+
+    // A session that names an authorized policy records it on both worker rows.
+    let policied = WaylandSessionSpec::new(
+        spec.guest_ref().clone(),
+        spec.host_ref().clone(),
+        spec.user_ref().clone(),
+        spec.policy_ref().clone(),
+        DisplayIdentity::new("work-vm", "#7fc8ff", "#45475a", "#f38ba8").unwrap(),
+        true,
+    )
+    .unwrap()
+    .with_execution_policy(Some(ResourceRef::parse("ExecutionPolicy/display-worker").unwrap()))
+    .unwrap();
+    assert!(
+        WaylandSessionSpec::new(
+            spec.guest_ref().clone(),
+            spec.host_ref().clone(),
+            spec.user_ref().clone(),
+            spec.policy_ref().clone(),
+            DisplayIdentity::new("work-vm", "#7fc8ff", "#45475a", "#f38ba8").unwrap(),
+            true,
+        )
+        .unwrap()
+        .with_execution_policy(Some(ResourceRef::parse("SeccompProfile/strict").unwrap()))
+        .is_err(),
+        "a policy selection must name an ExecutionPolicy"
+    );
+    let annotated = d2b_provider_display_wayland::session_children::display_owned_child_intents(
+        &zone(),
+        &ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/demo").unwrap(),
+        &uid,
+        &policied,
+        2,
+    )
+    .unwrap();
+    for intent in &annotated {
+        let value: serde_json::Value = serde_json::from_slice(intent.canonical_resource()).unwrap();
+        if value["type"] != serde_json::json!("Process") {
+            continue;
+        }
+        assert_eq!(
+            value["metadata"]["annotations"]
+                [d2b_provider_display_wayland::DISPLAY_EXECUTION_POLICY_ANNOTATION],
+            serde_json::json!("ExecutionPolicy/display-worker")
+        );
+    }
+    assert_ne!(
+        policied.session_digest(1),
+        spec.session_digest(1),
+        "an authorized policy change is bound into the session digest"
+    );
+}
+
+#[test]
+fn filtering_still_applies_to_a_session_with_admitted_endpoint_access() {
+    let spec = session_spec().with_filter(
+        FilterInput::new(
+            ["wl_compositor"],
+            ["zwp_linux_dmabuf_v1", "wl_data_device_manager"],
+            Vec::<(String, u32)>::new(),
+            Vec::<String>::new(),
+        )
+        .unwrap(),
+    );
+    let uid = session_uid("55555555-5555-4555-8555-555555555555");
+    let bindings =
+        d2b_provider_display_wayland::display_endpoint_bindings(&uid, &spec).unwrap();
+    for binding in &bindings {
+        assert!(
+            admit(&spec, &uid, binding, 1).is_ok(),
+            "endpoint admission is independent of the protocol filter"
+        );
+    }
+    let compiled = WaylandPolicy::compile(
+        &FilterInput::default(),
+        &FilterInput::default(),
+        spec.filter(),
+    )
+    .unwrap();
+    assert!(!compiled.is_allowed("zwp_linux_dmabuf_v1"));
+    assert!(!compiled.is_allowed("wl_data_device_manager"));
+    assert!(compiled.is_allowed("wl_compositor"));
 }

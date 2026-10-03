@@ -317,7 +317,7 @@ fn cli_rejects_wrong_resource_field_type() {
                 "reconnectWindowSecs": 300
             },
             "transportCredentials": [],
-            "transportProviderRef": "Provider/transport-unix",
+            "transportProviderRef": "Provider/transport-vsock",
             "transportSettings": {}
         }
     }]);

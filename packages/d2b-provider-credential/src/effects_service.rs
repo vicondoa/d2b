@@ -25,7 +25,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{BindingRealizationSupport, ResourceRef};
 use d2b_provider_toolkit::{
     EffectResponse, EffectService, EffectServiceError, EffectServiceFactory, ServiceInvocation,
 };
@@ -109,6 +109,19 @@ impl CredentialEffectsService {
     }
 }
 
+impl CredentialEffectsService {
+    /// The family's declared binding realization support.
+    ///
+    /// The realization this family owns is credential delivery and nothing
+    /// else, so the support set a `CredentialBinding` admission is evaluated
+    /// against is the crate's own committed answer rather than something a
+    /// caller supplies. It is hermetic: no runtime facet is read, and the
+    /// answer names no credential identity.
+    pub fn binding_support(&self) -> BindingRealizationSupport {
+        crate::binding::credential_binding_support()
+    }
+}
+
 #[async_trait]
 impl CredentialDriverEffects for CredentialEffectsService {
     async fn dependency_facts(
@@ -169,7 +182,7 @@ impl EffectServiceFactory for CredentialEffectsServiceFactory {
 mod tests {
     use super::*;
 
-    use d2b_contracts_resource::v3::CanonicalJsonObject;
+    use d2b_contracts_resource::v3::{BindingRealizationFacet, CanonicalJsonObject};
     use d2b_provider_toolkit::ServiceInvocation;
     use d2b_resource_runtime::context::ServiceResourceContext;
 
@@ -260,6 +273,36 @@ mod tests {
         assert!(
             response.fds.is_empty(),
             "the inspect-credential surface mints no descriptors"
+        );
+    }
+
+    /// The family's declared binding realization support is exactly credential
+    /// delivery. A `CredentialBinding` request that depends on any other
+    /// presentation facet is refused at admission rather than approximated,
+    /// and the answer is the crate's own committed set rather than anything a
+    /// caller supplies.
+    #[test]
+    fn the_declared_binding_support_is_credential_delivery_only() {
+        let support = CredentialEffectsService::new(facets()).binding_support();
+        assert!(support.realizes(BindingRealizationFacet::CredentialDelivery));
+        for absent in [
+            BindingRealizationFacet::FilesystemPresentation,
+            BindingRealizationFacet::ConsumerDeviceSlot,
+            BindingRealizationFacet::DeviceAttachment,
+            BindingRealizationFacet::NamespaceInterface,
+            BindingRealizationFacet::SharedFabric,
+            BindingRealizationFacet::EndpointDescriptor,
+            BindingRealizationFacet::EndpointPathname,
+        ] {
+            assert!(
+                !support.realizes(absent),
+                "the Credential family declares no {absent:?} realization"
+            );
+        }
+        assert_eq!(
+            support,
+            crate::binding::credential_binding_support(),
+            "the hosted surface and the binding realization declare the same support"
         );
     }
 }

@@ -52,9 +52,9 @@ d2b-provider-quota = { path = "../d2b-provider-quota", version = "0.0.0-bootstra
 d2b-provider-emergency-policy = { path = "../d2b-provider-emergency-policy", version = "0.0.0-bootstrap" }
 d2b-provider-resource-export = { path = "../d2b-provider-resource-export", version = "0.0.0-bootstrap" }
 d2b-provider-resource-import = { path = "../d2b-provider-resource-import", version = "0.0.0-bootstrap" }
-d2b-provider-command = { path = "../d2b-provider-command", version = "0.0.0-bootstrap" }
 d2b-provider-operation = { path = "../d2b-provider-operation", version = "0.0.0-bootstrap" }
 d2b-provider-seccomp-profile = { path = "../d2b-provider-seccomp-profile", version = "0.0.0-bootstrap" }
+d2b-provider-execution-policy = { path = "../d2b-provider-execution-policy", version = "0.0.0-bootstrap" }
 d2b-provider-host = { path = "../d2b-provider-host", version = "0.0.0-bootstrap" }
 d2b-provider-user = { path = "../d2b-provider-user", version = "0.0.0-bootstrap" }
 d2b-provider-activation-nixos = { path = "../d2b-provider-activation-nixos", version = "0.0.0-bootstrap" }
@@ -106,13 +106,16 @@ tracing = "0.1"
 # debugging impossible.
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_json.workspace = true
-socket2 = "0.5"
+socket2 = { version = "0.5", features = ["all"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "fs", "io-util"] }
 # R16 (U14): only the ttrpc async surface is used; the `sync` feature is gone.
 ttrpc = { workspace = true, features = ["async"] }
 
 [dev-dependencies]
+# The real broker projection, so a reconciliation test drives the real
+# publication protocol rather than a stand-in for it.
+d2b-broker = { path = "../d2b-broker", version = "0.0.0-bootstrap" }
 d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap", features = ["test-support"] }
 # U100: wired over the binary/service contract in tests/cloud_composition.rs only
 d2b-provider-guest-azure-container-apps = { path = "../d2b-provider-guest-azure-container-apps", version = "0.0.0-bootstrap" }
@@ -140,5 +143,13 @@ d2b-provider-user = { path = "../d2b-provider-user", version = "0.0.0-bootstrap"
 d2b-provider-provider = { path = "../d2b-provider-provider", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-notification-desktop = { path = "../d2b-provider-notification-desktop", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-wayland-policy = { path = "../d2b-provider-wayland-policy", version = "0.0.0-bootstrap", features = ["test-support"] }
+# The declaration compiler, so the cross-layer acceptance test starts at the
+# real artifact compile and the real controller projection rather than at a
+# hand-written bundle row.
+d2b-resource-compiler = { path = "../d2b-resource-compiler", version = "0.0.0-bootstrap" }
+# The manifest signer the cross-layer acceptance test's in-memory Provider
+# artifact is signed with, and the PEM encoding its publisher key travels in.
+base64 = { workspace = true }
+ring = { workspace = true }
 tempfile = "3"
 tokio = { workspace = true, features = ["test-util"] }

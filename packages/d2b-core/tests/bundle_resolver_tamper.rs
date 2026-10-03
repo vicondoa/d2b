@@ -64,7 +64,6 @@ fn minimal_bundle_json_no_hash() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "bundleVersion": 1,
         "schemaVersion": "v3",
-        "privilegesPath": "privileges.json",
         "zones": [],
         "artifactHashes": {},
         "generation": {
@@ -304,7 +303,6 @@ fn v2_bundle_rejects_with_manifest_version_mismatch() {
     let mut value = serde_json::json!({
         "bundleVersion": 1,
         "schemaVersion": "v2",
-        "privilegesPath": "privileges.json",
         "zones": [],
         "artifactHashes": {},
         "generation": {

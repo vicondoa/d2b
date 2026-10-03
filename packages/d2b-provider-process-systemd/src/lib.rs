@@ -57,7 +57,9 @@ pub use lifecycle::{
 
 use std::collections::BTreeSet;
 
+use d2b_contracts_resource::v3::binding::BindingRealizationFacet;
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
+use d2b_contracts_resource::v3::{BackendSupport, ConfinementFacet};
 use d2b_process_conformance::{
     AdoptionCandidate, AdoptionCondition, AdoptionOutcome, CancellationBinding, IdentityBinding,
     LaunchTicket, LaunchedProcess, ProcessConformanceError, ProcessIdentityDigest,
@@ -71,6 +73,40 @@ pub const PROVIDER_NAME: &str = "system-systemd";
 
 /// The canonical `Provider/<name>` reference this controller implements.
 pub const PROVIDER_REF: &str = "Provider/system-systemd";
+
+/// The confinement facets the `system-systemd` transient-unit path enforces.
+///
+/// This is the family's whole declared support and it is deliberately small.
+/// The launch sets `NoNewPrivileges=true` and `ProtectSystem=strict`, and
+/// nothing else: a transient unit gets no namespace, no capability bounding
+/// set, no `SystemCallFilter`, and no private devices. Declaring more here
+/// would be exactly the "a declared field is not a declared support" failure
+/// this conversion removes, so the set states the truth and both
+/// enforcement points - the controller's plan check and the operation
+/// request fence - refuse everything else (R27, R50).
+pub fn enforced_confinement_facets() -> BackendSupport {
+    BackendSupport::new(vec![
+        ConfinementFacet::NoNewPrivileges,
+        ConfinementFacet::ReadOnlyRoot,
+    ])
+    .expect("the family's declared support set is well formed")
+}
+
+/// The presentation facets this backend realizes.
+///
+/// None. The properties this family sets carry no `BindPaths`,
+/// `ReadWritePaths`, or `TemporaryFileSystem`, so it cannot confine a
+/// workload to an exact source view at a destination. A launch that depends
+/// on a presentation therefore refuses before a unit is started rather than
+/// starting without the confinement it asked for (R20, AE19).
+pub fn realized_presentation_facets() -> BTreeSet<BindingRealizationFacet> {
+    BTreeSet::new()
+}
+
+/// Whether this backend realizes one presentation facet.
+pub fn realizes_presentation(facet: BindingRealizationFacet) -> bool {
+    realized_presentation_facets().contains(&facet)
+}
 
 /// The `system-systemd` Process Provider controller.
 #[derive(Debug)]
@@ -105,6 +141,86 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
     /// Borrow the injected effect port.
     pub const fn port(&self) -> &P {
         &self.port
+    }
+
+    /// The one policy path this Provider enforces.
+    ///
+    /// A ticket that carries the resolved plan is validated against the
+    /// plan's own admitted execution and its prepared relationships rather
+    /// than against a separately authored posture. Two refusals matter here
+    /// and both are about what this backend can *do*:
+    ///
+    /// * an admitted execution whose isolation classes, capability set,
+    ///   syscall filter, or user namespace this family does not enforce is
+    ///   refused - the family's declared support is the whole truth about
+    ///   what a transient unit applies, and an unsupported requirement fails
+    ///   closed instead of being ignored (R27);
+    /// * a prepared relationship whose presentation this family cannot
+    ///   realize is refused before a unit is started. This backend has no
+    ///   mount namespace, so a destination or a named view it cannot confine
+    ///   a workload to is refused rather than launched without it (R20,
+    ///   AE19).
+    ///
+    /// A ticket with no plan is the pre-plan path and is validated as it
+    /// always was; U34 deletes that branch with the rest of the ticket
+    /// authority.
+    fn validate_plan(&self, ticket: &LaunchTicket) -> Result<(), ProcessConformanceError> {
+        let Some(plan) = ticket.resolved_plan() else {
+            return Ok(());
+        };
+        if !plan.admits_start() {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                "assignment rejected: a required binding is not prepared"
+            );
+            return Err(ProcessConformanceError::ResolutionFailed);
+        }
+        if !plan
+            .prepared_against(plan.subject())
+            .is_ok_and(|()| ticket.process_ref() == plan.subject().process_ref())
+        {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                "assignment rejected: the plan was not prepared for this row"
+            );
+            return Err(ProcessConformanceError::ResolutionFailed);
+        }
+        if let Some(facet) = plan
+            .bindings()
+            .flat_map(d2b_process_conformance::PreparedBinding::presentation)
+            .copied()
+            .find(|facet| !realizes_presentation(*facet))
+        {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                presentation = ?facet,
+                "assignment rejected: this backend cannot realize the required presentation"
+            );
+            return Err(ProcessConformanceError::SandboxRejected);
+        }
+        let support = enforced_confinement_facets();
+        let execution = plan.execution();
+        let unenforceable = execution
+            .namespace_classes()
+            .iter()
+            .any(|class| !support.enforces(ConfinementFacet::from_namespace(*class)))
+            || !execution.capability_classes().is_empty()
+            && !support.enforces(ConfinementFacet::CapabilityCeiling)
+            || execution.seccomp_profile_ref().is_some()
+            && !support.enforces(ConfinementFacet::SyscallFilter)
+            || execution.no_new_privileges() && !support.enforces(ConfinementFacet::NoNewPrivileges);
+        if unenforceable {
+            warn!(
+                provider = PROVIDER_NAME,
+                resource = %ticket.process_ref().to_canonical_string(),
+                "assignment rejected: the admitted execution is not enforceable here"
+            );
+            return Err(ProcessConformanceError::SandboxRejected);
+        }
+        Ok(())
     }
 
     fn validate(&self, ticket: &LaunchTicket) -> Result<(), ProcessConformanceError> {
@@ -172,7 +288,7 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
             );
             return Err(ProcessConformanceError::UserRefRequired);
         }
-        Ok(())
+        self.validate_plan(ticket)
     }
 
     async fn cleanup_failed_launch(

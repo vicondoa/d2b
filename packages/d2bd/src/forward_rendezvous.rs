@@ -81,9 +81,9 @@ use d2b_audit::evidence_chain::{
 };
 use d2b_contracts_broker::broker_wire::FORWARD_SOCKET_ENV;
 use d2b_contracts_broker::broker_wire::{
-    DEFAULT_CONTEXT_DEADLINE_MS, FD_LEG, FdKind, ForwardContext, ForwardOperationOutcome,
-    ForwardOperationRequest, ForwardOperationResponse, MAX_CONTEXT_DEADLINE_MS, MAX_FRAME_FDS,
-    STALE_CONTEXT,
+    AuthorityCursor, DEFAULT_CONTEXT_DEADLINE_MS, FD_LEG, FdKind, ForwardContext,
+    ForwardOperationOutcome, ForwardOperationRequest, ForwardOperationResponse,
+    MAX_CONTEXT_DEADLINE_MS, MAX_FRAME_FDS, STALE_CONTEXT,
 };
 use d2b_contracts_resource::v3::CanonicalJsonObject;
 use d2b_provider_toolkit::operations::{UNCOMMITTED_OPERATION, UNGRANTED_CALLER};
@@ -228,6 +228,14 @@ pub(crate) struct ForwardRendezvous {
     /// Zero means no publication has been acknowledged yet: no context can
     /// be verified, so every attested call is refused fail-closed.
     broker_epoch: AtomicU64,
+    /// The last authority cursor this process has published and the broker has
+    /// accepted, per Zone (KTD6-KTD7).
+    ///
+    /// A forwarded effect is admitted under the projection the broker accepted
+    /// when it minted the context, so the block carries that cursor and this
+    /// endpoint compares it field-wise. A Zone with no accepted cursor yet
+    /// admits no attested call: there is no authority here to serve under.
+    accepted_authority: tokio::sync::Mutex<BTreeMap<String, AuthorityCursor>>,
     /// The sink this process's daemon-side leg writes evidence-chain audit
     /// records to, when one is wired.
     ///
@@ -427,6 +435,21 @@ impl ForwardRendezvous {
         if context.deadline_ms == 0 || context.deadline_ms > MAX_CONTEXT_DEADLINE_MS {
             return false;
         }
+        // The fence in the accepted-cursor half of the attestation: a context
+        // minted before a change the broker has since accepted names an older
+        // projection, and serving it would use authority the change removed.
+        // No recorded cursor is fail-closed, exactly like no observed epoch.
+        {
+            let accepted = self.accepted_authority.lock().await;
+            let Some(accepted) = accepted.get(request_zone) else {
+                return false;
+            };
+            if context.accepted_sequence != accepted.sequence
+                || context.accepted_digest != accepted.digest
+            {
+                return false;
+            }
+        }
         let zones = self.zones.lock().await;
         match zones.get(request_zone) {
             Some(binding) => {
@@ -436,6 +459,20 @@ impl ForwardRendezvous {
             }
             None => false,
         }
+    }
+
+    /// Record the authority cursor this process has published and the broker
+    /// has accepted for one Zone.
+    ///
+    /// The caller's publication coordinator drives it from the broker's
+    /// `Accepted` answer, so the recorded cursor is broker-accepted authority
+    /// and never the manager's own view of its desired rows.
+    #[allow(dead_code)] // U7 staged: the publication path U34 installs records the broker-accepted cursor here.
+    pub(crate) async fn set_accepted_authority(&self, zone: &str, cursor: AuthorityCursor) {
+        self.accepted_authority
+            .lock()
+            .await
+            .insert(zone.to_owned(), cursor);
     }
 
     /// Answer one forwarded invocation.
@@ -2260,6 +2297,12 @@ mod tests {
                 .expect("the process family starts through the base");
             let providers = Arc::new(providers);
             let rendezvous = Arc::new(ForwardRendezvous::new());
+            // The accepted-authority half of the attestation every serving
+            // fixture shares: a Zone with no accepted cursor admits no attested
+            // call, so the fixture records the initial one its contexts carry.
+            rendezvous
+                .set_accepted_authority(zone.as_str(), accepted_cursor(0))
+                .await;
             rendezvous
                 .publish(zone.as_str(), Arc::clone(&providers))
                 .await;
@@ -2404,6 +2447,8 @@ mod tests {
                 controller_generation: 1,
                 guest_generation: 1,
                 initiating_identity: initiating_identity.to_owned(),
+                accepted_sequence: ZoneDesiredSequence::INITIAL,
+                accepted_digest: DesiredDigest::of(&[]),
                 deadline_ms: DEFAULT_CONTEXT_DEADLINE_MS,
             }),
             fd_indexes: vec![],
@@ -3417,6 +3462,31 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     }
 
     use d2b_contracts_broker::broker_wire::{ForwardContext, STALE_CONTEXT};
+    use d2b_contracts_resource::v3::{DesiredDigest, ZoneDesiredSequence};
+
+    /// The accepted-authority cursor one test context is minted under.
+    ///
+    /// The sequence advances from the initial value rather than being spelled
+    /// as a number, so a fixture cannot name a counter the contract does not
+    /// admit.
+    fn accepted_cursor(steps: u64) -> AuthorityCursor {
+        let mut sequence = ZoneDesiredSequence::INITIAL;
+        for _ in 0..steps {
+            sequence = sequence.try_next().expect("a test cursor never exhausts");
+        }
+        AuthorityCursor {
+            // Sequence zero has no committed bytes behind it, so its digest is
+            // the digest of the empty canonical byte string - the same value
+            // `AuthorityCursor::initial()` derives.
+            digest: if steps == 0 {
+                DesiredDigest::of(&[])
+            } else {
+                DesiredDigest::of(&steps.to_be_bytes())
+            },
+            sequence,
+        }
+    }
+
 
     /// The attestation state the context tests below agree on: the fixture
     /// Zone "test" with one provider publication (revision 1), controller
@@ -3429,6 +3499,8 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
             controller_generation: 1,
             guest_generation,
             initiating_identity: "daemon".to_owned(),
+            accepted_sequence: ZoneDesiredSequence::INITIAL,
+            accepted_digest: DesiredDigest::of(&[]),
             deadline_ms: DEFAULT_CONTEXT_DEADLINE_MS,
         }
     }
@@ -3871,6 +3943,11 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
                 .expect("the process family starts through the base"),
         );
         let rendezvous = Arc::new(ForwardRendezvous::new());
+        // The accepted-authority half of the attestation: the contexts this
+        // test mints carry the initial cursor, so the Zone records it.
+        rendezvous
+            .set_accepted_authority(zone.as_str(), accepted_cursor(0))
+            .await;
         let revision = rendezvous
             .publish(zone.as_str(), Arc::clone(&providers))
             .await;
@@ -3905,6 +3982,8 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
                 controller_generation: 4,
                 guest_generation: 1,
                 initiating_identity: "daemon".to_owned(),
+                accepted_sequence: ZoneDesiredSequence::INITIAL,
+                accepted_digest: DesiredDigest::of(&[]),
                 deadline_ms: DEFAULT_CONTEXT_DEADLINE_MS,
             },
         );
@@ -4714,7 +4793,6 @@ assert_eq!(
             Bundle {
                 bundle_version: 1,
                 schema_version: "v3".to_owned(),
-                privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
                 realm_workloads_launcher_v2_path: None,
                 generation: BundleGeneration {

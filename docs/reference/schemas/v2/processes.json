@@ -476,7 +476,7 @@
           ]
         },
         {
-          "description": "vsock relay sidecar.",
+          "description": "vsock relay sidecar. The relay is a guest socat process the process Provider serves; no transport Provider owns the role.",
           "type": "string",
           "enum": [
             "vsock-relay"

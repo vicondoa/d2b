@@ -142,6 +142,213 @@
       },
       "additionalProperties": false
     },
+    "AdmissionStage": {
+      "description": "The stage a decision was made at.\n\nThe stage is what makes a failure attributable: it names where in the lifecycle the request stopped, so an operator sees the enforcing stage rather than an unexplained launch mismatch.",
+      "oneOf": [
+        {
+          "description": "The desired declaration is being normalized and deduplicated.",
+          "type": "string",
+          "enum": [
+            "normalize"
+          ]
+        },
+        {
+          "description": "The subject's authorization for the requested relationship.",
+          "type": "string",
+          "enum": [
+            "authorize"
+          ]
+        },
+        {
+          "description": "The source provider's decision on the exact request.",
+          "type": "string",
+          "enum": [
+            "admit"
+          ]
+        },
+        {
+          "description": "The source-side physical or logical reservation.",
+          "type": "string",
+          "enum": [
+            "reserve"
+          ]
+        },
+        {
+          "description": "Delivery prerequisites being established.",
+          "type": "string",
+          "enum": [
+            "prepare"
+          ]
+        },
+        {
+          "description": "The consumer starting to use a prepared relationship.",
+          "type": "string",
+          "enum": [
+            "activate"
+          ]
+        },
+        {
+          "description": "New use being blocked ahead of typed release.",
+          "type": "string",
+          "enum": [
+            "revoke"
+          ]
+        },
+        {
+          "description": "Outstanding use being driven to its declared safe state.",
+          "type": "string",
+          "enum": [
+            "drain"
+          ]
+        },
+        {
+          "description": "The relationship being finalized and its reservation released.",
+          "type": "string",
+          "enum": [
+            "release"
+          ]
+        },
+        {
+          "description": "Restart or interrupted-effect recovery.",
+          "type": "string",
+          "enum": [
+            "recover"
+          ]
+        }
+      ]
+    },
+    "AdmittedDescriptor": {
+      "description": "One descriptor an admitted effect returned.\n\nThe name is the `Operation`'s own fd-contract entry the descriptor answers, and the kind is the kernel kind the broker verified before answering. A caller can therefore join every returned descriptor to the declaration that promised it, and a descriptor no entry promised never crosses (R30, R38).",
+      "type": "object",
+      "required": [
+        "kind",
+        "name"
+      ],
+      "properties": {
+        "kind": {
+          "description": "The kernel kind the broker verified.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/FdKind"
+            }
+          ]
+        },
+        "name": {
+          "description": "The declared fd-contract entry this descriptor answers.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/BoundedToken"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdmittedEffectRefusal": {
+      "description": "One refused admitted effect.\n\nThe code is the broker's closed refusal code, and the stage and reason are U1's: an operator reads which stage refused and why, and neither can echo a path, a numeric credential, or caller-supplied text.",
+      "type": "object",
+      "required": [
+        "code",
+        "reason",
+        "stage"
+      ],
+      "properties": {
+        "code": {
+          "description": "The closed refusal code.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "The typed reason it refused.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RefusalReason"
+            }
+          ]
+        },
+        "stage": {
+          "description": "The stage that refused.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AdmissionStage"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AdmittedEffectResponse": {
+      "description": "The broker's answer to one [`AdmittedEffectInvocation`].\n\nA success carries the result object plus the descriptors the implementation minted, each already checked against the `Operation`'s declared response contract. A refusal carries the closed code with its enforcing stage and typed reason. Both carry the invocation identifier and the idempotency key, so a caller joins the reply to the audit record and a retry to the recorded outcome either way.",
+      "type": "object",
+      "required": [
+        "idempotencyKey",
+        "invocationId",
+        "operation"
+      ],
+      "properties": {
+        "correlation": {
+          "description": "The correlation of the leg, echoed so the caller can join a nested reply to its root invocation.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EffectCorrelation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "descriptors": {
+          "description": "The descriptors the implementation returned, checked against the declared response contract.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AdmittedDescriptor"
+          }
+        },
+        "idempotencyKey": {
+          "description": "The key of the logical effect.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/IdempotencyKey"
+            }
+          ]
+        },
+        "invocationId": {
+          "description": "The invocation identifier the audit records key on.",
+          "type": "string"
+        },
+        "operation": {
+          "description": "The exact `Operation` that ran.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            }
+          ]
+        },
+        "refusal": {
+          "description": "The refusal, present exactly when the invocation was refused.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdmittedEffectRefusal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "description": "The result object, present exactly when `refusal` is absent.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CanonicalJsonObject"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "ApplyHostGenerationHandoff": {
       "description": "Typed broker request. The broker derives its target from this authenticated request and never accepts a path, command, or authority token.",
       "type": "object",
@@ -972,6 +1179,95 @@
         }
       },
       "additionalProperties": false
+    },
+    "AuthoritySubject": {
+      "description": "The subject an authority decision is made for.\n\nA privileged transport identity is never a subject of its own: a nested call keeps the initiating subject, so arriving through a broker or session connection cannot substitute a more privileged identity for the one that started the work.",
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/AuthoritySubjectKind"
+        },
+        "resourceRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuthoritySubjectKind": {
+      "description": "The class of subject that initiated a request.",
+      "oneOf": [
+        {
+          "description": "An admitted User identity.",
+          "type": "string",
+          "enum": [
+            "user"
+          ]
+        },
+        {
+          "description": "A long-running Process.",
+          "type": "string",
+          "enum": [
+            "process"
+          ]
+        },
+        {
+          "description": "A run-to-completion EphemeralProcess.",
+          "type": "string",
+          "enum": [
+            "ephemeral-process"
+          ]
+        },
+        {
+          "description": "A Host execution target.",
+          "type": "string",
+          "enum": [
+            "host"
+          ]
+        },
+        {
+          "description": "A Guest execution target.",
+          "type": "string",
+          "enum": [
+            "guest"
+          ]
+        },
+        {
+          "description": "A provider component acting under its own admitted identity.",
+          "type": "string",
+          "enum": [
+            "provider"
+          ]
+        },
+        {
+          "description": "The verified deployment bootstrap graph.",
+          "type": "string",
+          "enum": [
+            "bootstrap"
+          ]
+        },
+        {
+          "description": "Explicit local operator authority for a one-shot ownership action.",
+          "type": "string",
+          "enum": [
+            "operator"
+          ]
+        }
+      ]
+    },
+    "BoundedToken": {
+      "type": "string",
+      "maxLength": 63,
+      "minLength": 1
     },
     "BridgeCheck": {
       "description": "One bridge-presence check result.",
@@ -1850,6 +2146,63 @@
               "$ref": "#/definitions/EnvelopeInvokeRequest"
             }
           }
+        },
+        {
+          "description": "Re-read what one consumer principal actually has on ONE exact host endpoint (U18, R23).\n\nThe three endpoint-access variants share ONE request struct and ONE resolution path, and the verb is the only thing that tells them apart: they differ in the host effect they perform, not in the admission they are admitted under. A consumer that is admitted one exact endpoint gets an answer about that endpoint and nothing else - the reply carries the pinned `(dev, ino)` the broker resolved, the kernel's effective rights on it, whether every ancestor directory applies a traverse bit, and whether the containing directory is listable (which is the directory authority R23 removed).\n\nThe request names no path anywhere. See [`EndpointAccessRequest`].",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EndpointObserve"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EndpointAccessRequest"
+            }
+          }
+        },
+        {
+          "description": "Apply the exact-endpoint grant: the consumer principal's entry on ONE endpoint socket plus traverse on the ancestor directories, and no listing authority on any of them.\n\nThe broker resolves the socket inside a directory it derives from its own serve-time configuration, so the grant lands on the inode it resolved and on no other. See [`EndpointAccessRequest`].",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EndpointGrantAccess"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EndpointAccessRequest"
+            }
+          }
+        },
+        {
+          "description": "Remove the exact-endpoint grant: the consumer principal's own entry on that one socket, leaving the ancestor traversal grants - which sibling endpoints and the producer's own helpers also depend on - in place.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EndpointRevokeAccess"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EndpointAccessRequest"
+            }
+          }
         }
       ]
     },
@@ -1908,6 +2261,25 @@
             },
             "payload": {
               "$ref": "#/definitions/BrokerErrorResponse"
+            }
+          }
+        },
+        {
+          "description": "The broker's answer to one `admittedEffect` invocation.\n\nA frame refused AT the carrier - a retired variant, a frame that is not the carrier, or a frame carrying an authority-bearing field - is not an `AdmittedEffectResponse`: it never decoded, so it has no invocation id and no idempotency key to answer with. That refusal stays [`BrokerResponse::Error`] carrying the boundary's own closed code.\n\nAn invocation that DID decode is answered here, with either a result and its descriptors or a refusal, so a caller can join the reply to the audit record and a retry to the recorded outcome.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "AdmittedEffect"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/AdmittedEffectResponse"
             }
           }
         },
@@ -2222,8 +2594,30 @@
               "$ref": "#/definitions/EnvelopeInvokeResponse"
             }
           }
+        },
+        {
+          "description": "The broker's answer to one exact-endpoint access request.\n\nThe three endpoint-access verbs answer with the same body, because they answer the same question - what this consumer principal has on this one exact endpoint - at three different points in the effect's life. A revoke answers with the inode it removed the entry from, so a retry can tell a removal that landed from one that did not.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EndpointAccess"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/EndpointAccessResponse"
+            }
+          }
         }
       ]
+    },
+    "CanonicalJsonObject": {
+      "type": "object"
     },
     "CapabilitiesResponse": {
       "type": "object",
@@ -2920,6 +3314,206 @@
           ]
         }
       ]
+    },
+    "EffectCorrelation": {
+      "description": "One nested leg's correlation identity.\n\nA root invocation presents no correlation: it *is* the root. A nested leg presents the root invocation identifier plus the ordered subjects of the chain, the first of which is the subject the whole chain was initiated under. The chain's first subject must be the invocation's own subject, so a nested leg cannot arrive presenting a more privileged subject than the one that started the work (AE15, R8).",
+      "type": "object",
+      "required": [
+        "identities",
+        "rootInvocationId"
+      ],
+      "properties": {
+        "identities": {
+          "description": "The ordered subjects, root first. Never empty: the first entry is the initiating subject.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AuthoritySubject"
+          }
+        },
+        "rootInvocationId": {
+          "description": "The invocation identifier every leg of the chain shares.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EndpointAccessRequest": {
+      "description": "One exact-endpoint ACL request for one admitted endpoint/consumer pair.\n\nThe struct names the exact endpoint, the exact committed consumer, and the socket's NAME inside a directory the broker resolves from its own serve-time configuration. There is no path field here, and that is the whole security property: `socket` is a [`BoundedToken`], whose `^[a-z][a-z0-9-]*$` grammar admits no `/`, no `.`, and no `..`, so the only filesystem object a request can ever select is a direct child of the directory the broker itself resolved. An alternate absolute socket, a `..` escape, and the containing directory are therefore not refusals this dispatch has to detect - they are values this wire cannot represent.",
+      "type": "object",
+      "required": [
+        "authorityKey",
+        "consumerRef",
+        "endpointRef",
+        "socket",
+        "socketRights",
+        "zoneUid"
+      ],
+      "properties": {
+        "authorityKey": {
+          "description": "The broker-recomputed binding this request must reproduce, from [`endpoint_access_authority_binding`].",
+          "type": "string"
+        },
+        "claimedPrincipal": {
+          "description": "A claim about the consumer's numeric principal.\n\nThe claim is a check, never a source: the broker re-derives the principal from the verified bundle and refuses a claim that does not reproduce it, and the reply always carries the derived numbers.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/EndpointPrincipalClaim"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consumerRef": {
+          "description": "The committed `Process` / `EphemeralProcess` row the effect acts for.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            }
+          ]
+        },
+        "endpointRef": {
+          "description": "The exact `Endpoint` row the relationship is admitted against.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            }
+          ]
+        },
+        "socket": {
+          "description": "The socket's name inside the broker's own endpoint directory.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/BoundedToken"
+            }
+          ]
+        },
+        "socketRights": {
+          "description": "The POSIX permission bits the grant asks for on the socket (`1..=7`).",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "tracingSpanId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "zoneUid": {
+          "description": "The Zone self-resource uid whose verified bundle declares that row.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceUid"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EndpointAccessResponse": {
+      "description": "What one exact endpoint actually answers for one consumer principal.\n\nThe `(device, inode)` pair is the identity the broker PINNED - read from the descriptor it held while the answer was taken - and is never recomputed by the reader. A producer that replaced its socket therefore shows up as a different inode here, which is how a relationship prepared against the old one can tell it is stale.",
+      "type": "object",
+      "required": [
+        "ancestorsTraversable",
+        "consumerGid",
+        "consumerRef",
+        "consumerUid",
+        "endpointRef",
+        "parentListable",
+        "socket",
+        "socketDevice",
+        "socketEffectiveRights",
+        "socketInode"
+      ],
+      "properties": {
+        "ancestorsTraversable": {
+          "description": "Whether every ancestor directory applies a traverse bit to the consumer, which is what makes the socket reachable at all.",
+          "type": "boolean"
+        },
+        "consumerGid": {
+          "description": "The gid the verified bundle derived for the consumer row.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "consumerRef": {
+          "description": "The committed consumer the answer is for.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            }
+          ]
+        },
+        "consumerUid": {
+          "description": "The uid the verified bundle derived for the consumer row. This is the derived number even when the request carried a claim.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "endpointRef": {
+          "description": "The exact endpoint this answer is about.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            }
+          ]
+        },
+        "parentListable": {
+          "description": "Whether the consumer may enumerate the socket's parent directory. Traverse is what a consumer needs; listing is the directory authority R23 removed, so a correct grant answers `false` here.",
+          "type": "boolean"
+        },
+        "socket": {
+          "description": "The socket name the broker resolved (never a path).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/BoundedToken"
+            }
+          ]
+        },
+        "socketDevice": {
+          "description": "The device the pinned endpoint socket lives on.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "socketEffectiveRights": {
+          "description": "The permission the KERNEL applies to the consumer on the socket, not the mode the broker asked for.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "socketInode": {
+          "description": "The inode the pinned endpoint socket resolved to.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "EndpointPrincipalClaim": {
+      "description": "A claimed numeric principal for one committed consumer row.\n\nA number a caller can construct is exactly why this is a claim and not an input: nothing downstream reads it, whether it agrees or not.",
+      "type": "object",
+      "required": [
+        "gid",
+        "uid"
+      ],
+      "properties": {
+        "gid": {
+          "description": "The claimed host gid.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "uid": {
+          "description": "The claimed host uid.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
     },
     "EnvelopeInvokeRequest": {
       "description": "One generic envelope invocation the daemon or a provider handler sends over the origination leg (U10, KTD10).\n\nThe operation names a committed row exactly as the catalog declares it; the payload is the canonical object the envelope validates against the row's declared shape. A root call (a driver invoking a service) carries no chain; a nested call (a provider handler's sandwich leg reaching a broker-generic core) carries the evidence chain it was dispatched under, so the graft rule authorizes the call against the chain's initiating principal and the DB-side records the correlation leg (KTD6).\n\nThe chain crosses as its two parts - the root invocation id and the ordered identities - so the contract crate needs no evidence-chain dependency; the broker reassembles the chain before the envelope admission.",
@@ -4904,6 +5498,11 @@
         }
       },
       "additionalProperties": false
+    },
+    "IdempotencyKey": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
     },
     "IfName": {
       "description": "Linux interface name: <=15 ASCII bytes matching [A-Za-z0-9_-]+",
@@ -7173,13 +7772,130 @@
       },
       "additionalProperties": false
     },
+    "RefusalReason": {
+      "description": "One typed refusal reason.\n\nEvery variant is field-free, so a diagnostic can never echo a path, a resource identity, or caller-supplied text. The resource, relationship, and enforcing stage travel beside the reason, never inside it.",
+      "oneOf": [
+        {
+          "description": "The subject is not authorized for the requested policy selection.",
+          "type": "string",
+          "enum": [
+            "policy-selection-not-authorized"
+          ]
+        },
+        {
+          "description": "A required namespace class is outside the admitted policy.",
+          "type": "string",
+          "enum": [
+            "required-namespace-not-admitted"
+          ]
+        },
+        {
+          "description": "A required capability is outside the admitted ceiling.",
+          "type": "string",
+          "enum": [
+            "required-capability-outside-ceiling"
+          ]
+        },
+        {
+          "description": "Instance input attempted to weaken a mandatory restriction.",
+          "type": "string",
+          "enum": [
+            "restriction-weakened"
+          ]
+        },
+        {
+          "description": "The requested identity is not authorized by the admitted rules.",
+          "type": "string",
+          "enum": [
+            "identity-not-authorized"
+          ]
+        },
+        {
+          "description": "A mandatory confinement facet is not enforceable on this target.",
+          "type": "string",
+          "enum": [
+            "mandatory-facet-unsupported"
+          ]
+        },
+        {
+          "description": "The selected profile does not admit the implementation's syscall needs.",
+          "type": "string",
+          "enum": [
+            "seccomp-incompatible"
+          ]
+        },
+        {
+          "description": "The requested limit exceeds an admitted ceiling.",
+          "type": "string",
+          "enum": [
+            "limit-exceeds-ceiling"
+          ]
+        },
+        {
+          "description": "An admitted emergency reduction is blocking new use.\n\nA Zone's `EmergencyPolicy` row is a committed policy reduction, so a request that arrives while it is enforced is refused at the revoking stage even though the same request was admitted against the earlier graph. The reason is its own so an operator can tell a policy reduction from a quota ceiling; the flag itself stays in the policy row, never in the refusal.",
+          "type": "string",
+          "enum": [
+            "emergency-reduction-active"
+          ]
+        },
+        {
+          "description": "The target support ceiling does not admit the requested capability.",
+          "type": "string",
+          "enum": [
+            "target-support-missing"
+          ]
+        },
+        {
+          "description": "The requested relationship conflicts with an existing declaration.",
+          "type": "string",
+          "enum": [
+            "conflicting-declaration"
+          ]
+        },
+        {
+          "description": "The source's own policy refused the request.",
+          "type": "string",
+          "enum": [
+            "source-policy-refused"
+          ]
+        },
+        {
+          "description": "The effect was fenced by a newer accepted revision.",
+          "type": "string",
+          "enum": [
+            "stale-authority"
+          ]
+        },
+        {
+          "description": "The store generation or sequence does not match accepted authority.",
+          "type": "string",
+          "enum": [
+            "store-incarnation-mismatch"
+          ]
+        },
+        {
+          "description": "Recovery could not prove that an effect is complete or absent.",
+          "type": "string",
+          "enum": [
+            "unproven-effect"
+          ]
+        },
+        {
+          "description": "The requested implementation is not a trusted declared identity.",
+          "type": "string",
+          "enum": [
+            "untrusted-implementation"
+          ]
+        }
+      ]
+    },
     "ResourceRef": {
       "oneOf": [
         {
           "type": "string",
-          "maxLength": 80,
+          "maxLength": 81,
           "minLength": 6,
-          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|VolumeBinding|Network|Device|User|Credential|Endpoint|ResourceExport|ResourceImport|Command|Operation|SeccompProfile)/[a-z][a-z0-9-]{0,62}$"
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|VolumeBinding|Network|Device|CredentialBinding|DeviceBinding|User|Credential|Endpoint|ResourceExport|ResourceImport|Operation|SeccompProfile|EndpointBinding|ExecutionPolicy|NetworkBinding)/[a-z][a-z0-9-]{0,62}$"
         },
         {
           "type": "string",
@@ -7188,6 +7904,12 @@
           "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$"
         }
       ]
+    },
+    "ResourceUid": {
+      "type": "string",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "RuntimeDisplayCapabilities": {
       "description": "Display-side operations exposed by a runtime provider.",

@@ -334,6 +334,37 @@ async fn validated_recovery_receipt(
     .map_err(|_| AuthorityPersistenceError::RowInvalid)
 }
 
+/// The common pending/effect/close/release records a recovery observed.
+///
+/// U8 (KTD9) extracts the record every claim owner advances out of the
+/// family-shaped storage row, so restart recovery reasons about one shape
+/// regardless of which claim variant a row carried. This is a projection, not
+/// a second ledger: it carries no claim, so it can never remint authority.
+pub fn recovered_reservation_records(
+    data: &AuthorityRecoveryData,
+) -> Vec<crate::authority::AuthorityReservationRecord> {
+    data.operations()
+        .iter()
+        .map(crate::authority::AuthorityStorageOperation::record)
+        .collect()
+}
+
+/// How many recovered records are still holding a claim.
+///
+/// A record in `Released` no longer holds anything; every other state -
+/// including `Unknown`-shaped uncertainty that this vocabulary expresses as a
+/// pending or unconfirmed effect - still does. Recovery uses the count to
+/// decide whether a restart has unresolved claims to adopt, close, or
+/// quarantine before the host can be reported ready (R41).
+pub fn unreleased_reservation_records(
+    data: &AuthorityRecoveryData,
+) -> Vec<crate::authority::AuthorityReservationRecord> {
+    recovered_reservation_records(data)
+        .into_iter()
+        .filter(|record| !record.is_released())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -18,11 +18,14 @@ test-support = []
 
 [dependencies]
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
 schemars.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap", features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

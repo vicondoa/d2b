@@ -22,14 +22,18 @@ pub const RESOURCE_TYPE_VALUES: &[&str] = &[
     "VolumeBinding",
     "Network",
     "Device",
+    "CredentialBinding",
+    "DeviceBinding",
     "User",
     "Credential",
     "Endpoint",
     "ResourceExport",
     "ResourceImport",
-    "Command",
     "Operation",
     "SeccompProfile",
+    "EndpointBinding",
+    "ExecutionPolicy",
+    "NetworkBinding",
     "vendor",
 ];
 /// The API verb label domain, projected from the Role resource verbs.
@@ -100,4 +104,7 @@ pub const BROKER_OPERATION_VALUES: &[&str] = &[
     "SecurityKeyOpenDevice",
     "SecurityKeyApplyUdevRules",
     "EnvelopeInvoke",
+    "EndpointObserve",
+    "EndpointGrantAccess",
+    "EndpointRevokeAccess",
 ];

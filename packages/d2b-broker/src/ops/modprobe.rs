@@ -71,13 +71,15 @@ pub(crate) trait ModprobeBackend {
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 }
 
-/// Fake backend used by `tests/kernel-module-matrix.sh`.
+/// Fake backend used by this module's tests.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub(crate) struct RecordingBackend {
     pub loaded: Vec<String>,
     pub fail_on: Vec<String>,
 }
 
+#[cfg(test)]
 impl ModprobeBackend for RecordingBackend {
     fn load<'a>(
         &'a mut self,

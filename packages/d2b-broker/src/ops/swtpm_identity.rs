@@ -180,6 +180,9 @@ pub fn resource_backed_identity(
 ///
 /// `None` for a subject no trusted artifact names: the caller keeps failing
 /// closed rather than inventing a directory.
+// Exists for this module's tests and the cfg(test) `PrepareStateDir` op: no
+// live dispatch arm resolves this row by itself.
+#[cfg(test)]
 pub fn zone_native_swtpm_state_row<'a>(
     resolver: &'a BundleResolver,
     guest: &str,
@@ -480,6 +483,11 @@ mod tests {
             },
             user_namespace: None,
             umask: None,
+        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
         }
     }
 
@@ -711,7 +719,6 @@ mod trusted_identity_tests {
         let bundle_manifest = Bundle {
             bundle_version: 11,
             schema_version: "v2".to_owned(),
-            privileges_path: "privileges.json".to_owned(),
             storage_path: Some("storage.json".to_owned()),
             realm_workloads_launcher_v2_path: None,
             generation: BundleGeneration {
@@ -856,6 +863,11 @@ mod trusted_identity_tests {
             },
             user_namespace: None,
             umask: None,
+        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
         }
     }
 

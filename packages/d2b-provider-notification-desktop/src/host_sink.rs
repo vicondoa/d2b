@@ -3,7 +3,10 @@
 use crate::{
     GuestSource, NotificationProviderConfig,
     action_nonce::{ActionNonceError, ActionNonceStore},
-    admission::SessionEvidence,
+    admission::{
+        NotificationEndpointGate, NotificationEndpointRole, SessionEvidence,
+        admit_notification_endpoint,
+    },
     redact::SanitizedNotification,
     types::NotificationRequest,
 };
@@ -290,6 +293,70 @@ impl NotificationSink {
             self.projection_idempotency.insert(request_id, key);
         }
         Ok(result)
+    }
+
+    /// Deliver one Guest-source request over an admitted desktop-presentation
+    /// endpoint relationship.
+    ///
+    /// The declared endpoint gate runs first, so a missing, revoked, draining,
+    /// or superseded relationship refuses the delivery before the desktop
+    /// presentation port is touched. There is no second channel: the refusal
+    /// is the delivery's only outcome, and it does not fall through to the
+    /// observer stream or to an unadmitted presentation.
+    ///
+    /// Once admitted, the delivery is the unchanged one: the source and
+    /// observer sessions must both be admitted, the Zone must match, the
+    /// observer must be enabled, the action nonces are minted per observer
+    /// session, and only the opaque action keys cross the presentation
+    /// boundary. The request's content is not an input to the gate, so a
+    /// summary, body, or action label can neither widen the relationship nor
+    /// stand in for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::types::NotificationError::Denied`] when the desktop
+    /// presentation channel carries no admitted relationship, when the
+    /// presented evidence is not the committed evidence, or when either
+    /// session is refused. The refusal code is recorded at the debug level.
+    pub fn deliver_over_endpoint<P: DesktopNotificationPort + ?Sized>(
+        &mut self,
+        port: &mut P,
+        source_session: &SessionEvidence,
+        observer_session: &SessionEvidence,
+        request: NotificationRequest,
+        now_secs: u64,
+        gate: &NotificationEndpointGate<'_>,
+    ) -> Result<NotificationResult, crate::types::NotificationError> {
+        let admitted = match admit_notification_endpoint(gate) {
+            Ok(admitted) if admitted.role() == NotificationEndpointRole::DesktopSink => {
+                admitted
+            }
+            Ok(_) => {
+                debug!(
+                    provider = "notification-desktop",
+                    "delivery refused: admitted relationship is not the desktop presentation channel"
+                );
+                return Err(crate::types::NotificationError::Denied);
+            }
+            Err(refusal) => {
+                debug!(
+                    provider = "notification-desktop",
+                    refusal = refusal.code(),
+                    stage = ?refusal.stage(),
+                    reason = ?refusal.reason(),
+                    "delivery refused: desktop presentation endpoint not admitted"
+                );
+                return Err(crate::types::NotificationError::Denied);
+            }
+        };
+        if !admitted.admits_delivery() {
+            debug!(
+                provider = "notification-desktop",
+                "delivery refused: desktop presentation relationship no longer admits delivery"
+            );
+            return Err(crate::types::NotificationError::Denied);
+        }
+        self.deliver(port, source_session, observer_session, request, now_secs)
     }
 
     /// Deliver after the configured Guest-source category admission.
@@ -756,6 +823,390 @@ mod tests {
         assert_eq!(
             sink.invoke_action(&action_key, &observer, 105),
             Err(ActionNonceError::Unavailable)
+        );
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+    use crate::admission::{
+        NotificationEndpointBinding, NotificationEndpointError, NotificationEndpointEvidence,
+        NotificationEndpointFence, NotificationEndpointPhase, NotificationEndpointRefusal,
+        NotificationHostEndpoints, admit_notification_endpoint, notification_endpoint_bindings,
+        test_observer, test_source,
+    };
+    use crate::types::{ActionSpec, Category, NotificationError};
+    use d2b_contracts_resource::v3::{
+        DesiredRevision, EndpointAttachmentKind, ResourceGeneration, ResourceRef, ResourceUid,
+        StoreIncarnation, ZoneDesiredSequence, ZoneId, identity::ReconnectGeneration,
+    };
+
+    const SOURCE_UID: &str = "aaaaaaaa-0000-4000-8000-000000000001";
+    const CONSUMER_UID: &str = "aaaaaaaa-0000-4000-8000-000000000002";
+    const SOURCE_ENDPOINT: &str = "Endpoint/notification-guest-source";
+    const DESKTOP_ENDPOINT: &str = "Endpoint/notification-desktop-sink";
+    const CONSUMER: &str = "Process/notification-sink";
+
+    /// A presentation port that records every notification it is asked to
+    /// show, so a refused delivery is observable as "nothing was presented".
+    #[derive(Default)]
+    struct RecordingPortForEndpoint {
+        presented: Vec<String>,
+    }
+
+    impl DesktopNotificationPort for RecordingPortForEndpoint {
+        fn activate(&mut self) -> Result<(), SinkError> {
+            Ok(())
+        }
+
+        fn deactivate(&mut self) -> Result<(), SinkError> {
+            Ok(())
+        }
+
+        fn notify(&mut self, notification: &SanitizedNotification) -> Result<u32, SinkError> {
+            self.presented
+                .push(notification.summary().to_owned());
+            Ok(u32::try_from(self.presented.len()).unwrap_or(u32::MAX))
+        }
+    }
+
+    fn endpoints() -> NotificationHostEndpoints {
+        NotificationHostEndpoints::new(
+            ResourceRef::parse(SOURCE_ENDPOINT).expect("endpoint"),
+            ResourceRef::parse(DESKTOP_ENDPOINT).expect("endpoint"),
+        )
+        .expect("declared endpoints")
+    }
+
+    fn consumer() -> ResourceRef {
+        ResourceRef::parse(CONSUMER).expect("consumer")
+    }
+
+    fn fence() -> NotificationEndpointFence {
+        NotificationEndpointFence::new(
+            ZoneId::parse("dev").expect("zone"),
+            StoreIncarnation::parse("store-one").expect("store"),
+            DesiredRevision::INITIAL.try_next().expect("revision"),
+            ZoneDesiredSequence::INITIAL.try_next().expect("sequence"),
+            ResourceGeneration::new(3).expect("source generation"),
+            ResourceGeneration::new(5).expect("consumer generation"),
+            ReconnectGeneration::new(2).expect("reconnect"),
+        )
+    }
+
+    fn evidence(fence: &NotificationEndpointFence) -> NotificationEndpointEvidence {
+        NotificationEndpointEvidence {
+            zone: fence.zone().clone(),
+            store: fence.store().clone(),
+            source_generation: fence.source_generation(),
+            consumer_generation: fence.consumer_generation(),
+            desired_revision: fence.desired_revision(),
+            sequence: fence.sequence(),
+            reconnect: ReconnectGeneration::new(7).expect("reconnect"),
+        }
+    }
+
+    struct Gate {
+        endpoints: NotificationHostEndpoints,
+        consumer: ResourceRef,
+        fence: NotificationEndpointFence,
+        source_uid: ResourceUid,
+        consumer_uid: ResourceUid,
+    }
+
+    impl Gate {
+        fn new() -> Self {
+            Self {
+                endpoints: endpoints(),
+                consumer: consumer(),
+                fence: fence(),
+                source_uid: ResourceUid::parse(SOURCE_UID).expect("source uid"),
+                consumer_uid: ResourceUid::parse(CONSUMER_UID).expect("consumer uid"),
+            }
+        }
+
+        fn gate<'a>(
+            &'a self,
+            binding: &'a NotificationEndpointBinding,
+            fence: &'a NotificationEndpointFence,
+            evidence: &'a NotificationEndpointEvidence,
+        ) -> NotificationEndpointGate<'a> {
+            NotificationEndpointGate {
+                endpoints: &self.endpoints,
+                consumer: &self.consumer,
+                binding,
+                fence,
+                evidence,
+                source_uid: &self.source_uid,
+                consumer_uid: &self.consumer_uid,
+            }
+        }
+    }
+
+    fn desktop_binding() -> NotificationEndpointBinding {
+        notification_endpoint_bindings(&endpoints(), &consumer())
+            .expect("bindings")
+            .into_iter()
+            .find(|binding| binding.role() == NotificationEndpointRole::DesktopSink)
+            .expect("desktop binding")
+    }
+
+    #[test]
+    fn an_admitted_presentation_endpoint_delivers_the_unchanged_request() {
+        let owned = Gate::new();
+        let binding = desktop_binding();
+        let live = evidence(&owned.fence);
+        let gate = owned.gate(&binding, &owned.fence, &live);
+        let mut sink = NotificationSink::new(8, 8, 120);
+        let mut port = RecordingPortForEndpoint::default();
+        let request = NotificationRequest::new("summary", "body", Category::SystemInfo)
+            .expect("request");
+
+        let result = sink
+            .deliver_over_endpoint(
+                &mut port,
+                &test_source("one"),
+                &test_observer("alice"),
+                request,
+                10,
+                &gate,
+            )
+            .expect("delivery");
+
+        assert!(matches!(result, NotificationResult::Accepted { .. }));
+        assert_eq!(port.presented, vec!["summary".to_owned()]);
+    }
+
+    #[test]
+    fn a_withdrawn_presentation_endpoint_stops_delivery_and_presents_nothing() {
+        let owned = Gate::new();
+        let binding = desktop_binding();
+        let revoked = owned.fence.clone().revoke();
+        let stale = evidence(&revoked);
+        let gate = owned.gate(&binding, &revoked, &stale);
+        let mut sink = NotificationSink::new(8, 8, 120);
+        let mut port = RecordingPortForEndpoint::default();
+        let request = NotificationRequest::new("summary", "body", Category::SystemInfo)
+            .expect("request");
+
+        let result = sink.deliver_over_endpoint(
+            &mut port,
+            &test_source("one"),
+            &test_observer("alice"),
+            request,
+            10,
+            &gate,
+        );
+
+        assert_eq!(result, Err(NotificationError::Denied));
+        assert!(
+            port.presented.is_empty(),
+            "a withdrawn endpoint presented on another channel"
+        );
+    }
+
+    #[test]
+    fn a_guest_source_relationship_cannot_present_on_the_desktop_channel() {
+        let owned = Gate::new();
+        let guest_binding = notification_endpoint_bindings(&endpoints(), &consumer())
+            .expect("bindings")
+            .into_iter()
+            .find(|binding| binding.role() == NotificationEndpointRole::GuestSource)
+            .expect("guest binding");
+        let live = evidence(&owned.fence);
+        let gate = owned.gate(&guest_binding, &owned.fence, &live);
+        let mut sink = NotificationSink::new(8, 8, 120);
+        let mut port = RecordingPortForEndpoint::default();
+        let request = NotificationRequest::new("summary", "body", Category::SystemInfo)
+            .expect("request");
+
+        let result = sink.deliver_over_endpoint(
+            &mut port,
+            &test_source("one"),
+            &test_observer("alice"),
+            request,
+            10,
+            &gate,
+        );
+
+        assert_eq!(result, Err(NotificationError::Denied));
+        assert!(port.presented.is_empty());
+    }
+
+    #[test]
+    fn notification_content_cannot_become_the_relationship_authority() {
+        const CANARY: &str = "notif-authority-canary-3c91";
+        let owned = Gate::new();
+        let declared = desktop_binding();
+        let live = evidence(&owned.fence);
+        let gate = owned.gate(&declared, &owned.fence, &live);
+        let mut sink = NotificationSink::new(8, 8, 120);
+        let mut port = RecordingPortForEndpoint::default();
+        let hostile = NotificationRequest::new(
+            NotificationEndpointRole::DesktopSink.purpose(),
+            NotificationEndpointRole::DesktopSink.slot(),
+            Category::SystemInfo,
+        )
+        .expect("request")
+        .with_actions(vec![
+            ActionSpec::new(CANARY, NotificationEndpointRole::DesktopSink.slot())
+                .expect("action"),
+        ])
+        .expect("actions")
+        .with_idempotency_key(NotificationEndpointRole::DesktopSink.slot())
+        .expect("idempotency key");
+
+        let result = sink
+            .deliver_over_endpoint(
+                &mut port,
+                &test_source("one"),
+                &test_observer("alice"),
+                hostile,
+                10,
+                &gate,
+            )
+            .expect("delivery");
+
+        // The relationship the delivery ran under is the declared one, byte for
+        // byte, and no content field reached it.
+        let again = desktop_binding();
+        assert_eq!(declared.request(), again.request());
+        assert_eq!(
+            declared.request().purpose().as_str(),
+            NotificationEndpointRole::DesktopSink.purpose()
+        );
+        assert_eq!(
+            declared.request().slot().as_str(),
+            NotificationEndpointRole::DesktopSink.slot()
+        );
+        let rendered = format!("{:?}", declared.request());
+        assert!(!rendered.contains(CANARY));
+        // The opaque action capability is issued for the observer session, not
+        // for the action's own label.
+        let NotificationResult::Accepted { action_nonces, .. } = result else {
+            panic!("delivery accepted");
+        };
+        let issued = action_nonces.get(CANARY).expect("action key");
+        assert!(!issued.contains(CANARY));
+        assert_ne!(issued, NotificationEndpointRole::DesktopSink.slot());
+    }
+
+    #[test]
+    fn the_gate_refuses_foreign_and_stale_evidence_before_any_presentation() {
+        let owned = Gate::new();
+        let binding = desktop_binding();
+        let mut refused = Vec::new();
+
+        let foreign = NotificationEndpointEvidence {
+            zone: ZoneId::parse("other").expect("zone"),
+            ..evidence(&owned.fence)
+        };
+        let gate = owned.gate(&binding, &owned.fence, &foreign);
+        refused.push(
+            admit_notification_endpoint(&gate)
+                .expect_err("foreign zone")
+                .code()
+                .to_owned(),
+        );
+
+        let mut stale_reconnect = evidence(&owned.fence);
+        stale_reconnect.reconnect = ReconnectGeneration::new(1).expect("reconnect");
+        let gate = owned.gate(&binding, &owned.fence, &stale_reconnect);
+        refused.push(
+            admit_notification_endpoint(&gate)
+                .expect_err("stale reconnect")
+                .code()
+                .to_owned(),
+        );
+
+        let draining = owned.fence.clone().drain();
+        let draining_evidence = evidence(&draining);
+        let gate = owned.gate(&binding, &draining, &draining_evidence);
+        refused.push(
+            admit_notification_endpoint(&gate)
+                .expect_err("draining")
+                .code()
+                .to_owned(),
+        );
+
+        assert_eq!(
+            refused,
+            vec![
+                "notification-endpoint-foreign-zone",
+                "notification-endpoint-stale-reconnect-generation",
+                "notification-endpoint-relationship-draining",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_relationship_over_another_endpoint_is_a_conflicting_declaration() {
+        let owned = Gate::new();
+        let live = evidence(&owned.fence);
+        let declared = desktop_binding();
+        // Swap the declared presentation endpoint for the guest-source one.
+        let forged_endpoints = NotificationHostEndpoints::new(
+            ResourceRef::parse(SOURCE_ENDPOINT).expect("endpoint"),
+            ResourceRef::parse(SOURCE_ENDPOINT).expect("endpoint"),
+        )
+        .expect("endpoints");
+        let forged = notification_endpoint_bindings(&forged_endpoints, &consumer())
+            .expect("bindings")
+            .into_iter()
+            .find(|binding| binding.role() == NotificationEndpointRole::DesktopSink)
+            .expect("desktop binding");
+        assert_ne!(forged.request(), declared.request());
+
+        let gate = NotificationEndpointGate {
+            endpoints: &owned.endpoints,
+            consumer: &owned.consumer,
+            binding: &forged,
+            fence: &owned.fence,
+            evidence: &live,
+            source_uid: &owned.source_uid,
+            consumer_uid: &owned.consumer_uid,
+        };
+        assert_eq!(
+            admit_notification_endpoint(&gate).map_err(NotificationEndpointRefusal::code),
+            Err("notification-endpoint-request-mismatch")
+        );
+        assert!(owned.endpoints.source_ref(NotificationEndpointRole::DesktopSink) != forged.source_ref());
+    }
+
+    #[test]
+    fn every_declared_stream_carries_its_own_slot_and_purpose() {
+        let bindings = notification_endpoint_bindings(&endpoints(), &consumer()).expect("bindings");
+        let slots: Vec<&str> = bindings
+            .iter()
+            .map(|binding| binding.request().slot().as_str())
+            .collect();
+        assert_eq!(
+            slots,
+            vec![
+                NotificationEndpointRole::GuestSource.slot(),
+                NotificationEndpointRole::DesktopSink.slot()
+            ]
+        );
+        for binding in &bindings {
+            assert_eq!(binding.request().purpose().as_str(), binding.role().purpose());
+            assert_eq!(binding.request().slot().as_str(), binding.role().slot());
+            assert_eq!(binding.role().attachment(), EndpointAttachmentKind::Connect);
+            assert_eq!(
+                NotificationEndpointRole::ALL
+                    .iter()
+                    .filter(|role| role.stream() == binding.role().stream())
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(
+            NotificationEndpointPhase::Admitted,
+            NotificationEndpointPhase::Admitted
+        );
+        assert_eq!(
+            NotificationEndpointError::SourceNotEndpoint.to_string(),
+            "notification-endpoint-source-invalid"
         );
     }
 }

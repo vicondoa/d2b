@@ -1,8 +1,10 @@
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{BindingLifecycleState, ResourceRef};
 use d2b_provider_guest_qemu_media::{
-    DeviceObservation, DevicePhase, GuestProviderSpecSettings, LaunchTicket, PlatformClass,
-    ProcessIdentity, ProviderConfig, QemuMediaController, QemuMediaEffectPort, QemuMediaError,
-    QemuMediaPhase, QemuMediaReconcileOutcome, QemuMediaRecoveryState,
+    DeviceObservation, DevicePhase, GuestMediaBindings, GuestProviderSpecSettings,
+    ImplementationLeg, LaunchTicket, MediaAdmissionError, PlatformClass, ProcessIdentity,
+    ProviderConfig,
+    QemuMediaController, QemuMediaEffectPort, QemuMediaError, QemuMediaPhase,
+    QemuMediaReconcileOutcome, QemuMediaRecoveryState, test_fixtures,
 };
 
 #[derive(Default)]
@@ -13,17 +15,15 @@ struct FakeEffect {
     events: Vec<&'static str>,
     launch_slots: Vec<String>,
     stop_clears_observation: bool,
+    legs: Vec<ImplementationLeg>,
+    detached_legs: usize,
 }
 
 impl QemuMediaEffectPort for FakeEffect {
     fn launch(&mut self, ticket: &LaunchTicket) -> Result<ProcessIdentity, QemuMediaError> {
         self.launched += 1;
         self.events.push("launch");
-        self.launch_slots = ticket
-            .attachments
-            .iter()
-            .map(|attachment| attachment.slot.clone())
-            .collect();
+        self.launch_slots = ticket.attachments.labels().iter().map(|label| (*label).to_owned()).collect();
         let identity = ProcessIdentity::for_test("qemu-media-runner");
         self.observed = Some(identity.clone());
         Ok(identity)
@@ -45,6 +45,19 @@ impl QemuMediaEffectPort for FakeEffect {
         _owner_ref: &ResourceRef,
     ) -> Result<(), QemuMediaError> {
         self.events.push("reserve-device");
+        Ok(())
+    }
+
+    fn attach_implementation_leg(&mut self, leg: &ImplementationLeg) -> Result<(), QemuMediaError> {
+        self.legs.push(leg.clone());
+        self.events.push("attach-leg");
+        Ok(())
+    }
+
+    fn detach_implementation_legs(&mut self) -> Result<(), QemuMediaError> {
+        self.detached_legs = self.legs.len();
+        self.legs.clear();
+        self.events.push("detach-legs");
         Ok(())
     }
 
@@ -88,8 +101,8 @@ fn config() -> ProviderConfig {
     .unwrap()
 }
 
-#[test]
-fn launch_ticket_rejects_duplicate_media_attachments_before_effects() {
+fn controller() -> QemuMediaController<FakeEffect> {
+    let settings = GuestProviderSpecSettings::default();
     let process = d2b_provider_guest_qemu_media::build_process_spec(
         ResourceRef::parse("Host/host-system").unwrap(),
         ResourceRef::parse("Volume/runtime").unwrap(),
@@ -97,12 +110,68 @@ fn launch_ticket_rejects_duplicate_media_attachments_before_effects() {
         Vec::<ResourceRef>::new(),
     )
     .unwrap();
-    let media = ResourceRef::parse("Volume/boot").unwrap();
-    assert!(LaunchTicket::new(process, [media.clone(), media], None).is_err());
+    QemuMediaController::new(
+        config(),
+        settings,
+        process,
+        ResourceRef::parse("Guest/media-vm").unwrap(),
+    )
+    .unwrap()
 }
 
-fn controller() -> QemuMediaController<FakeEffect> {
-    let settings = GuestProviderSpecSettings::default();
+/// The Guest's admitted relationship set: the KVM acceleration Device and one
+/// boot media Volume, which is exactly what this Guest's own spec requires.
+fn bindings() -> GuestMediaBindings {
+    let guest = ResourceRef::parse("Guest/media-vm").unwrap();
+    let consumer = test_fixtures::guest_uid();
+    GuestMediaBindings::new(
+        test_fixtures::zone(),
+        consumer.clone(),
+        [
+            test_fixtures::admitted(
+                test_fixtures::kvm_request(&guest),
+                &test_fixtures::uid(2),
+                &consumer,
+            ),
+            test_fixtures::admitted(
+                test_fixtures::media_request(&guest, "boot", 0),
+                &test_fixtures::uid(3),
+                &consumer,
+            ),
+        ],
+    )
+}
+
+/// A controller whose Guest declared a boot media Volume, so its spec
+/// requires the media relationship alongside the KVM Device.
+fn media_controller() -> QemuMediaController<FakeEffect> {
+    let settings = GuestProviderSpecSettings {
+        boot_media_ref: Some(ResourceRef::parse("Volume/boot").unwrap()),
+        ..GuestProviderSpecSettings::default()
+    };
+    let process = d2b_provider_guest_qemu_media::build_process_spec(
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("Volume/runtime").unwrap(),
+        Some(ResourceRef::parse("Device/host-kvm").unwrap()),
+        Vec::<ResourceRef>::new(),
+    )
+    .unwrap();
+    QemuMediaController::new(
+        config(),
+        settings,
+        process,
+        ResourceRef::parse("Guest/media-vm").unwrap(),
+    )
+    .unwrap()
+}
+
+/// A controller whose Guest declared a host display window, so its spec
+/// requires the display Endpoint alongside the KVM and media relationships.
+fn display_controller() -> QemuMediaController<FakeEffect> {
+    let settings = GuestProviderSpecSettings {
+        display_window: true,
+        ..GuestProviderSpecSettings::default()
+    };
     let process = d2b_provider_guest_qemu_media::build_process_spec(
         ResourceRef::parse("Host/host-system").unwrap(),
         ResourceRef::parse("Volume/runtime").unwrap(),
@@ -142,13 +211,11 @@ fn ready_requires_process_device_and_qmp_health() {
     assert_eq!(controller.phase(), QemuMediaPhase::Pending);
 
     let device = device();
-    let mut deps = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
-    deps.media_refs = vec![ResourceRef::parse("Volume/boot-media").unwrap()];
-    deps.display_ref = Some(ResourceRef::parse("Endpoint/display").unwrap());
+    let deps = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     let ready = controller.reconcile(&deps, &mut effect).unwrap();
     assert_eq!(ready, QemuMediaReconcileOutcome::Ready);
     assert_eq!(controller.phase(), QemuMediaPhase::PausedAtBoot);
-    assert_eq!(effect.launch_slots, vec!["kvm", "media-0", "display"]);
+    assert_eq!(effect.launch_slots, vec!["kvm", "media-0"]);
 }
 
 #[test]
@@ -156,7 +223,7 @@ fn pause_at_boot_is_initial_proof_then_running_is_ready() {
     let mut controller = controller();
     let mut effect = FakeEffect::default();
     let device = device();
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
 
     assert_eq!(
         controller.reconcile(&dependencies, &mut effect).unwrap(),
@@ -172,7 +239,13 @@ fn pause_at_boot_is_initial_proof_then_running_is_ready() {
     assert_eq!(controller.phase(), QemuMediaPhase::Ready);
     assert_eq!(
         effect.events,
-        vec!["reserve-device", "launch", "open-pidfd"]
+        vec![
+            "reserve-device",
+            "attach-leg",
+            "attach-leg",
+            "launch",
+            "open-pidfd"
+        ]
     );
 }
 
@@ -181,7 +254,7 @@ fn pause_at_boot_rejects_running_before_pause_proof() {
     let mut controller = controller();
     let mut effect = FakeEffect::default();
     let device = device();
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     dependencies.qmp_status = Some(d2b_provider_guest_qemu_media::QmpVmStatus::Running);
 
     assert_eq!(
@@ -193,7 +266,13 @@ fn pause_at_boot_rejects_running_before_pause_proof() {
     assert_eq!(controller.phase(), QemuMediaPhase::Degraded);
     assert_eq!(
         effect.events,
-        vec!["reserve-device", "launch", "open-pidfd"]
+        vec![
+            "reserve-device",
+            "attach-leg",
+            "attach-leg",
+            "launch",
+            "open-pidfd"
+        ]
     );
 }
 
@@ -207,7 +286,7 @@ fn matching_restart_process_is_adopted_without_launch() {
         ..FakeEffect::default()
     };
     let device = device();
-    let deps = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
+    let deps = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     controller.set_expected_identity(identity);
     assert_eq!(
         controller.reconcile(&deps, &mut effect).unwrap(),
@@ -247,7 +326,7 @@ fn qmp_timeout_retains_authority_until_process_exit_is_proven() {
     let mut effect = FakeEffect::default();
     let mut device = device();
     device.authority_key = [9; 32];
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
     dependencies.qmp_elapsed_seconds = 30;
@@ -260,7 +339,14 @@ fn qmp_timeout_retains_authority_until_process_exit_is_proven() {
     );
     assert_eq!(
         effect.events,
-        vec!["reserve-device", "launch", "open-pidfd", "stop"]
+        vec![
+            "reserve-device",
+            "attach-leg",
+            "attach-leg",
+            "launch",
+            "open-pidfd",
+            "stop"
+        ]
     );
     assert!(controller.recovery_state().authority_reserved);
 
@@ -270,10 +356,13 @@ fn qmp_timeout_retains_authority_until_process_exit_is_proven() {
         effect.events,
         vec![
             "reserve-device",
+            "attach-leg",
+            "attach-leg",
             "launch",
             "open-pidfd",
             "stop",
             "close-media",
+            "detach-legs",
             "release-device",
             "delete-volume",
         ]
@@ -286,7 +375,7 @@ fn failed_qmp_timeout_does_not_adopt_a_stopping_runner() {
     let mut effect = FakeEffect::default();
     let mut device = device();
     device.authority_key = [9; 32];
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
     dependencies.qmp_elapsed_seconds = 30;
@@ -322,7 +411,7 @@ fn failed_qmp_timeout_with_exit_proven_does_not_rereserve_on_reconcile() {
     };
     let mut device = device();
     device.authority_key = [9; 32];
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
     dependencies.qmp_elapsed_seconds = 30;
@@ -339,6 +428,8 @@ fn failed_qmp_timeout_with_exit_proven_does_not_rereserve_on_reconcile() {
         effect.events,
         vec![
             "reserve-device",
+            "attach-leg",
+            "attach-leg",
             "launch",
             "open-pidfd",
             "stop",
@@ -358,6 +449,8 @@ fn failed_qmp_timeout_with_exit_proven_does_not_rereserve_on_reconcile() {
         effect.events,
         vec![
             "reserve-device",
+            "attach-leg",
+            "attach-leg",
             "launch",
             "open-pidfd",
             "stop",
@@ -370,11 +463,14 @@ fn failed_qmp_timeout_with_exit_proven_does_not_rereserve_on_reconcile() {
         effect.events,
         vec![
             "reserve-device",
+            "attach-leg",
+            "attach-leg",
             "launch",
             "open-pidfd",
             "stop",
             "release-device",
             "close-media",
+            "detach-legs",
             "delete-volume",
         ]
     );
@@ -400,7 +496,7 @@ fn adopted_runner_qmp_timeout_uses_health_retry_not_launch_age() {
     controller.set_expected_identity(identity);
     let mut device = device();
     device.authority_key = [9; 32];
-    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
+    let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device, Some(bindings()));
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
     dependencies.qmp_elapsed_seconds = 30;
@@ -428,4 +524,189 @@ fn finalized_recovery_state_cannot_retain_device_authority() {
         .unwrap()
         .recovery_state();
     assert!(!restored.authority_reserved);
+}
+
+/// Scenario 2 through the controller: a Guest whose own spec requires a KVM,
+/// media, or display relationship the graph did not admit refuses preparation
+/// and mutates nothing at all - no authority reserved, no leg attached, no
+/// process launched.
+#[test]
+fn a_missing_admitted_binding_refuses_preparation_without_mutation() {
+    let guest = ResourceRef::parse("Guest/media-vm").unwrap();
+    let consumer = test_fixtures::guest_uid();
+
+    for (label, relationships) in [
+        (
+            "kvm",
+            vec![test_fixtures::admitted(
+                test_fixtures::media_request(&guest, "boot", 0),
+                &test_fixtures::uid(3),
+                &consumer,
+            )],
+        ),
+        (
+            "media",
+            vec![test_fixtures::admitted(
+                test_fixtures::kvm_request(&guest),
+                &test_fixtures::uid(2),
+                &consumer,
+            )],
+        ),
+    ] {
+        let mut controller = media_controller();
+        let mut effect = FakeEffect::default();
+        let dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(
+            device(),
+            Some(GuestMediaBindings::new(
+                test_fixtures::zone(),
+                consumer.clone(),
+                relationships,
+            )),
+        );
+        let error = controller.reconcile(&dependencies, &mut effect).unwrap_err();
+        assert!(
+            matches!(&error, QemuMediaError::Binding(MediaAdmissionError::MissingBinding)),
+            "{label} binding absence reported {error:?}"
+        );
+        assert!(
+            effect.events.is_empty(),
+            "{label} binding absence mutated {events:?}",
+            events = effect.events
+        );
+        assert_eq!(effect.launched, 0);
+        assert_eq!(effect.legs.len(), 0);
+        // A refused preparation does not advance the lifecycle either.
+        assert_eq!(controller.phase(), QemuMediaPhase::Pending);
+    }
+
+    // A display window the Guest declared but whose endpoint was not admitted
+    // is refused on the same terms.
+    let mut controller = display_controller();
+    let mut effect = FakeEffect::default();
+    let dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(
+        device(),
+        Some(GuestMediaBindings::new(test_fixtures::zone(), consumer, [])),
+    );
+    assert!(matches!(
+        controller.reconcile(&dependencies, &mut effect),
+        Err(QemuMediaError::Binding(MediaAdmissionError::MissingBinding))
+    ));
+    assert!(effect.events.is_empty());
+    assert_eq!(effect.launched, 0);
+}
+
+/// Scenario 2, second half: a relationship whose source decision no longer
+/// matches the committed rows refuses preparation just as a missing one does.
+#[test]
+fn a_stale_admitted_binding_refuses_preparation_without_mutation() {
+    let guest = ResourceRef::parse("Guest/media-vm").unwrap();
+    let consumer = test_fixtures::guest_uid();
+    let mut controller = controller();
+    let mut effect = FakeEffect::default();
+    let dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(
+        device(),
+        Some(GuestMediaBindings::new(
+            test_fixtures::zone(),
+            consumer.clone(),
+            [
+                test_fixtures::admitted_with(
+                    test_fixtures::kvm_request(&guest),
+                    &test_fixtures::uid(2),
+                    &consumer,
+                    None,
+                    BindingLifecycleState::Released,
+                ),
+                test_fixtures::admitted(
+                    test_fixtures::media_request(&guest, "boot", 0),
+                    &test_fixtures::uid(3),
+                    &consumer,
+                ),
+            ],
+        )),
+    );
+    assert!(matches!(
+        controller.reconcile(&dependencies, &mut effect),
+        Err(QemuMediaError::Binding(MediaAdmissionError::StaleAuthority))
+    ));
+    assert!(effect.events.is_empty());
+    assert_eq!(effect.launched, 0);
+}
+
+/// Scenario 3 through the controller: the runner is attached to the Guest's
+/// own reservation as a leg, and the controller never asks for a second
+/// reservation on the runner's behalf.
+#[test]
+fn the_runner_holds_a_leg_on_the_guests_own_reservation() {
+    let mut controller = controller();
+    let mut effect = FakeEffect::default();
+    let dependencies =
+        d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device(), Some(bindings()));
+    assert_eq!(
+        controller.reconcile(&dependencies, &mut effect).unwrap(),
+        QemuMediaReconcileOutcome::Ready
+    );
+
+    // One reservation for the Guest, one leg per admitted descriptor, and the
+    // only reservation call the controller made is the Host-global Device
+    // authority it already made before this unit's work.
+    assert_eq!(
+        effect.events,
+        vec!["reserve-device", "attach-leg", "attach-leg", "launch", "open-pidfd"]
+    );
+    assert_eq!(effect.legs.len(), effect.launch_slots.len());
+    let kvm_leg = &effect.legs[0];
+    assert_eq!(kvm_leg.parent.kind(), d2b_contracts_resource::v3::BindingKind::Device);
+    assert_eq!(kvm_leg.parent.consumer_ref().resource_type().as_str(), "Guest");
+    assert_eq!(
+        kvm_leg.reservation.source_uid(),
+        kvm_leg.parent.source_uid(),
+        "the leg must hold the parent's source, never one of its own"
+    );
+    let media_leg = &effect.legs[1];
+    assert_eq!(media_leg.parent.kind(), d2b_contracts_resource::v3::BindingKind::Volume);
+    assert_ne!(media_leg.identity, kvm_leg.identity);
+
+    // A second reconcile re-adopts the running process and attaches no new
+    // reservation and no duplicate leg.
+    assert_eq!(
+        controller.reconcile(&dependencies, &mut effect).unwrap(),
+        QemuMediaReconcileOutcome::Ready
+    );
+    assert_eq!(effect.legs.len(), 2);
+    assert_eq!(effect.launched, 1);
+}
+
+/// Scenario 4: shutdown closes the consumer's descriptors, drops the runner's
+/// legs, stops the process, and only then releases the source.
+#[test]
+fn shutdown_closes_consumer_descriptors_before_releasing_the_source() {
+    let mut controller = controller();
+    let mut effect = FakeEffect {
+        stop_clears_observation: true,
+        ..FakeEffect::default()
+    };
+    let dependencies =
+        d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device(), Some(bindings()));
+    assert_eq!(
+        controller.reconcile(&dependencies, &mut effect).unwrap(),
+        QemuMediaReconcileOutcome::Ready
+    );
+    let leg_count = effect.legs.len();
+    assert_eq!(leg_count, 2);
+    effect.events.clear();
+
+    controller.finalize(&mut effect).unwrap();
+    assert_eq!(
+        effect.events,
+        vec![
+            "close-media",
+            "detach-legs",
+            "stop",
+            "release-device",
+            "delete-volume",
+        ]
+    );
+    assert_eq!(effect.detached_legs, leg_count);
+    assert!(effect.legs.is_empty());
+    assert_eq!(controller.phase(), QemuMediaPhase::Finalized);
 }

@@ -35,19 +35,30 @@ pub const PROVIDER_REF: &str = "Provider/volume-virtiofs";
 mod controller;
 mod error;
 mod bindings;
+mod facets;
 mod port;
 mod socket_path;
 mod worker;
 
 pub mod testing;
 
-pub use controller::{VirtiofsBindingController, VIRTIOFS_REPAIR_INTERVAL_SECS};
+pub use controller::{
+    CONTROLLER_IDENTITY, VirtiofsBindingController, VIRTIOFS_REPAIR_INTERVAL_SECS,
+};
 pub use error::VirtiofsBindingError;
 pub use bindings::{
-    VOLUME_BINDING_FINALIZER, VOLUME_BINDING_RESOURCE_TYPE, SocketIdentity, StoredBinding,
+    ServingSource, SocketIdentity, StoredBinding, VOLUME_BINDING_FINALIZER,
+    VOLUME_BINDING_RESOURCE_TYPE,
+};
+pub use facets::{
+    UnwiredVirtiofsServing, VirtiofsServingAnswer, VirtiofsServingDispatch,
+    VirtiofsServingError, VirtiofsServingObservation, VirtiofsServingRequest, VirtiofsServingVerb,
 };
 pub use port::{
-    BindingPhase, BindingStatusReport, LaunchedWorker, VirtiofsBindingEffectPort,
+    BindingPhase, BindingStatusReport, LaunchedWorker, MountObservation, ServingWorkerLaunch,
+    VirtiofsBindingEffectPort, VirtiofsBindingPort,
 };
-pub use socket_path::MAX_SOCKET_PATH_BYTES;
-pub use worker::{VirtiofsdWorkerPlan, WORKER_TEMPLATE};
+pub use socket_path::{MAX_SOCKET_PATH_BYTES, SocketPathRefusal, derive_serving_socket_path};
+pub use worker::{
+    PRESENTATION_CAPABILITY, SETUP_RESTRICTIONS, VirtiofsdWorkerPlan, WORKER_TEMPLATE,
+};

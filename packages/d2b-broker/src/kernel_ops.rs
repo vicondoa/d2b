@@ -27,10 +27,18 @@ use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::{CanonicalJsonObject, CanonicalJsonValue};
+use std::collections::BTreeSet;
+
+use d2b_contracts_resource::v3::{
+    BindingRealizationFacet, CanonicalJsonObject, CanonicalJsonValue,
+};
+use d2b_core::execution_plan::{ExecutionPlan, PlannedDestination};
+use d2b_core::sandbox_profile::{BindMount, CgroupPlacement, MountPolicy, NamespaceSet, WritablePath};
 
 use crate::envelope::{DirectInvocation, DispatchFailure, DispatchOutcome, HandlerTable};
-use crate::ops::spawn_runner::{SpawnRunnerPlanInput, UserNamespaceSpec};
+use crate::ops::spawn_runner::{
+    PresentationRealization, SpawnRunnerPlanInput, UserNamespaceSpec, realize_presentation,
+};
 use crate::ops::state_dir::{DirKind, PrepareDirRequest};
 
 /// The committed broker-generic kernel rows this table serves.
@@ -731,6 +739,234 @@ async fn complete_cell(invocation: &DirectInvocation<'_>) -> Result<DispatchOutc
 /// key always derive the same identity.
 pub(crate) fn cell_identity(payload: &CanonicalJsonObject) -> Result<String, DispatchFailure> {
     serde_json::to_string(payload).map_err(|error| errored(format!("cell identity: {error}")))
+}
+
+
+// ---------------------------------------------------------------------------
+// The admitted effect seam (U10, KTD8)
+// ---------------------------------------------------------------------------
+
+/// The committed broker-generic operation that realizes a process-family
+/// launch from a resolved plan.
+///
+/// The row name is the one the generated operation catalogue already serves,
+/// so the admitted-effect path and the legacy kernel row name the same effect
+/// rather than introducing a second namespace.
+pub const ADMITTED_EFFECT_SPAWN: &str = SPAWN_PROCESS;
+
+/// The trusted launch template one verified deployment row contributes.
+///
+/// Everything here is deployment data resolved by the broker from the
+/// verified bundle: the confinement the role runs under and the cgroup it is
+/// placed in. It is deliberately *not* the source, the destination, the
+/// view, the identity, the program, the arguments, or the environment -
+/// those come from the resolved plan, so a template can bound what an effect
+/// runs as but cannot decide what it is allowed to reach.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedLaunchTemplate {
+    /// The namespace classes the verified role row declares.
+    pub namespaces: NamespaceSet,
+    /// The host capability classes the verified role row declares.
+    pub capabilities: Vec<String>,
+    /// The verified seccomp policy reference, when the role declares one.
+    pub seccomp_policy_ref: Option<String>,
+    /// The role's own read-only and device surface.
+    pub mount_policy: MountPolicy,
+    /// The cgroup subtree the role is placed in.
+    pub cgroup_placement: CgroupPlacement,
+    /// Whether the verified row carries an explicit root carve-out.
+    pub root_carve_out: bool,
+    /// The file-creation mask the role installs before exec.
+    pub umask: Option<u32>,
+    /// The presentation realization the trusted implementation declares.
+    ///
+    /// This is the provider's declared capability, not a role-row field: the
+    /// broker must not infer how a launch presents its admitted sources from
+    /// the role that happens to request it.
+    pub presentation: PresentationRealization,
+}
+
+/// Why one admitted plan could not be resolved into a launch posture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchRefusal {
+    /// The plan's `Operation` is not the launch operation.
+    NotALaunchEffect,
+    /// The plan carries no admitted identity, so the launch has no resolved
+    /// uid, gid, or group set.
+    IdentityUnproven,
+    /// The plan names a presentation facet its destinations do not realize,
+    /// so a mount the effect depends on would silently be skipped.
+    PresentationUnsupported,
+    /// A resolved destination has no source behind it.
+    SourceUnproven,
+    /// The declared presentation realization cannot realize what the plan's
+    /// destinations ask for, so the launch would silently skip a mount the
+    /// effect depends on.
+    PresentationRefused,
+}
+
+impl LaunchRefusal {
+    /// The closed code one launch refusal is reported under.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::NotALaunchEffect => "launch-not-a-launch-effect",
+            Self::IdentityUnproven => "launch-identity-unproven",
+            Self::PresentationUnsupported => "launch-presentation-unsupported",
+            Self::SourceUnproven => "launch-source-unproven",
+            Self::PresentationRefused => "launch-presentation-refused",
+        }
+    }
+}
+
+impl core::fmt::Display for LaunchRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let text = match self {
+            Self::NotALaunchEffect => "the plan does not resolve a process launch",
+            Self::IdentityUnproven => "the plan carries no admitted identity",
+            Self::PresentationUnsupported => {
+                "the plan names a presentation its resolved destinations do not realize"
+            }
+            Self::SourceUnproven => "a resolved destination has no source behind it",
+            Self::PresentationRefused => {
+                "the declared realization cannot present what the plan's destinations ask for"
+            }
+        };
+        formatter.write_str(text)
+    }
+}
+
+impl std::error::Error for LaunchRefusal {}
+
+/// The exact source path one resolved destination presents.
+///
+/// A destination the plan resolved with no matching source is refused rather
+/// than rendered as an empty or invented path: a mount of nothing is not a
+/// mount.
+///
+/// # Errors
+///
+/// Returns [`LaunchRefusal::SourceUnproven`] when no resolved source backs
+/// the destination's presentation.
+fn source_backing(
+    plan: &ExecutionPlan,
+    destination: &PlannedDestination,
+) -> Result<String, LaunchRefusal> {
+    plan.sources()
+        .iter()
+        .find(|source| source.backing().facet() == destination.presentation())
+        .map(|source| source.backing_path().as_path().display().to_string())
+        .ok_or(LaunchRefusal::SourceUnproven)
+}
+
+/// Resolve one admitted plan into the launch posture the broker runs.
+///
+/// This is the replacement for parsing a launch posture out of a request
+/// payload. Every authority-bearing value - the program, the arguments, the
+/// environment, the uid, the gid, the groups, the user namespace, and each
+/// private mount point - is read from the resolved [`ExecutionPlan`], which
+/// admission derived from the accepted graph and the trusted implementation
+/// contract. The template contributes only the confinement and the placement,
+/// which the verified role row owns.
+///
+/// A presentation the plan's resolved destinations do not realize is refused
+/// rather than skipped: a launch that silently ignored a requested mount
+/// would report success for a capability the consumer does not have.
+///
+/// # Errors
+///
+/// Returns [`LaunchRefusal::NotALaunchEffect`] when the plan's `Operation`
+/// is not the launch operation, [`LaunchRefusal::IdentityUnproven`] when the
+/// plan carries no admitted identity, and
+/// [`LaunchRefusal::PresentationUnsupported`] when a leg depends on a
+/// presentation facet no resolved destination applies, and
+/// [`LaunchRefusal::SourceUnproven`] when a resolved destination has no
+/// source behind it.
+pub fn launch_posture(
+    plan: &ExecutionPlan,
+    template: &TrustedLaunchTemplate,
+    private_execution_root: &std::path::Path,
+) -> Result<SpawnRunnerPlanInput, LaunchRefusal> {
+    if plan.executable().template().as_str() != ADMITTED_EFFECT_SPAWN {
+        return Err(LaunchRefusal::NotALaunchEffect);
+    }
+    let identity = plan.identity().ok_or(LaunchRefusal::IdentityUnproven)?;
+
+    // Every presentation facet a leg depends on must be applied by one of the
+    // destinations the plan resolved. This is the difference between an
+    // applied mount and a skipped one.
+    let applied: BTreeSet<BindingRealizationFacet> = plan
+        .destinations()
+        .iter()
+        .map(PlannedDestination::presentation)
+        .collect();
+    if plan
+        .legs()
+        .iter()
+        .flat_map(|leg| leg.presentation().iter().copied())
+        .any(|facet| !applied.contains(&facet))
+    {
+        return Err(LaunchRefusal::PresentationUnsupported);
+    }
+
+    // The plan's resolved destinations become the launch's own mount
+    // entries: the exact source path the broker resolved, at the exact
+    // private mount point it resolved for this consumer. Nothing here comes
+    // from the invocation.
+    let mut mount_policy = template.mount_policy.clone();
+    for destination in plan.destinations() {
+        let src = source_backing(plan, destination)?;
+        let dst = destination.path().as_path().to_string_lossy().into_owned();
+        if destination.read_only() {
+            mount_policy.bind_mounts.push(BindMount { src, dst });
+        } else {
+            let presentation = format!("{:?}", destination.presentation());
+            mount_policy.writable_paths.push(WritablePath {
+                path: dst,
+                purpose: format!("Admitted {presentation} presentation"),
+            });
+        }
+    }
+    // KTD11: the realization is the trusted implementation's DECLARED
+    // capability, so the broker realizes it from the plan's own destinations
+    // instead of leaving the launch on a pre-graph posture that prepares
+    // nothing. Each destination's admitted access is enforced inside
+    // `realize_presentation`; passing "all read-only" only switches that
+    // enforcement on when the plan really is entirely read-only.
+    let all_read_only = plan
+        .destinations()
+        .iter()
+        .all(PlannedDestination::read_only);
+    let admitted_presentation = realize_presentation(
+        plan,
+        template.presentation,
+        private_execution_root,
+        all_read_only,
+    )
+    .map_err(|_| LaunchRefusal::PresentationRefused)?;
+    let presentation = template.presentation;
+
+    Ok(SpawnRunnerPlanInput {
+        binary_path: plan.executable().program().as_path().to_path_buf(),
+        argv: plan.executable().argv().to_vec(),
+        uid: identity.uid(),
+        gid: identity.gid(),
+        supplementary_groups: identity.supplementary_groups().to_vec(),
+        env: plan.executable().environment().to_vec(),
+        capabilities: template.capabilities.clone(),
+        namespaces: template.namespaces.clone(),
+        seccomp_policy_ref: template.seccomp_policy_ref.clone(),
+        mount_policy,
+        cgroup_placement: template.cgroup_placement.clone(),
+        root_carve_out: template.root_carve_out,
+        skip_binary_exists_check: false,
+        user_namespace: identity.user_namespace().map(|namespace| UserNamespaceSpec {
+            host_uid_for_zero: namespace.inner_uid,
+            host_gid_for_zero: namespace.inner_gid,
+        }),
+        umask: template.umask,
+        presentation,
+        admitted_presentation,
+    })
 }
 
 /// The initiating principal as attested at the envelope boundary, rendered
@@ -2162,9 +2398,48 @@ fn parse_device_worker(
     })
 }
 
+/// How one launch realizes the mounts its own resolved row declares (KTD11).
+///
+/// The realization is derived from the row, never assumed. A row that
+/// declares anything the broker has to realize inside a mount namespace - a
+/// mount namespace of its own, a read-only or writable path, a device bind, a
+/// cross-domain bind, the read-only Nix closure, or default device-node
+/// hiding - is realized by a private mount tree the broker prepares and then
+/// applies. A row that declares none of those gives the broker nothing to
+/// mount, so it keeps ADR 0021's namespace-first service-source posture,
+/// which applies no mount of its own and therefore skips nothing.
+///
+/// Both halves are load-bearing. Naming the namespace-first posture for a row
+/// that asks for a mount hands `sys.rs` a pairing it refuses
+/// (`presentation-requires-mount-realization`), and dropping the mount to keep
+/// the launch would report success for a capability the role never received.
+/// Every production runner row declares a read-only `/nix/store` plus default
+/// device-node hiding, so the derived posture is the private mount tree for
+/// ordinary launches, and the refusal stays reachable for any producer that
+/// pairs the two the other way round.
+fn launch_presentation(
+    namespaces: &NamespaceSet,
+    mount_policy: &MountPolicy,
+) -> PresentationRealization {
+    if namespaces.mount
+        || !mount_policy.read_only_paths.is_empty()
+        || !mount_policy.writable_paths.is_empty()
+        || !mount_policy.device_binds.is_empty()
+        || !mount_policy.bind_mounts.is_empty()
+        || mount_policy.nix_store_read_only
+        || mount_policy.hide_device_nodes_by_default
+    {
+        return PresentationRealization::FilesystemPresentation;
+    }
+    PresentationRealization::NamespaceFirstServiceSource
+}
+
 /// The fully-resolved spawn plan, parsed from the payload the daemon-side
 /// family handler carried.
 fn parse_plan(payload: &CanonicalJsonObject) -> Result<SpawnRunnerPlanInput, DispatchFailure> {
+    let namespaces: NamespaceSet = parse_field(payload, "namespaces")?;
+    let mount_policy: MountPolicy = parse_field(payload, "mountPolicy")?;
+    let presentation = launch_presentation(&namespaces, &mount_policy);
     Ok(SpawnRunnerPlanInput {
         binary_path: PathBuf::from(field_str(payload, "binaryPath")?),
         argv: field_str_array(payload, "argv")?,
@@ -2176,9 +2451,9 @@ fn parse_plan(payload: &CanonicalJsonObject) -> Result<SpawnRunnerPlanInput, Dis
             .collect(),
         env: field_str_array(payload, "env")?,
         capabilities: field_str_array(payload, "capabilities")?,
-        namespaces: parse_field(payload, "namespaces")?,
+        namespaces,
         seccomp_policy_ref: optional_seccomp_ref(payload)?,
-        mount_policy: parse_field(payload, "mountPolicy")?,
+        mount_policy,
         cgroup_placement: parse_field(payload, "cgroupPlacement")?,
         root_carve_out: optional_field_bool(payload, "rootCarveOut")?.unwrap_or(false),
         // The binary-exists refusal is a guard against a bundle row whose
@@ -2187,6 +2462,15 @@ fn parse_plan(payload: &CanonicalJsonObject) -> Result<SpawnRunnerPlanInput, Dis
         skip_binary_exists_check: false,
         user_namespace: optional_user_namespace(payload)?,
         umask: optional_umask(payload)?,
+        presentation,
+        // The legacy payload carries no admitted destination: this row has no
+        // resolved `ExecutionPlan` behind it, so the private mount tree holds
+        // the row's own policy and nothing is bound into it here. The
+        // admitted-effect route fills both halves from the resolved plan.
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
     })
 }
 

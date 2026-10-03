@@ -18,22 +18,96 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
+# Which tree this guard reads decides whether its answer means anything, and
+# this has been the whole bug twice now.
+#
+# It used to read the live working tree, because the runfiles tree was an
+# incomplete MATERIALIZED snapshot. It was incomplete for a concrete,
+# fixable reason - the target's data declared each package's Cargo.toml and
+# sources but not its BUILD.bazel - so the target now declares every
+# packages/*/BUILD.bazel (see tests/unit/meta/BUILD.bazel). The staged tree
+# is therefore complete, and it is a better answer than the live tree for
+# two reasons: Bazel resolves the file list at analysis time, so it cannot
+# be half-staged; and nothing else in the build can mutate it mid-scan,
+# whereas the live tree is shared with every concurrently-running action.
+#
+# So under Bazel read the runfiles tree, which is what the target stages for
+# this test and the only tree that is guaranteed complete and immutable for
+# the duration of the run. A standalone run (no TEST_SRCDIR) still resolves
+# the repository from the script's own location.
+if [ -n "${TEST_SRCDIR:-}" ] && [ -n "${TEST_WORKSPACE:-}" ] \
+    && [ -f "${TEST_SRCDIR}/${TEST_WORKSPACE}/bazel/checks/BUILD.bazel" ]; then
+    ROOT=${TEST_SRCDIR}/${TEST_WORKSPACE}
+else
+    ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
+fi
 # Overridable so negative probes can point the guard at a scratch tree.
 CHECKS_FILE=${CHECKS_FILE:-"$ROOT/bazel/checks/BUILD.bazel"}
 PKGS_ROOT=${PKGS_ROOT:-"$ROOT/packages"}
-
-# Retired owners that keep an all-tests aggregate but are intentionally absent
-# from rust-main-packages (AGENTS.md retirement rule). Empty today: the last
-# retired owner (d2b-realm-core) was deleted outright.
-EXCLUDED_PKGS=${EXCLUDED_PKGS-""}
 
 fail() {
     echo "rust-main-packages suite guard: $*" >&2
     exit 1
 }
 
+# The membership question is a comparison between the suite labels and the
+# packages on disk, and it is answered by a sequence of reads: a glob, then
+# an awk per package, then a count. If the tree can change between those
+# reads, the answer depends on WHEN each file was read rather than on what
+# the tree contains - a package whose BUILD file vanishes between the glob
+# and its awk aborts the guard outright, and one that appears or disappears
+# moves `checked` away from `expected`. Both were observed here, against
+# the live working tree, while a concurrent writer touched it: renaming a
+# package directory out from under the scan failed 7 runs in 12, and
+# creating and removing one mid-scan failed 1 in 12. Neither was a
+# membership gap; both were the guard reading a tree that was still moving.
+#
+# So read the tree ONCE and answer every question from that copy. Reading
+# one side live and the other from the copy would only move the race, so
+# both sides are copied in the same breath. It also makes the run
+# self-consistent when the caller points the guard at a tree under active
+# development, which is the normal case for a ROOT override.
+
+# Checked before the snapshot so a bad path is reported in the caller's own
+# terms, rather than as a copy failure against a temporary file.
 [ -f "$CHECKS_FILE" ] || fail "bazel/checks/BUILD.bazel not found (is ROOT set?)"
+
+SNAPSHOT=$(mktemp -d "${TMPDIR:-/tmp}/rust-main-suite-guard.XXXXXXXX")
+trap 'rm -rf "$SNAPSHOT"' EXIT
+# The copy is all-or-nothing: a plain `cp -R` over a tree that is moving
+# leaves a half-populated snapshot behind and exits non-zero, and a
+# half-populated snapshot answers every count question wrongly. So each
+# attempt copies into a staging directory and is adopted only if the whole
+# copy succeeded; otherwise the attempt is discarded and retried. A writer
+# that renames a package directory out from under the copy fails that copy,
+# so the retry is what turns a moving tree into a completed snapshot rather
+# than a wrong answer. The attempt cap is bounded so a writer that never
+# stops still ends the run instead of spinning.
+SNAPSHOT_ATTEMPTS=${SNAPSHOT_ATTEMPTS:-5}
+snapshot_taken=false
+attempt=1
+while [ "$attempt" -le "$SNAPSHOT_ATTEMPTS" ]; do
+    staging="$SNAPSHOT/staging.$attempt"
+    rm -rf "$staging"
+    if cp "$CHECKS_FILE" "$staging-checks.bazel" \
+        && mkdir -p "$staging" \
+        && cp -R "$PKGS_ROOT/." "$staging"; then
+        snapshot_taken=true
+        break
+    fi
+    rm -rf "$staging" "$staging-checks.bazel"
+    attempt=$((attempt + 1))
+done
+[ "$snapshot_taken" = true ] || fail "could not read a stable snapshot of $PKGS_ROOT in $SNAPSHOT_ATTEMPTS attempts (is the tree being written?)"
+mv "$staging" "$SNAPSHOT/packages"
+mv "$staging-checks.bazel" "$SNAPSHOT/checks.bazel"
+CHECKS_FILE="$SNAPSHOT/checks.bazel"
+PKGS_ROOT="$SNAPSHOT/packages"
+
+# Retired owners that keep an all-tests aggregate but are intentionally absent
+# from rust-main-packages (AGENTS.md retirement rule). Empty today: the last
+# retired owner (d2b-realm-core) was deleted outright.
+EXCLUDED_PKGS=${EXCLUDED_PKGS-""}
 
 # Membership extraction: drop comment lines first so prose that merely mentions
 # a //packages/ target cannot masquerade as a suite entry. Capture the full

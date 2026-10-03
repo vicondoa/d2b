@@ -14,9 +14,14 @@ workspace = true
 # second consumer can read it without depending on this crate. Re-exported
 # from `crate::error` for existing consumers.
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+# U5 (KTD5-KTD6): the store persists desired revisions, the Zone desired
+# sequence, and the publication-transaction identity as the shared
+# `d2b-contracts-resource` authority types instead of restating them. The
+# edge points downward only: this crate never gains a dependency on
+# `d2b-resource-types`, which depends on it.
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 ractor.workspace = true
 rusqlite.workspace = true
-rusqlite_migration.workspace = true
 thiserror = "2"
 # v3 resource-runtime rewrite (U3): deterministic resource uids (R8) hash
 # the stable `(zone, type, name)` identity so owned-child graphs and

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::context::SpecDecoder;
 use crate::driver::{DynResourceDriver, ResourceDriverFactory};
 use crate::identity::{ResourceKey, ResourceTypeName};
+use crate::relations::{RelationError, RelationExtractor, RelationExtractors};
 
 /// The registry's view of one driver declaration.
 ///
@@ -56,6 +57,18 @@ pub trait DriverRegistration: Send + Sync {
     /// The spec decoder for this type's stored desired rows.
     fn decoder(&self) -> Arc<dyn SpecDecoder>;
 
+    /// The relation projection this type's canonical declaration feeds
+    /// (U6, R3/R4).
+    ///
+    /// It is declared here, beside the decoder and factory the same
+    /// declaration contributes, because a projection is part of the
+    /// declaration and not a second handwritten registry. `None` is the
+    /// normal answer for a type whose declaration names no relationship of a
+    /// projected class.
+    fn relations(&self) -> Option<Arc<dyn RelationExtractor>> {
+        None
+    }
+
     /// The factory that builds this type's driver.
     fn factory(&self) -> Arc<dyn ResourceDriverFactory>;
 }
@@ -70,6 +83,9 @@ pub enum ProviderDirectoryError {
     /// No factory is registered for the requested resource type.
     #[error("no provider factory is registered for resource type {0}")]
     UnknownType(ResourceTypeName),
+    /// Two declarations claim the same relation projection.
+    #[error("relation projection: {0}")]
+    RelationProjection(#[from] RelationError),
     /// An operation reference already has an owner: the handler table has one
     /// entry per reference, so a driver that registers a reference another
     /// driver already registered is refused.
@@ -117,6 +133,10 @@ pub struct ProviderDirectory {
     decoders: HashMap<ResourceTypeName, Arc<dyn SpecDecoder>>,
     operation_refs: HashMap<String, ResourceTypeName>,
     declared_verbs: HashMap<ResourceTypeName, Vec<String>>,
+    /// The relation projections the registered declarations contribute (U6,
+    /// R3/R4). Derived into the manager's index at registration, so the
+    /// index and the driver table cannot describe different resources.
+    relations: RelationExtractors,
     /// Set by [`ProviderDirectory::mark_plane_open`].
     plane_open: bool,
 }
@@ -178,6 +198,11 @@ impl ProviderDirectory {
                 });
             }
         }
+        if let Some(projection) = driver.relations()
+            && let Err(error) = self.relations.register(projection)
+        {
+            return Err(ProviderDirectoryError::RelationProjection(error));
+        }
         self.factories.insert(type_name.clone(), driver.factory());
         self.decoders
             .insert(type_name.clone(), driver.decoder());
@@ -187,6 +212,15 @@ impl ProviderDirectory {
             self.operation_refs.insert(operation_ref, type_name.clone());
         }
         Ok(())
+    }
+
+    /// The relation projections every registered declaration contributed.
+    ///
+    /// The manager takes its derived indexes from exactly this registry, so a
+    /// relationship is derived from a declaration that is also registered to
+    /// drive the row.
+    pub fn relation_extractors(&self) -> &RelationExtractors {
+        &self.relations
     }
 
     /// The factory registered for a resource type, if any.

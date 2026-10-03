@@ -21,10 +21,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
+#[allow(dead_code, reason = "the ApplyNmUnmanaged op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub const DEFAULT_NM_CONF_PATH: &str = "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf";
+#[allow(dead_code, reason = "built only by the unrouted ApplyNmUnmanaged path this module's tests drive")]
 pub const NM_RELOAD_MIN_VERSION: (u32, u32) = (1, 20);
 
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "the ApplyNmUnmanaged op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub struct ApplyNmRequest {
     pub conf_path: PathBuf,
     pub entries: Vec<NmUnmanagedEntry>,
@@ -40,6 +43,7 @@ pub struct ApplyNmRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code, reason = "the ApplyNmUnmanaged op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub struct ApplyNmResult {
     pub conf_path_hash: String,
     pub ifname_set: Vec<String>,
@@ -49,6 +53,7 @@ pub struct ApplyNmResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[allow(dead_code, reason = "the ApplyNmUnmanaged op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub enum ReloadCommand {
     NmcliGeneralReloadConf,
     SystemctlReloadNetworkManager,
@@ -58,9 +63,12 @@ pub enum ReloadCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyNmError {
     Io(String),
+    #[allow(dead_code, reason = "built only by the unrouted ApplyNmUnmanaged path this module's tests drive")]
     DeviceNotUnmanaged { ifname: String, state: String },
+    #[allow(dead_code, reason = "built only by the unrouted ApplyNmUnmanaged path this module's tests drive")]
     ManagedForeignConflict { ifname: String, state: String },
     ForeignMarkerConflict,
+    #[allow(dead_code, reason = "built only by the unrouted ApplyNmUnmanaged path this module's tests drive")]
     ReloadFailed,
 }
 
@@ -90,6 +98,7 @@ impl From<io::Error> for ApplyNmError {
 }
 
 /// Renders the d2b-owned NM `conf.d` snippet body.
+#[allow(dead_code, reason = "the ApplyNmUnmanaged op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub fn render_nm_conf(entries: &[NmUnmanagedEntry]) -> String {
     let mut out = String::new();
     out.push_str("# d2b-managed begin\n");
@@ -161,6 +170,7 @@ pub fn validate_existing_managed_conf(existing: &str, expected: &str) -> Result<
 
 /// Returns the correct reload command for the detected NM version.
 /// `None` NM means no-op.
+#[allow(dead_code, reason = "the ApplyNmUnmanaged op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub fn select_reload_command(nm_version: Option<&str>) -> ReloadCommand {
     let Some(version) = nm_version else {
         return ReloadCommand::NoOpManagerAbsent;
@@ -173,6 +183,7 @@ pub fn select_reload_command(nm_version: Option<&str>) -> ReloadCommand {
     }
 }
 
+#[allow(dead_code, reason = "built only by the unrouted ApplyNmUnmanaged path this module's tests drive")]
 fn split_major_minor(v: &str) -> Option<(u32, u32)> {
     let mut parts = v
         .split(|c: char| !c.is_ascii_digit())
@@ -184,6 +195,7 @@ fn split_major_minor(v: &str) -> Option<(u32, u32)> {
 
 /// Parses `nmcli -t -f DEVICE,STATE device status` into a vec of
 /// `(device, state)` rows. Lines that don't contain `:` are skipped.
+#[allow(dead_code, reason = "the ApplyNmUnmanaged op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub fn parse_device_status(output: &str) -> Vec<(String, String)> {
     output
         .lines()
@@ -203,6 +215,7 @@ pub fn parse_device_status(output: &str) -> Vec<(String, String)> {
 /// Verifies every declared d2b ifname is in state `unmanaged`.
 /// A state of `managed`/`connected`/`activated` for a declared
 /// d2b ifname is reported as `nm-managed-foreign-conflict`.
+#[allow(dead_code, reason = "the ApplyNmUnmanaged op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub fn verify_all_unmanaged(
     entries: &[NmUnmanagedEntry],
     device_status: &str,
@@ -241,6 +254,7 @@ pub fn verify_all_unmanaged(
     Ok(())
 }
 
+#[allow(dead_code, reason = "the ApplyNmUnmanaged op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub fn apply_nm_unmanaged(req: &ApplyNmRequest) -> Result<ApplyNmResult, ApplyNmError> {
     path_safe::refuse_world_writable_parent(&req.conf_path)?;
     path_safe::refuse_symlink(&req.conf_path)?;

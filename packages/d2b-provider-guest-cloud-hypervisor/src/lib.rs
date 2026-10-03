@@ -11,20 +11,29 @@ mod adoption;
 pub mod bootstrap_graph;
 pub mod config;
 pub mod controller;
-mod controller_session;
+pub mod controller_session;
 pub mod descriptor;
+pub mod execution_parent;
 pub mod guest_local;
 pub mod health;
 pub mod identity;
 pub mod shutdown;
 pub mod state;
 
-pub use adoption::ProcessAdoptionStatus;
+pub use adoption::{
+    BindingAdoptionFence, BindingAdoptionStatus, ObservedBindingRow, ProcessAdoptionStatus,
+    classify_binding_adoption,
+};
 pub use bootstrap_graph::{
-    BootstrapGraph, BootstrapGraphError, DependencyReadiness, GuestChildGraphPlan,
-    VmmLifecycleEligibility,
+    AdmittedGuestBinding, AdmittedGuestGraph, AdmittedGraphError, BootstrapGraph,
+    BootstrapGraphError, DependencyReadiness, GuestChildGraphPlan, GuestConsumerCompletion,
+    GuestStartGate, VmmLifecycleEligibility,
 };
 pub use config::{CloudHypervisorConfig, ConfigValidationError, MachineType};
+pub use execution_parent::{
+    GuestExecutionFacts, GuestExecutionParent, GuestExecutionParentInput,
+    GuestExecutionParentRefusal, classify_guest_execution_parent,
+};
 pub use controller::{CLOUD_HYPERVISOR_REPAIR_INTERVAL_SECS, GUEST_CONTROLLER_FINALIZER};
 pub use controller::{
     AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, ChildSpecUpdate,

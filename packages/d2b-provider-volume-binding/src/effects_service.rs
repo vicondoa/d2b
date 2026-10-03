@@ -163,7 +163,7 @@ mod tests {
     async fn the_service_delegates_onto_the_facets() {
         use d2b_contracts_resource::v3::{
             ResourceRef, ResourceUid, execution_policy::BoundedToken, volume::AttachmentAccess,
-            volume_binding::VolumeBindingSpec,
+            volume_binding::{VolumeBindingSpec, VolumePresentation},
         };
 
         let fake = FakeServingEffects::new();
@@ -172,6 +172,7 @@ mod tests {
             &BoundedToken::parse("work".to_owned()).expect("zone"),
             &ResourceRef::parse("Volume/work").expect("volume"),
             &ResourceRef::parse("Guest/acceptance-guest").expect("guest"),
+            &BoundedToken::parse("named".to_owned()).expect("view"),
         );
         let key = ResourceKey::new("work", "VolumeBinding", "binding");
         let binding = StoredBinding::new(
@@ -180,7 +181,14 @@ mod tests {
                 ResourceRef::parse("Guest/acceptance-guest").expect("guest"),
                 "named",
                 AttachmentAccess::ReadWrite,
-                "/mnt/work",
+                VolumePresentation::filesystem("/mnt/work").expect("destination"),
+                "named",
+                d2b_contracts_resource::v3::BindingSourceDecision::new(
+                    vec![d2b_contracts_resource::v3::RequestedRights::Consume],
+                    d2b_contracts_resource::v3::binding::BindingArbitration::Shared,
+                    vec![d2b_contracts_resource::v3::BindingRealizationFacet::FilesystemPresentation],
+                )
+                .expect("decision validates"),
             )
             .expect("binding spec"),
             ResourceUid::parse("00000000-0000-4000-8000-000000000000").expect("uid"),

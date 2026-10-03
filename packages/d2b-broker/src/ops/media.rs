@@ -1201,7 +1201,6 @@ async fn qmp_remove_fdset_entry(
 }
 
 struct QmpClient {
-    vm: String,
     next_id: u64,
     writer: tokio::net::UnixStream,
     reader: tokio::io::BufReader<tokio::net::UnixStream>,
@@ -1214,12 +1213,6 @@ impl QmpClient {
     }
 
     async fn connect_with_timeout(path: &Path, timeout: Duration) -> Result<Self, MediaOpError> {
-        let vm = path
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(|name| name.to_str())
-            .unwrap_or("unknown")
-            .to_owned();
         let stream = tokio::time::timeout(timeout, tokio::net::UnixStream::connect(path))
             .await
             .map_err(|_| MediaOpError::Qmp("connect:timeout".to_owned()))?
@@ -1239,7 +1232,6 @@ impl QmpClient {
             .map_err(|err| MediaOpError::Qmp(format!("from-std:{err}")))?;
         let reader = tokio::io::BufReader::new(reader_stream);
         let mut client = Self {
-            vm,
             next_id: 1,
             writer,
             reader,
@@ -1251,10 +1243,6 @@ impl QmpClient {
         }
         client.execute("qmp_capabilities", json!({}), None).await?;
         Ok(client)
-    }
-
-    fn vm(&self) -> &str {
-        &self.vm
     }
 
     async fn execute(
@@ -1428,6 +1416,9 @@ impl QmpClient {
     }
 }
 
+// Exists for this module's tests: no live path re-verifies a recorded
+// physical identity yet.
+#[cfg(test)]
 fn verify_identity_matches_record(
     record: &MediaRegistryRecord,
     identity: &UsbPhysicalIdentity,

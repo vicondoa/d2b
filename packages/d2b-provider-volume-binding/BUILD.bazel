@@ -49,6 +49,17 @@ d2b_rust_library(
 )
 
 d2b_rust_test(
+    name = "consumer_bindings",
+    srcs = ["tests/consumer_bindings.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        ":d2b_provider_volume_binding",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "registration",
     srcs = ["tests/registration.rs"],
     compile_data = ["Cargo.toml"],
@@ -82,6 +93,10 @@ filegroup(
             "integration/**/*",
             "nix/**/*",
             "README.md",
+            "operations.json",
+            "registrations.json",
+            "resource-types.json",
+            "service-catalog.json",
             "src/**/*.rs",
             "tests/**/*.rs",
         ],

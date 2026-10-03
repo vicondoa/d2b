@@ -14,6 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::guest_mode::{BootIdentity, GuestIdentity};
+
 use d2b_contracts_broker::broker_wire::BrokerProfile;
 use d2b_contracts_provider::v3::{
     ArtifactDigest, ComponentDescriptor, ComponentExecution, ComponentType,
@@ -21,11 +23,12 @@ use d2b_contracts_provider::v3::{
 };
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName,
-    ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
+    ResourceUid, SchemaFingerprint, StoreIncarnation, ZoneId, ZoneRevision,
     identity::ReconnectGeneration,
     process::{ExecutionSpec, ProcessClass, ProcessSpec},
 };
 use sha2::{Digest, Sha256};
+
 
 /// The only daemon modes. A mode is selected before the runtime starts and is
 /// never read from a request or changed on a live instance.
@@ -1106,6 +1109,55 @@ pub struct ProviderDeployment {
     controller_assignments:
         Arc<Mutex<BTreeMap<ControllerAssignmentIdentity, Arc<AssignmentState>>>>,
     next_assignment_epoch: Arc<std::sync::atomic::AtomicU64>,
+    authority: Arc<Mutex<Option<TargetAuthority>>>,
+}
+
+/// The authority one execution target publishes for itself (U31, KTD7).
+///
+/// A target obtains authority only from a verified deployment graph it read
+/// and verified itself; it never inherits the host's policy and never takes
+/// custody of a credential. The declaration records exactly what the
+/// publication grants, so the deployment can refuse one that asks for more
+/// than this target's mode allows rather than silently narrowing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetAuthority {
+    /// The Zone whose resources this target owns locally.
+    pub zone: ZoneId,
+    /// The store incarnation this authority was verified in.
+    pub store_incarnation: StoreIncarnation,
+    /// The exact RoleBinding references this target carries.
+    ///
+    /// A Guest carries only the bindings its own target-local declarations
+    /// name. An empty list is a valid publication: a target with no grants
+    /// admits nothing, which is the correct posture for a Guest that has no
+    /// declared bindings of its own.
+    pub bindings: Vec<String>,
+    /// The authority-bearing surfaces this publication grants.
+    pub surfaces: ModeSurfaces,
+    /// Whether the publication carries credential custody.
+    ///
+    /// Credential delivery stays with the host's credential custody; a
+    /// target that claims it is refused rather than being trusted with the
+    /// material.
+    pub credential_custody: bool,
+}
+
+impl TargetAuthority {
+    /// A target-local publication: the target's own Zone, its own bindings,
+    /// and only the surfaces its mode allows.
+    pub fn target_local(
+        zone: ZoneId,
+        store_incarnation: StoreIncarnation,
+        bindings: Vec<String>,
+    ) -> Self {
+        Self {
+            zone,
+            store_incarnation,
+            bindings,
+            surfaces: DaemonMode::Guest.surfaces(),
+            credential_custody: false,
+        }
+    }
 }
 
 impl ProviderDeployment {
@@ -1117,6 +1169,7 @@ impl ProviderDeployment {
             controllers: Arc::new(Mutex::new(BTreeMap::new())),
             controller_assignments: Arc::new(Mutex::new(BTreeMap::new())),
             next_assignment_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            authority: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -1128,6 +1181,84 @@ impl ProviderDeployment {
     /// The target kind implied by this deployment's mode.
     pub const fn target_kind(&self) -> TargetKind {
        self.mode.target_kind()
+    }
+
+    /// Publish the verified authority this target runs under.
+    ///
+    /// This is the target's whole bootstrap contribution. It refuses a
+    /// publication that asks for a surface this target's mode does not
+    /// carry, one that claims host credential custody, or one whose bindings
+    /// are not this target's own; it never narrows such a publication and
+    /// accepts the remainder. A target with no published authority admits
+    /// nothing.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn publish_target_authority(
+        &self,
+        authority: TargetAuthority,
+    ) -> Result<(), DeploymentError> {
+        let allowed = self.mode.surfaces();
+        let requested = authority.surfaces;
+        for (name, requested_flag, allowed_flag) in [
+            (
+                "local_zone_store",
+                requested.local_zone_store,
+                allowed.local_zone_store,
+            ),
+            (
+                "public_operator_socket",
+                requested.public_operator_socket,
+                allowed.public_operator_socket,
+            ),
+            (
+                "realm_credentials",
+                requested.realm_credentials,
+                allowed.realm_credentials,
+            ),
+            (
+                "host_controller_authority",
+                requested.host_controller_authority,
+                allowed.host_controller_authority,
+            ),
+            (
+                "parent_component_session",
+                requested.parent_component_session,
+                allowed.parent_component_session,
+            ),
+        ] {
+            if requested_flag && !allowed_flag {
+                return Err(DeploymentError::AuthoritySurfaceRefused(name));
+            }
+        }
+        if authority.credential_custody {
+            return Err(DeploymentError::AuthorityCredentialCustodyRefused);
+        }
+        if authority.zone.as_str().is_empty() {
+            return Err(DeploymentError::AuthorityZoneMissing);
+        }
+        let mut slot = self
+            .authority
+            .lock()
+            .map_err(|_| DeploymentError::StateUnavailable)?;
+        if slot.is_some() {
+            return Err(DeploymentError::AuthorityAlreadyPublished);
+        }
+        *slot = Some(authority);
+        Ok(())
+    }
+
+    /// The authority this target published, when it published one.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn target_authority(&self) -> Result<Option<TargetAuthority>, DeploymentError> {
+        self.authority
+            .lock()
+            .map(|slot| slot.clone())
+            .map_err(|_| DeploymentError::StateUnavailable)
+    }
+
+    /// Whether this target holds a published authority.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn has_target_authority(&self) -> bool {
+        self.authority.lock().map(|slot| slot.is_some()).unwrap_or(false)
     }
 
     /// The shared admission budget for this deployment's target-scoped
@@ -2241,6 +2372,142 @@ fn revoke_record_assignments_all(
     count
 }
 
+/// Provider-neutral evidence of one accepted Guest parent ComponentSession.
+///
+/// Every Guest implementation - a local VM, a media-backed VM, or a remote
+/// cloud Guest - reaches its target through the same parent session, so the
+/// evidence a target-control channel rides names exactly the enrolled Guest
+/// identity, the authority Zone, the live reconnect generation, and the
+/// declared Provider row the accepted graph bound to this Guest.
+///
+/// The declared Provider is carried as graph data and is never matched:
+/// nothing here - or in the contract that consumes this value - decides
+/// behavior from which Provider it names. That is what lets a second Guest
+/// implementation consume the same contract without waiting for the first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuestParentSessionEvidence {
+    zone: ZoneId,
+    guest_ref: ResourceRef,
+    guest_uid: ResourceUid,
+    boot_identity: BootIdentity,
+    provider_ref: ResourceRef,
+    reconnect_generation: ReconnectGeneration,
+    session_generation: u64,
+}
+
+impl GuestParentSessionEvidence {
+    /// Bind one accepted parent session to the enrolled Guest identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeploymentError::GenerationZero`] for a session generation
+    /// of zero (never a valid ComponentSession),
+    /// [`DeploymentError::ProviderWrongKind`] when the declared row is not a
+    /// `Provider`, and [`DeploymentError::TargetWrongKind`] when the
+    /// enrolled execution reference is not a `Guest`.
+    pub fn bind(
+        identity: &GuestIdentity,
+        provider_ref: ResourceRef,
+        session_generation: u64,
+    ) -> Result<Self, DeploymentError> {
+        if session_generation == 0 {
+            return Err(DeploymentError::GenerationZero);
+        }
+        if provider_ref.resource_type().as_str() != "Provider" {
+            return Err(DeploymentError::ProviderWrongKind);
+        }
+        if identity.guest_ref().resource_type().as_str() != "Guest" {
+            return Err(DeploymentError::TargetWrongKind);
+        }
+        Ok(Self {
+            zone: identity.zone().clone(),
+            guest_ref: identity.guest_ref().clone(),
+            guest_uid: identity.guest_uid().clone(),
+            boot_identity: identity.boot_identity(),
+            provider_ref,
+            reconnect_generation: identity.reconnect_generation(),
+            session_generation,
+        })
+    }
+
+    /// Borrow the authority Zone the accepted graph placed this Guest in.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    /// Borrow the enrolled `Guest/<name>` execution reference.
+    pub const fn guest_ref(&self) -> &ResourceRef {
+        &self.guest_ref
+    }
+
+    /// Borrow the enrolled Guest's stable uid.
+    pub const fn guest_uid(&self) -> &ResourceUid {
+        &self.guest_uid
+    }
+
+    /// Return the kernel boot identity this evidence was enrolled against.
+    ///
+    /// A different boot is a different Guest: the evidence cannot be carried
+    /// across one, so a request that presents another boot identity is
+    /// refused rather than adopted.
+    pub const fn boot_identity(&self) -> BootIdentity {
+        self.boot_identity
+    }
+
+    /// Borrow the declared Provider row the accepted graph bound to this
+    /// Guest.
+    ///
+    /// This is graph data, never a dispatch key.
+    pub const fn provider_ref(&self) -> &ResourceRef {
+        &self.provider_ref
+    }
+
+    /// Return the enrolled reconnect generation this evidence requires.
+    pub const fn reconnect_generation(&self) -> ReconnectGeneration {
+        self.reconnect_generation
+    }
+
+    /// Return the live authenticated session generation.
+    pub const fn session_generation(&self) -> u64 {
+        self.session_generation
+    }
+
+    /// Rebind the evidence to a strictly newer reconnect generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeploymentError::GenerationZero`] for generation zero and
+    /// [`DeploymentError::ControllerSessionStale`] when the new generation is
+    /// not strictly newer than the one this evidence already names: a
+    /// reconnect can never inherit an older session's authority.
+    pub fn reconnect(self, session_generation: u64) -> Result<Self, DeploymentError> {
+        if session_generation == 0 {
+            return Err(DeploymentError::GenerationZero);
+        }
+        if session_generation <= self.session_generation {
+            return Err(DeploymentError::ControllerSessionStale);
+        }
+        let generation = ReconnectGeneration::new(session_generation)
+            .map_err(|_| DeploymentError::GenerationZero)?;
+        Ok(Self {
+            reconnect_generation: generation,
+            session_generation,
+            ..self
+        })
+    }
+
+    /// Whether a session at `session_generation` may still carry work for
+    /// this Guest.
+    ///
+    /// False for a generation that is not the live one and for a generation
+    /// below the enrolled reconnect floor, so a retained capability from a
+    /// lost session cannot act for its successor.
+    pub const fn carries(&self, session_generation: u64) -> bool {
+        session_generation == self.session_generation
+            && session_generation >= self.reconnect_generation.get()
+    }
+}
+
 /// ProviderDeployment refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentError {
@@ -2273,6 +2540,16 @@ pub enum DeploymentError {
     ControllerRepairOwnerMismatch,
     ControllerFinalizerMissing,
     ControllerCleanupInvalid,
+    /// A published authority asked for a surface this target's mode does
+    /// not carry. The named surface is the one that was refused.
+    AuthoritySurfaceRefused(&'static str),
+    /// A published authority claimed credential custody, which stays with
+    /// the host.
+    AuthorityCredentialCustodyRefused,
+    /// A published authority named no Zone.
+    AuthorityZoneMissing,
+    /// A second authority was published over the first.
+    AuthorityAlreadyPublished,
 }
 
 impl std::fmt::Display for DeploymentError {
@@ -2319,6 +2596,18 @@ impl std::fmt::Display for DeploymentError {
             }
             Self::ControllerFinalizerMissing => "provider-deployment-controller-finalizer-missing",
             Self::ControllerCleanupInvalid => "provider-deployment-controller-cleanup-invalid",
+            Self::AuthoritySurfaceRefused(surface) => {
+                return write!(formatter, "provider-deployment-authority-surface-refused:{surface}")
+            }
+            Self::AuthorityCredentialCustodyRefused => {
+                return formatter.write_str("provider-deployment-authority-credential-custody-refused")
+            }
+            Self::AuthorityZoneMissing => {
+                return formatter.write_str("provider-deployment-authority-zone-missing")
+            }
+            Self::AuthorityAlreadyPublished => {
+                return formatter.write_str("provider-deployment-authority-already-published")
+            }
         })
     }
 }
@@ -2335,6 +2624,120 @@ mod tests {
             ResourceTypeName::parse(kind).expect("resource type"),
             ResourceName::parse(name).expect("resource name"),
         )
+    }
+
+    fn guest_identity(reconnect_generation: u64) -> GuestIdentity {
+        GuestIdentity::new(
+            resource("Guest", "workload"),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("Guest UID"),
+            ZoneId::parse("work").expect("zone"),
+            crate::guest_mode::BootIdentity::from_kernel_boot_id("guest-evidence-test")
+                .expect("boot identity"),
+            d2b_contracts_resource::v3::identity::SessionPurpose::parse(
+                crate::guest_mode::GUEST_COMPONENT_SESSION_PURPOSE,
+            )
+            .expect("purpose"),
+            SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64))).expect("schema"),
+            ReconnectGeneration::new(reconnect_generation).expect("reconnect generation"),
+            1,
+            1,
+            1,
+        )
+        .expect("Guest identity")
+    }
+
+    /// The evidence the common Guest target/session contract is fenced on
+    /// names exactly the enrolled identity: the Guest uid, the boot identity,
+    /// the authority Zone, the live reconnect generation, and the declared
+    /// Provider as graph data.
+    #[test]
+    fn guest_parent_session_evidence_carries_the_enrolled_identity() {
+        let identity = guest_identity(3);
+        let evidence = GuestParentSessionEvidence::bind(
+            &identity,
+            resource("Provider", "runtime-example"),
+            7,
+        )
+        .expect("evidence");
+        assert_eq!(evidence.zone().as_str(), "work");
+        assert_eq!(evidence.guest_ref(), identity.guest_ref());
+        assert_eq!(evidence.guest_uid(), identity.guest_uid());
+        assert_eq!(evidence.boot_identity(), identity.boot_identity());
+        assert_eq!(evidence.reconnect_generation(), ReconnectGeneration::new(3).expect("floor"));
+        assert_eq!(evidence.session_generation(), 7);
+        assert_eq!(evidence.provider_ref(), &resource("Provider", "runtime-example"));
+    }
+
+    /// The evidence is refused for a zero session generation, a row that is
+    /// not a Provider, and a non-Guest execution reference.
+    #[test]
+    fn guest_parent_session_evidence_refuses_a_shape_it_cannot_carry() {
+        let identity = guest_identity(3);
+        assert_eq!(
+            GuestParentSessionEvidence::bind(&identity, resource("Provider", "p"), 0),
+            Err(DeploymentError::GenerationZero),
+        );
+        assert_eq!(
+            GuestParentSessionEvidence::bind(&identity, resource("Guest", "p"), 7),
+            Err(DeploymentError::ProviderWrongKind),
+        );
+        let host = GuestIdentity::new(
+            resource("Host", "desktop"),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("UID"),
+            ZoneId::parse("work").expect("zone"),
+            crate::guest_mode::BootIdentity::from_kernel_boot_id("guest-evidence-test")
+                .expect("boot identity"),
+            d2b_contracts_resource::v3::identity::SessionPurpose::parse(
+                crate::guest_mode::GUEST_COMPONENT_SESSION_PURPOSE,
+            )
+            .expect("purpose"),
+            SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64))).expect("schema"),
+            ReconnectGeneration::new(3).expect("reconnect generation"),
+            1,
+            1,
+            1,
+        );
+        assert!(
+            host.is_err(),
+            "a Guest target contract is never built for a non-Guest identity"
+        );
+    }
+
+    /// Only the live generation carries target-control work: an older session
+    /// never inherits its successor's authority, and a reconnect can only
+    /// advance.
+    #[test]
+    fn guest_parent_session_evidence_carries_only_its_live_generation() {
+        let evidence = GuestParentSessionEvidence::bind(
+            &guest_identity(3),
+            resource("Provider", "runtime-example"),
+            7,
+        )
+        .expect("evidence");
+        assert!(evidence.carries(7), "the live generation is the one that carries");
+        assert!(!evidence.carries(6), "an older session carries nothing");
+        assert!(!evidence.carries(8), "an unknown newer generation carries nothing");
+        assert!(!evidence.carries(0), "generation zero is never a session");
+
+        let advanced = evidence.clone().reconnect(9).expect("newer generation");
+        assert_eq!(advanced.session_generation(), 9);
+        assert_eq!(advanced.reconnect_generation(), ReconnectGeneration::new(9).expect("floor"));
+        assert_eq!(advanced.guest_uid(), evidence.guest_uid());
+        assert_eq!(
+            evidence.clone().reconnect(7),
+            Err(DeploymentError::ControllerSessionStale),
+            "the same generation is not a reconnect"
+        );
+        assert_eq!(
+            evidence.clone().reconnect(6),
+            Err(DeploymentError::ControllerSessionStale),
+            "an older generation is not a reconnect"
+        );
+        assert_eq!(
+            evidence.reconnect(0),
+            Err(DeploymentError::GenerationZero),
+            "generation zero is never a session"
+        );
     }
 
     fn assignment(session_generation: u64) -> ControllerAssignmentKey {
@@ -2884,5 +3287,161 @@ mod tests {
         assert_ne!(first.process_ref(), second.process_ref());
         assert_ne!(first.uid(), second.uid());
         assert_eq!(first.controller_role_ref(), second.controller_role_ref());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Target-local authority tests (U31)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod target_authority_tests {
+    use super::*;
+    use d2b_contracts_resource::v3::StoreIncarnation;
+
+    fn guest() -> ProviderDeployment {
+        ProviderDeployment::new(DaemonMode::Guest, AdmissionLimits::guest_default())
+            .expect("guest deployment")
+    }
+
+    fn host() -> ProviderDeployment {
+        ProviderDeployment::new(DaemonMode::Host, AdmissionLimits::host_default())
+            .expect("host deployment")
+    }
+
+    fn zone() -> ZoneId {
+        ZoneId::parse("sys-guest").expect("zone")
+    }
+
+    fn store() -> StoreIncarnation {
+        StoreIncarnation::parse("store-1").expect("store")
+    }
+
+    /// A Guest obtains only target-local authority: its own Zone, its own
+    /// bindings, and none of the host's authority-bearing surfaces.
+    #[test]
+    fn a_guest_publishes_only_its_own_target_local_authority() {
+        let deployment = guest();
+        assert!(
+            !deployment.has_target_authority(),
+            "a Guest with no published authority has none to serve under"
+        );
+        let authority = TargetAuthority::target_local(
+            zone(),
+            store(),
+            vec!["RoleBinding/guest-controller".to_owned()],
+        );
+        deployment
+            .publish_target_authority(authority.clone())
+            .expect("a target-local publication is accepted");
+        let published = deployment
+            .target_authority()
+            .expect("state available")
+            .expect("published");
+        assert_eq!(published, authority);
+        assert_eq!(published.zone, zone());
+        assert!(!published.credential_custody);
+        let surfaces = published.surfaces;
+        assert!(
+            !surfaces.local_zone_store
+                && !surfaces.public_operator_socket
+                && !surfaces.realm_credentials
+                && !surfaces.host_controller_authority,
+            "a target-local publication grants no host surface"
+        );
+    }
+
+    /// A Guest is refused host policy: a publication claiming the host's
+    /// operator socket or controller authority is refused, not narrowed, and
+    /// the deployment keeps serving nothing.
+    #[test]
+    fn a_guest_refuses_a_publication_that_claims_host_authority() {
+        let deployment = guest();
+        let mut authority = TargetAuthority::target_local(zone(), store(), Vec::new());
+        authority.surfaces.host_controller_authority = true;
+        assert_eq!(
+            deployment.publish_target_authority(authority),
+            Err(DeploymentError::AuthoritySurfaceRefused(
+                "host_controller_authority"
+            )),
+            "a Guest is refused host controller authority rather than granted a share of it"
+        );
+        assert!(
+            !deployment.has_target_authority(),
+            "a refused publication leaves the target with no authority at all"
+        );
+        let mut operator = TargetAuthority::target_local(zone(), store(), Vec::new());
+        operator.surfaces.public_operator_socket = true;
+        assert_eq!(
+            deployment.publish_target_authority(operator),
+            Err(DeploymentError::AuthoritySurfaceRefused(
+                "public_operator_socket"
+            )),
+        );
+    }
+
+    /// Credential custody stays with the host; a target that claims it is
+    /// refused rather than being handed the material.
+    #[test]
+    fn a_target_that_claims_credential_custody_is_refused() {
+        let deployment = guest();
+        let mut authority = TargetAuthority::target_local(zone(), store(), Vec::new());
+        authority.credential_custody = true;
+        assert_eq!(
+            deployment.publish_target_authority(authority),
+            Err(DeploymentError::AuthorityCredentialCustodyRefused),
+            "a target never takes custody of a credential"
+        );
+        assert!(!deployment.has_target_authority());
+    }
+
+    /// The published authority is the deployment identity the target serves
+    /// under, so it cannot be re-pointed at another one behind the rows
+    /// already admitted under it.
+    #[test]
+    fn a_second_authority_publication_is_refused() {
+        let deployment = guest();
+        deployment
+            .publish_target_authority(TargetAuthority::target_local(zone(), store(), Vec::new()))
+            .expect("first publication");
+        assert_eq!(
+            deployment.publish_target_authority(TargetAuthority::target_local(
+                zone(),
+                StoreIncarnation::parse("store-2").expect("store"),
+                Vec::new()
+            )),
+            Err(DeploymentError::AuthorityAlreadyPublished),
+            "the target-local store does not silently change deployment identity"
+        );
+        assert_eq!(
+            deployment
+                .target_authority()
+                .expect("state available")
+                .expect("published")
+                .store_incarnation,
+            store(),
+        );
+    }
+
+    /// The host deployment keeps its own surfaces; the publication is bounded
+    /// by the mode rather than by a hand-written per-mode table.
+    #[test]
+    fn the_host_deployment_keeps_its_own_surfaces() {
+        let deployment = host();
+        let mut authority = TargetAuthority::target_local(zone(), store(), Vec::new());
+        authority.surfaces = DaemonMode::Host.surfaces();
+        deployment
+            .publish_target_authority(authority)
+            .expect("the host's own surfaces are within its mode");
+        assert!(deployment.has_target_authority());
+        // `realm_credentials` is no surface of either mode, so even the host
+        // cannot be granted it through a publication.
+        let mut overreach = TargetAuthority::target_local(zone(), store(), Vec::new());
+        overreach.surfaces = DaemonMode::Host.surfaces();
+        overreach.surfaces.realm_credentials = true;
+        assert_eq!(
+            host().publish_target_authority(overreach),
+            Err(DeploymentError::AuthoritySurfaceRefused("realm_credentials")),
+        );
     }
 }

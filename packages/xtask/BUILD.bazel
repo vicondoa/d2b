@@ -24,7 +24,6 @@ d2b_rust_binary(
             "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-provider-command:d2b_provider_command",
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-guest:d2b_provider_guest",
         "//packages/d2b-provider-operation:d2b_provider_operation",
@@ -52,7 +51,6 @@ d2b_rust_binary(
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-control:d2b_contracts_control",
         "//packages/d2b-core:d2b_core",
-        "//packages/d2b-provider-command:d2b_provider_command",
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-guest:d2b_provider_guest",
         "//packages/d2b-provider-operation:d2b_provider_operation",
@@ -212,6 +210,22 @@ generated_artifact_check(
     env_inherit = ["HOME", "CARGO_HOME", "RUSTUP_HOME", "PATH"],
 )
 
+# The new-graph composition renders the per-crate declarations and
+# cross-checks them against the provider crates' compiled sources. Both ride
+# in on `packages_workspace_sources`: each provider crate's
+# `cargo_workspace_sources` globs the four declaration files beside its own
+# Rust sources, because a glob in the root package cannot reach into a
+# subpackage and so cannot name them from there. The target also stages the
+# committed closure it rewrites.
+generated_artifact_check(
+    name = "gen_new_graph_drift",
+    command = "gen-new-graph",
+    data = [
+        "//:generated_new_graph",
+        "//:packages_workspace_sources",
+    ],
+)
+
 generated_artifact_generator(
     name = "generate",
     data = [
@@ -231,6 +245,7 @@ test_suite(
         ":gen_daemon_api_drift",
         ":gen_error_codes_drift",
         ":gen_layer_catalogs_drift",
+        ":gen_new_graph_drift",
         ":gen_nix_inventories_drift",
         ":gen_package_policy_inputs_drift",
         ":gen_provider_packaging_drift",
@@ -318,7 +333,6 @@ d2b_rust_test(
         "//packages/d2b-provider-process-systemd:BUILD.bazel",
         "//packages/d2b-provider-toolkit:BUILD.bazel",
         "//packages/d2b-provider-transport-azure-relay:BUILD.bazel",
-        "//packages/d2b-provider-transport-unix:BUILD.bazel",
         "//packages/d2b-provider-transport-vsock:BUILD.bazel",
         "//packages/d2b-provider-volume-local:BUILD.bazel",
         "//packages/d2b-provider-volume-virtiofs:BUILD.bazel",
@@ -339,7 +353,6 @@ d2b_rust_test(
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-provider-command:d2b_provider_command",
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-guest:d2b_provider_guest",
         "//packages/d2b-provider-operation:d2b_provider_operation",
@@ -365,7 +378,6 @@ d2b_rust_test(
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-provider-command:d2b_provider_command",
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-guest:d2b_provider_guest",
         "//packages/d2b-provider-operation:d2b_provider_operation",
@@ -486,7 +498,6 @@ d2b_rust_test(
     ],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-provider-command:d2b_provider_command",
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-guest:d2b_provider_guest",
         "//packages/d2b-provider-operation:d2b_provider_operation",
@@ -515,7 +526,6 @@ d2b_rust_test(
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-provider-command:d2b_provider_command",
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-guest:d2b_provider_guest",
         "//packages/d2b-provider-operation:d2b_provider_operation",

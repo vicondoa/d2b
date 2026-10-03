@@ -7,7 +7,9 @@
 //!
 //! - aggregates those declarations into the `PROVIDER_REGISTRATIONS` table
 //!   the daemon composition root composes (`include!`d from
-//!   `packages/d2bd/src/resource_plane_v3.rs`), so a new family is
+//!   `packages/d2bd/src/resource_plane_v3.rs` straight out of the staged
+//!   `generated/new-graph/` closure, so the declaration render and the
+//!   compiled production bytes are one committed file), so a new family is
 //!   registered without the daemon naming it - a lane that declares its
 //!   family in the crate needs no daemon edit and no layout-ratchet row;
 //! - runs the declaration-to-source parity gate: a declared provider must
@@ -30,18 +32,21 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::authority_common::{collect_rs_files, verify_committed};
+use crate::authority_common::{
+    admits_provider_identity, collect_rs_files, declaration_paths, verify_committed, Declaration,
+};
+#[cfg(test)]
+use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
 
 /// The directory-glob root the per-crate declarations live under.
 const PACKAGES_DIR: &str = "packages";
-const PROVIDER_PREFIX: &str = "d2b-provider-";
-const DECLARATION_FILE: &str = "registrations.json";
 
-/// The repository-relative generated artifact path (relative to the source
-/// file that `include!`s it, so `include!("generated/...")` resolves it).
+/// The repository-relative generated artifact path: the staged closure copy
+/// the daemon's composition root `include!`s, so the declaration render and
+/// the compiled production bytes are the same file rather than two.
 pub(crate) const GENERATED_ARTIFACT: &str =
-    "packages/d2bd/src/generated/provider_registrations.rs";
+    "generated/new-graph/provider_registrations.rs";
 
 /// One provider crate's registration declaration.
 ///
@@ -108,6 +113,58 @@ pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(vec![artifact_path])
 }
 
+/// The provider registration rows a declaration projection produces.
+///
+/// The row is the composition root's view of one declaration: the identities a
+/// daemon registers without naming the family. It is derived, so adding a
+/// provider that uses existing primitives needs no handwritten registration.
+#[cfg(test)]
+pub(crate) fn render_declaration_registrations(plan: &PrivatePlanProjection) -> String {
+    let mut out = String::new();
+    out.push_str("// @generated\n");
+    out.push_str("// Provenance: derived from the provider declaration (KTD1/U4). A\n");
+    out.push_str("// generated artifact is an output, not a second source.\n");
+    for row in plan.registrations() {
+        out.push_str("ProviderRegistrationRow {\n");
+        out.push_str(&format!("    artifact_id: {:?},\n", row.artifact_id()));
+        out.push_str(&format!("    provider_ref: {:?},\n", row.provider_ref()));
+        out.push_str(&format!(
+            "    components: &[{}],\n",
+            row.components()
+                .iter()
+                .map(|component| format!("{component:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str(&format!(
+            "    resource_types: &[{}],\n",
+            row.resource_types()
+                .iter()
+                .map(|resource_type| format!("{resource_type:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str(&format!(
+            "    services: &[{}],\n",
+            row.services()
+                .iter()
+                .map(|service| format!("{service:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str(&format!(
+            "    methods: &[{}],\n",
+            row.methods()
+                .iter()
+                .map(|method| format!("{method:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        out.push_str("}\n");
+    }
+    out
+}
+
 /// The declaration-to-source parity violations: a declared provider that is
 /// not the crate's own family, a declared service the crate's sources do not
 /// spell, a service the crate's sources spell or its descriptor registers
@@ -120,15 +177,16 @@ fn parity_errors(repo_root: &Path) -> Result<Vec<String>, String> {
     let mut providers: BTreeMap<&str, &str> = BTreeMap::new();
     let mut services: BTreeMap<&str, &str> = BTreeMap::new();
     for (crate_name, declaration) in &declarations {
-        // The declared provider is the crate's own family by construction:
-        // the crate name spells the family it owns, so a declaration naming
-        // another family is a parity violation naming both.
-        let family = crate_name
-            .strip_prefix(PROVIDER_PREFIX)
-            .unwrap_or(crate_name);
-        if declaration.provider != family {
+        // The declared identity is gated on the resource-name grammar, not
+        // on the crate's directory name: `d2b-provider-guest-qemu-media`
+        // registers `runtime-qemu-media` and `d2b-provider-process-minijail`
+        // registers `system-minijail`, so reading the identity back out of
+        // the directory name made a crate's real identity inexpressible and
+        // published references no production surface carries. Uniqueness
+        // below is what keeps two crates off one identity.
+        if !admits_provider_identity(&declaration.provider) {
             errors.push(format!(
-                "provider-mismatch: crate {crate_name} declares provider {}; a crate declares only its own family",
+                "malformed-provider-identity: crate {crate_name} declares provider {}; a Provider identity is a resource name the contracts admit",
                 declaration.provider
             ));
         }
@@ -262,28 +320,15 @@ fn descriptor_service_ids(text: &str, consts: &BTreeMap<String, String>) -> BTre
 
 /// Read every declaring crate's registration declaration into a
 /// crate-keyed map, in crate-name order.
+///
+/// The crate set is [`declaration_paths`]', which refuses a provider crate
+/// carrying no declaration rather than dropping it: a renamed
+/// `registrations.json` would otherwise remove its family from the composed
+/// registration table with the drift gate still green over the smaller input.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_declarations(repo_root: &Path) -> Result<BTreeMap<String, RegistrationDeclaration>, String> {
-    let packages = repo_root.join(PACKAGES_DIR);
-    let entries = fs::read_dir(&packages)
-        .map_err(|error| format!("cannot read {}: {error}", packages.display()))?;
     let mut out = BTreeMap::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read a package entry: {error}"))?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if !name.starts_with(PROVIDER_PREFIX) {
-            continue;
-        }
-        let declaration_path = path.join(DECLARATION_FILE);
-        if !declaration_path.is_file() {
-            continue;
-        }
+    for (name, declaration_path) in declaration_paths(repo_root, Declaration::Registrations)? {
         let text = fs::read_to_string(&declaration_path).map_err(|error| {
             format!("cannot read {}: {error}", declaration_path.display())
         })?;
@@ -297,9 +342,20 @@ fn load_declarations(repo_root: &Path) -> Result<BTreeMap<String, RegistrationDe
                 declaration.crate_name
             ));
         }
-        out.insert(name.to_owned(), declaration);
+        out.insert(name, declaration);
     }
     Ok(out)
+}
+/// Render the registration table from the declarations alone.
+///
+/// `gen-new-graph` renders its committed new-graph projection through this
+/// entry point, so the staged bytes are the same render the `--fix` path
+/// installs. It reads no crate source, so the parity gate stays a separate
+/// cross-check the new-graph closure runs over the composition rather than a
+/// condition of rendering it.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, String> {
+    render(repo_root)
 }
 
 /// Render the generated registration table from the declarations, in
@@ -342,6 +398,31 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// The registration rows are derived, so a provider that uses existing
+    /// primitives registers without a daemon edit or a layout-ratchet row.
+    #[test]
+    fn the_registration_rows_are_derived_from_the_declaration() {
+        let plan = crate::resource_type_authority::declaration_fixture::plan(&["export", "close"]);
+        let rendered = render_declaration_registrations(&plan);
+        assert!(rendered.contains("artifact_id: \"provider-volume-virtiofs\""));
+        assert!(
+            rendered.contains("\"volume-virtiofs.d2bus.org/export\""),
+            "the declared service is registered: {rendered}"
+        );
+        assert_eq!(rendered, render_declaration_registrations(&plan), "byte-stable");
+    }
+
+    /// Adding a method moves the registration row with the declaration.
+    #[test]
+    fn one_changed_method_moves_the_registration_row() {
+        let before =
+            render_declaration_registrations(&crate::resource_type_authority::declaration_fixture::plan(&["export"]));
+        let after = render_declaration_registrations(
+            &crate::resource_type_authority::declaration_fixture::plan(&["export", "close"]),
+        );
+        assert_ne!(before, after);
+    }
+
     /// A throwaway fixture tree under the OS temp dir.
     struct Fixture {
         root: PathBuf,
@@ -368,8 +449,18 @@ mod tests {
         }
 
         /// A declaration file for one fixture crate with the given services.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_declaration(&self, crate_name: &str, services: &[&str]) {
+            self.write_declaration_for(
+                crate_name,
+                crate_name.strip_prefix("d2b-provider-").expect("provider prefix"),
+                services,
+            );
+        }
+
+        /// A declaration file for one fixture crate naming an explicit
+        /// provider identity, which need not be the directory's own suffix.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn write_declaration_for(&self, crate_name: &str, provider: &str, services: &[&str]) {
             let services = services
                 .iter()
                 .map(|service| format!("      \"{service}\""))
@@ -378,8 +469,7 @@ mod tests {
             self.write(
                 &format!("packages/{crate_name}/registrations.json"),
                 &format!(
-                    "{{\n  \"crate\": \"{crate_name}\",\n  \"provider\": \"{family}\",\n  \"services\": [\n{services}\n  ]\n}}\n",
-                    family = crate_name.strip_prefix("d2b-provider-").expect("provider prefix")
+                    "{{\n  \"crate\": \"{crate_name}\",\n  \"provider\": \"{provider}\",\n  \"services\": [\n{services}\n  ]\n}}\n"
                 ),
             );
         }
@@ -475,28 +565,43 @@ mod tests {
         );
     }
 
-    /// A declaration whose provider is not the crate's own family fails the
-    /// parity check.
+    /// A declaration whose provider identity the resource-name grammar
+    /// refuses fails the parity check. The identity is not held to the
+    /// crate's directory name: a crate registers the identity it is, and
+    /// the grammar is the whole of what a declared identity owes.
     #[test]
-    fn the_parity_check_fails_when_the_provider_is_not_the_crates_family() {
-        let fixture = Fixture::new("foreign-provider");
+    fn the_parity_check_fails_when_the_provider_is_not_a_resource_name() {
+        let fixture = Fixture::new("malformed-provider");
         fixture.write_sources("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
-        fixture.write_declaration("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
-        let path = fixture.root.join("packages/d2b-provider-fixture/registrations.json");
-        let text = fs::read_to_string(&path).expect("declaration");
-        fs::write(
-            &path,
-            text.replace("\"provider\": \"fixture\"", "\"provider\": \"foreign\""),
-        )
-        .expect("mutate");
+        fixture.write_declaration_for(
+            "d2b-provider-fixture",
+            "not a name",
+            &["fixture.d2bus.org/alpha"],
+        );
         let errors = parity_errors(&fixture.root).expect("parity loads");
         assert!(
             errors.iter().any(|error| {
-                error.contains("provider-mismatch")
+                error.contains("malformed-provider-identity")
                     && error.contains("d2b-provider-fixture")
-                    && error.contains("foreign")
+                    && error.contains("not a name")
             }),
-            "expected the provider violation naming both: {errors:?}"
+            "expected the identity violation naming both: {errors:?}"
+        );
+    }
+
+    /// A crate whose registered identity is not its directory's suffix
+    /// passes: `d2b-provider-guest-qemu-media` registers
+    /// `runtime-qemu-media`, and refusing that spelling is what made the
+    /// identity inexpressible in the first place.
+    #[test]
+    fn the_parity_check_admits_an_identity_the_directory_name_does_not_spell() {
+        let fixture = Fixture::new("renamed-identity");
+        fixture.write_sources("d2b-provider-guest-qemu-media", &[]);
+        fixture.write_declaration_for("d2b-provider-guest-qemu-media", "runtime-qemu-media", &[]);
+        assert_eq!(
+            parity_errors(&fixture.root).expect("parity loads"),
+            Vec::<String>::new(),
+            "an identity the directory name does not spell is a declared identity, not a violation"
         );
     }
 

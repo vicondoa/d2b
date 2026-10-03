@@ -378,14 +378,25 @@ impl NetworkEffectContext {
         let proof = self
             .network_admission()
             .ok_or(NetworkBrokerError::NetworkAdmissionRequired)?;
-        Ok(NetworkProvenance::new(
-            proof.key().zone_uid().clone(),
-            proof.key().network_uid().clone(),
-            proof.key().network_generation(),
-            proof.key().attachment_generation(),
-            proof.key().bundle_generation().clone(),
-        ))
+        Ok(proof.key().provenance())
     }
+
+    /// Derive one consumer's interface on this context's shared fabric.
+    ///
+    /// The fabric is realized once per `(zone, Network, target)`; each
+    /// admitted membership contributes one interface on it, keyed by that
+    /// membership's own consumer identity. The derivation runs only after
+    /// this context's own Network admission proof is present, so it is fenced
+    /// exactly like every other tap effect.
+    pub fn membership_interface(
+        &self,
+        consumer_uid: &ResourceUid,
+    ) -> Result<IfName, NetworkBrokerError> {
+        let provenance = self.provenance()?;
+        crate::binding::membership_interface(&provenance, consumer_uid)
+            .map_err(|_| NetworkBrokerError::NetworkAdmissionMismatch)
+    }
+
 
     /// Resolve one TAP identity from this root-admitted Network context.
     pub fn tap_identity(
@@ -1728,6 +1739,7 @@ mod tests {
             ),
             network_spec(false),
             vec![attachment_uid],
+            Vec::new(),
         )
         .unwrap()
         .proof();

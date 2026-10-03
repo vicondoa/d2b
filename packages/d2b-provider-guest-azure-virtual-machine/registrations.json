@@ -1,0 +1,5 @@
+{
+  "crate": "d2b-provider-guest-azure-virtual-machine",
+  "provider": "runtime-azure-virtual-machine",
+  "services": []
+}

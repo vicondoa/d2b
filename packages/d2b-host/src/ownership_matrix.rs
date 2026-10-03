@@ -384,6 +384,594 @@ fn walk_children(root: &Path, expected: &Ownership, out: &mut Vec<OwnershipMisma
     }
 }
 
+// ---------------------------------------------------------------------------
+// The destructive reset ownership boundary (U32, KTD15)
+// ---------------------------------------------------------------------------
+//
+// A clean-break reset removes host state. Two questions have to have the
+// same answer before a single name is unlinked, and neither of them is
+// "the directory looked empty":
+//
+// 1. Is this byte d2b's to remove? Answered from the exact ownership
+//    description the admitted reset Operation carries, checked against a
+//    no-follow observation of the deployment root. A foreign ownership
+//    marker, a symlink on any component, an owned path that resolves
+//    outside the deployment root, an owned path on another filesystem, or
+//    an external Volume source the owned set would swallow each fail
+//    closed - a marker is never an authorization to overwrite.
+// 2. Is anything still using it? Answered from live evidence: cgroup
+//    members, managed processes, ownership markers, held leases and the
+//    active host generation. Fresh empty state is exactly what the new
+//    model wants to look like, so "empty" is never the drain proof.
+//
+// Nothing here mutates an inode. The reset unlinks names; it never
+// chmods or chowns, because a store-view farm shares its inodes with the
+// system store and a permission change on one name is a permission change
+// on every name.
+
+/// The deployment-root-relative document that establishes a deployment
+/// root's ownership.
+///
+/// A d2b deployment root is identified by the one verified deployment
+/// document it publishes, re-exported from the shared contract so the
+/// broker's reset runner and this boundary read the same name. The proof is
+/// the document's own self-hash: an edit after verification changes the
+/// digest, and a directory that publishes no verifying document is not a
+/// d2b deployment root at all.
+pub const OWNERSHIP_DOCUMENT_FILE: &str = d2b_core::deployment_bootstrap::DEPLOYMENT_BOOTSTRAP_FILE;
+
+/// The bounded read for that document.
+///
+/// A document larger than this is not one this release reads, so it is
+/// refused rather than scanned for something that happens to look like a
+/// digest.
+pub const MAX_OWNERSHIP_DOCUMENT_BYTES: usize =
+    d2b_core::deployment_bootstrap::MAX_DEPLOYMENT_BOOTSTRAP_BYTES;
+
+/// How one owned path may be treated by the destructive reset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OwnedPathKind {
+    /// A directory whose entries are unlinked. No permission is changed
+    /// on anything inside it.
+    Tree,
+    /// A single regular file.
+    File,
+    /// A per-Guest store-view hardlink farm. Only the farm's own direct
+    /// basenames are unlinked: the farm is never descended into, so a
+    /// `gcroots/...` link into the system store is never followed and no
+    /// shared inode is ever stat'd for repair.
+    HardlinkFarm,
+}
+
+impl OwnedPathKind {
+    /// The inode kind the ownership description declares for this path.
+    pub const fn expected_inode_kind(self) -> &'static str {
+        match self {
+            Self::Tree | Self::HardlinkFarm => "dir",
+            Self::File => "file",
+        }
+    }
+}
+
+/// One exact owned path in a reset's ownership description.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedPath {
+    /// Absolute path, lexically beneath the deployment root.
+    pub path: PathBuf,
+    /// What the reset may do with it.
+    pub kind: OwnedPathKind,
+}
+
+impl OwnedPath {
+    /// An owned directory tree.
+    pub fn tree(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            kind: OwnedPathKind::Tree,
+        }
+    }
+
+    /// An owned regular file.
+    pub fn file(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            kind: OwnedPathKind::File,
+        }
+    }
+
+    /// An owned store-view hardlink farm.
+    pub fn hardlink_farm(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            kind: OwnedPathKind::HardlinkFarm,
+        }
+    }
+}
+
+/// The exact ownership description one admitted reset Operation carries.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetOwnership {
+    /// Every path the reset may unlink, with the treatment it may use.
+    pub owned: Vec<OwnedPath>,
+    /// Volume sources the operator owns that live outside the deployment
+    /// root. They are named so a reset can prove it is leaving them
+    /// alone; one that would reach into one is refused, not narrowed.
+    pub external_sources: Vec<PathBuf>,
+}
+
+impl ResetOwnership {
+    /// The exact owned set, in declaration order.
+    pub fn owned(&self) -> &[OwnedPath] {
+        &self.owned
+    }
+}
+
+/// The inode kind one no-follow stat observed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InodeKind {
+    Dir,
+    File,
+    Symlink,
+    Other,
+}
+
+impl InodeKind {
+    /// The stable label a refusal renders.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dir => "dir",
+            Self::File => "file",
+            Self::Symlink => "symlink",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// One owned path as the filesystem presents it, no-follow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedObservation {
+    /// The owned path.
+    pub path: PathBuf,
+    /// The treatment the ownership description declared.
+    pub kind: OwnedPathKind,
+    /// Whether the path exists at all. An absent owned path is a
+    /// completed reset, not a failure, so a repeated reset is safe.
+    pub present: bool,
+    /// The observed inode kind when present.
+    pub inode_kind: Option<InodeKind>,
+    /// The `st_dev` the path lives on, when present. An owned path on a
+    /// different device from the deployment root is a mounted foreign
+    /// filesystem: unlinking into it would delete data this ownership
+    /// description never described.
+    pub device: Option<u64>,
+}
+
+/// Everything the pure reset decision reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResetObservation {
+    /// The deployment root the reset is bounded to.
+    pub deployment_root: PathBuf,
+    /// The `st_dev` of the deployment root itself.
+    pub deployment_device: u64,
+    /// The ownership id this reset is bounded to: the self-hash of the
+    /// verified deployment document.
+    pub ownership_id: String,
+    /// The document body found at the deployment root, when it was read.
+    pub ownership_document: Option<String>,
+    /// The no-follow observation of every owned path.
+    pub owned: Vec<OwnedObservation>,
+}
+
+/// The live evidence a reset must observe before it unlinks anything.
+///
+/// Empty new state is the shape the new model wants, so no field here is
+/// derived from the absence of records: each is a positive observation of
+/// something still using the state the reset is about to remove.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DrainEvidence {
+    /// Live members under the managed cgroup subtree.
+    pub live_cgroup_members: Vec<PathBuf>,
+    /// Live managed processes.
+    pub live_processes: Vec<PathBuf>,
+    /// Managed ownership or readiness markers still on disk.
+    pub live_markers: Vec<PathBuf>,
+    /// Lease or lock files still held.
+    pub held_leases: Vec<PathBuf>,
+    /// The host generation still recorded as active, if any.
+    pub active_host_generation: Option<String>,
+}
+
+/// Why a destructive reset refuses to act.
+///
+/// Every variant is a fail-closed decision: an unresolved question is a
+/// refusal, never a permission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "reason")]
+pub enum ResetRefusal {
+    /// The deployment root is not a directory.
+    DeploymentRootKindMismatch {
+        path: PathBuf,
+        observed: String,
+    },
+    /// An owned path is not strictly beneath the deployment root.
+    OwnershipOutsideDeploymentRoot { path: PathBuf },
+    /// A symlink, or a non-directory, stands on a component of an owned
+    /// path.
+    SymlinkEscape { path: PathBuf },
+    /// An owned path exists but is not the kind its declaration named.
+    OwnershipKindMismatch {
+        path: PathBuf,
+        expected: String,
+        observed: String,
+    },
+    /// An owned path could not be stat-ed at all.
+    OwnershipStatFailed { path: PathBuf, detail: String },
+    /// The deployment document is missing, oversized, not readable as a
+    /// document, or carries no self-hash, so ownership cannot be
+    /// established at all.
+    OwnershipDocumentUnreadable { path: PathBuf, detail: String },
+    /// The deployment document names a different deployment. A document
+    /// edited after verification is never an authorization to overwrite.
+    ForeignOwnershipDocument { path: PathBuf, digest: String },
+    /// An owned path is on another filesystem than the deployment root,
+    /// so unlinking into it would delete a mounted foreign filesystem.
+    ForeignFilesystem { path: PathBuf },
+    /// An external Volume source falls inside the owned set, so the reset
+    /// would delete operator data this ownership description never
+    /// described.
+    ExternalSourceInsideOwnership { path: PathBuf },
+    /// A managed workload is still live.
+    WorkloadLive { path: PathBuf },
+    /// A lease or lock is still held.
+    LeaseHeld { path: PathBuf },
+    /// A host generation is still recorded as active.
+    HostGenerationActive { generation: String },
+}
+
+impl ResetRefusal {
+    /// The stable identifier an envelope renders.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::DeploymentRootKindMismatch { .. } => "reset-deployment-root-kind-mismatch",
+            Self::OwnershipOutsideDeploymentRoot { .. } => "reset-ownership-outside-root",
+            Self::SymlinkEscape { .. } => "reset-symlink-escape",
+            Self::OwnershipKindMismatch { .. } => "reset-ownership-kind-mismatch",
+            Self::OwnershipStatFailed { .. } => "reset-ownership-stat-failed",
+            Self::OwnershipDocumentUnreadable { .. } => "reset-ownership-document-unreadable",
+            Self::ForeignOwnershipDocument { .. } => "reset-foreign-ownership-document",
+            Self::ForeignFilesystem { .. } => "reset-foreign-filesystem",
+            Self::ExternalSourceInsideOwnership { .. } => "reset-external-source-owned",
+            Self::WorkloadLive { .. } => "reset-workload-live",
+            Self::LeaseHeld { .. } => "reset-lease-held",
+            Self::HostGenerationActive { .. } => "reset-host-generation-active",
+        }
+    }
+
+    /// The path the refusal is about, when it names one.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Self::DeploymentRootKindMismatch { path, .. }
+            | Self::OwnershipOutsideDeploymentRoot { path }
+            | Self::SymlinkEscape { path }
+            | Self::OwnershipKindMismatch { path, .. }
+            | Self::OwnershipStatFailed { path, .. }
+            | Self::OwnershipDocumentUnreadable { path, .. }
+            | Self::ForeignOwnershipDocument { path, .. }
+            | Self::ForeignFilesystem { path }
+            | Self::ExternalSourceInsideOwnership { path }
+            | Self::WorkloadLive { path }
+            | Self::LeaseHeld { path } => Some(path.as_path()),
+            Self::HostGenerationActive { .. } => None,
+        }
+    }
+}
+
+impl core::fmt::Display for ResetRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
+impl std::error::Error for ResetRefusal {}
+
+/// One owned path the ownership boundary verified, ready to unlink.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedOwnedPath {
+    /// The owned path.
+    pub path: PathBuf,
+    /// The treatment it may receive.
+    pub kind: OwnedPathKind,
+    /// Whether it is currently present. An absent entry is reported so a
+    /// repeated completed reset is visible as a no-op rather than a
+    /// silent success.
+    pub present: bool,
+}
+
+/// The verified exact ownership set: the complete unlink inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedResetOwnership {
+    /// The deployment root the reset is bounded to.
+    pub deployment_root: PathBuf,
+    /// The ownership id the deployment root's marker carried.
+    pub ownership_id: String,
+    /// Every verified entry, in ownership-description order.
+    pub entries: Vec<VerifiedOwnedPath>,
+    /// External Volume sources the reset proved it leaves alone.
+    pub external_sources: Vec<PathBuf>,
+}
+
+impl VerifiedResetOwnership {
+    /// The entries that currently exist and would be unlinked.
+    pub fn present_entries(&self) -> impl Iterator<Item = &VerifiedOwnedPath> {
+        self.entries.iter().filter(|entry| entry.present)
+    }
+}
+
+/// Read the ownership id out of a deployment document body.
+///
+/// The id is the document's own `graphDigest`: the self-hash the publisher
+/// computed over the rest of the document. A body that is not a document,
+/// or a document that carries no self-hash, is `None`, and the caller
+/// resolves that as a refusal rather than as an empty id that would match
+/// anything. The bytes were already verified against that self-hash before
+/// the reset reached this boundary; reading the id here is what proves the
+/// document on disk is still the one that was admitted.
+pub fn parse_ownership_document(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()?
+        .get("graphDigest")?
+        .as_str()
+        .filter(|digest| !digest.is_empty())
+        .map(str::to_owned)
+}
+
+/// Observe one owned path without traversing a single symlink.
+///
+/// Every component beneath the deployment root is `symlink_metadata`-ed in
+/// turn: a symlink anywhere on the path is
+/// [`ResetRefusal::SymlinkEscape`] rather than something to resolve, so an
+/// owned name can never be redirected outside the root by planting a link
+/// under it. A final component that is simply absent is a completed reset
+/// and is reported as absent; an absent intermediate component is a broken
+/// ownership description and is refused.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn observe_owned(
+    deployment_root: &Path,
+    owned: &OwnedPath,
+    deployment_device: u64,
+) -> Result<OwnedObservation, ResetRefusal> {
+    let relative = owned
+        .path
+        .strip_prefix(deployment_root)
+        .map_err(|_| ResetRefusal::OwnershipOutsideDeploymentRoot {
+            path: owned.path.clone(),
+        })?;
+    let components: Vec<_> = relative.components().collect();
+    if components.is_empty() {
+        return Err(ResetRefusal::OwnershipOutsideDeploymentRoot {
+            path: owned.path.clone(),
+        });
+    }
+    let mut walked = deployment_root.to_path_buf();
+    for (index, component) in components.iter().enumerate() {
+        let name = component.as_os_str();
+        if name == ".." || name == "." || name == "/" {
+            return Err(ResetRefusal::OwnershipOutsideDeploymentRoot {
+                path: owned.path.clone(),
+            });
+        }
+        walked.push(name);
+        let meta = match fs::symlink_metadata(&walked) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == ErrorKind::NotFound && index + 1 == components.len() => {
+                return Ok(OwnedObservation {
+                    path: owned.path.clone(),
+                    kind: owned.kind,
+                    present: false,
+                    inode_kind: None,
+                    device: None,
+                });
+            }
+            Err(error) => {
+                return Err(ResetRefusal::OwnershipStatFailed {
+                    path: walked,
+                    detail: error.to_string(),
+                });
+            }
+        };
+        if meta.file_type().is_symlink() {
+            return Err(ResetRefusal::SymlinkEscape { path: walked });
+        }
+        let is_last = index + 1 == components.len();
+        if !is_last && !meta.is_dir() {
+            return Err(ResetRefusal::SymlinkEscape { path: walked });
+        }
+        if is_last {
+            let inode_kind = if meta.is_dir() {
+                InodeKind::Dir
+            } else if meta.is_file() {
+                InodeKind::File
+            } else {
+                InodeKind::Other
+            };
+            let device = meta.dev();
+            if device != deployment_device {
+                return Err(ResetRefusal::ForeignFilesystem { path: walked });
+            }
+            return Ok(OwnedObservation {
+                path: owned.path.clone(),
+                kind: owned.kind,
+                present: true,
+                inode_kind: Some(inode_kind),
+                device: Some(device),
+            });
+        }
+    }
+    Err(ResetRefusal::OwnershipStatFailed {
+        path: owned.path.clone(),
+        detail: "the owned path declared no final component".to_owned(),
+    })
+}
+
+/// Observe the deployment root and its exact owned set, without judging.
+///
+/// The returned observation is the input to the pure [`verify_reset`]
+/// decision, so every filesystem read lives here and every refusal
+/// predicate stays decidable without a mount table.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+pub fn observe_reset(
+    deployment_root: &Path,
+    ownership_id: &str,
+    ownership: &ResetOwnership,
+) -> Result<ResetObservation, ResetRefusal> {
+    let root_meta = match fs::symlink_metadata(deployment_root) {
+        Ok(meta) => meta,
+        Err(error) => {
+            return Err(ResetRefusal::OwnershipStatFailed {
+                path: deployment_root.to_path_buf(),
+                detail: error.to_string(),
+            });
+        }
+    };
+    if root_meta.file_type().is_symlink() || !root_meta.is_dir() {
+        return Err(ResetRefusal::DeploymentRootKindMismatch {
+            path: deployment_root.to_path_buf(),
+            observed: actual_kind_str(&root_meta).to_owned(),
+        });
+    }
+    let deployment_device = root_meta.dev();
+    let document_path = deployment_root.join(OWNERSHIP_DOCUMENT_FILE);
+    let ownership_document = match fs::read(&document_path) {
+        Ok(bytes) => {
+            if bytes.len() > MAX_OWNERSHIP_DOCUMENT_BYTES {
+                return Err(ResetRefusal::OwnershipDocumentUnreadable {
+                    path: document_path,
+                    detail: "the deployment document exceeds the bounded read".to_owned(),
+                });
+            }
+            String::from_utf8(bytes).ok()
+        }
+        Err(error) => {
+            return Err(ResetRefusal::OwnershipDocumentUnreadable {
+                path: document_path,
+                detail: error.to_string(),
+            });
+        }
+    };
+    let mut owned = Vec::with_capacity(ownership.owned.len());
+    for entry in &ownership.owned {
+        owned.push(observe_owned(deployment_root, entry, deployment_device)?);
+    }
+    Ok(ResetObservation {
+        deployment_root: deployment_root.to_path_buf(),
+        deployment_device,
+        ownership_id: ownership_id.to_owned(),
+        ownership_document,
+        owned,
+    })
+}
+
+/// Decide whether the observed ownership may be removed.
+///
+/// Pure: no clock, no store, no I/O. It resolves the deployment document
+/// that establishes this root's ownership, each owned path's declared kind,
+/// each owned path's filesystem, every external Volume source, and the live
+/// drain evidence.
+pub fn verify_reset(
+    observation: &ResetObservation,
+    ownership: &ResetOwnership,
+    evidence: &DrainEvidence,
+) -> Result<VerifiedResetOwnership, ResetRefusal> {
+    let document_path = observation.deployment_root.join(OWNERSHIP_DOCUMENT_FILE);
+    let document = observation.ownership_document.as_deref().ok_or_else(|| {
+        ResetRefusal::OwnershipDocumentUnreadable {
+            path: document_path.clone(),
+            detail: "the deployment document is not valid UTF-8".to_owned(),
+        }
+    })?;
+    match parse_ownership_document(document) {
+        None => {
+            return Err(ResetRefusal::OwnershipDocumentUnreadable {
+                path: document_path,
+                detail: "the deployment document carries no self-hash".to_owned(),
+            });
+        }
+        Some(digest) if digest != observation.ownership_id => {
+            return Err(ResetRefusal::ForeignOwnershipDocument {
+                path: document_path,
+                digest,
+            });
+        }
+        Some(_) => {}
+    }
+
+    for source in &ownership.external_sources {
+        if source.starts_with(&observation.deployment_root) {
+            return Err(ResetRefusal::ExternalSourceInsideOwnership {
+                path: source.clone(),
+            });
+        }
+    }
+
+    let mut entries = Vec::with_capacity(observation.owned.len());
+    for observed in &observation.owned {
+        if !observed.present {
+            entries.push(VerifiedOwnedPath {
+                path: observed.path.clone(),
+                kind: observed.kind,
+                present: false,
+            });
+            continue;
+        }
+        let observed_kind = observed.inode_kind.unwrap_or(InodeKind::Other);
+        let expected = observed.kind.expected_inode_kind();
+        if observed_kind.as_str() != expected {
+            return Err(ResetRefusal::OwnershipKindMismatch {
+                path: observed.path.clone(),
+                expected: expected.to_owned(),
+                observed: observed_kind.as_str().to_owned(),
+            });
+        }
+        if observed.device != Some(observation.deployment_device) {
+            return Err(ResetRefusal::ForeignFilesystem {
+                path: observed.path.clone(),
+            });
+        }
+        entries.push(VerifiedOwnedPath {
+            path: observed.path.clone(),
+            kind: observed.kind,
+            present: true,
+        });
+    }
+
+    if let Some(path) = evidence.live_cgroup_members.first() {
+        return Err(ResetRefusal::WorkloadLive { path: path.clone() });
+    }
+    if let Some(path) = evidence.live_processes.first() {
+        return Err(ResetRefusal::WorkloadLive { path: path.clone() });
+    }
+    if let Some(path) = evidence.live_markers.first() {
+        return Err(ResetRefusal::WorkloadLive { path: path.clone() });
+    }
+    if let Some(path) = evidence.held_leases.first() {
+        return Err(ResetRefusal::LeaseHeld { path: path.clone() });
+    }
+    if let Some(generation) = evidence.active_host_generation.as_ref() {
+        return Err(ResetRefusal::HostGenerationActive {
+            generation: generation.clone(),
+        });
+    }
+
+    Ok(VerifiedResetOwnership {
+        deployment_root: observation.deployment_root.clone(),
+        ownership_id: observation.ownership_id.clone(),
+        entries,
+        external_sources: ownership.external_sources.clone(),
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -786,5 +1374,232 @@ mod tests {
             }
             other => panic!("expected KindMismatch for symlink, got {other:?}"),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reset ownership boundary
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+    use std::fs as stdfs;
+    use std::os::unix::fs::symlink;
+
+    const OWNERSHIP_ID: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
+    /// A deployment root that publishes the verified deployment document,
+    /// and the named entries beneath it.
+    ///
+    /// Only the boundary's own question is set up here - is this document
+    /// the one this reset admitted? - so the body is a document carrying an
+    /// ownership id, and the full contract is verified by the reader that
+    /// admits the reset.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn deployment(root: &Path, owned: &[(&str, OwnedPathKind)]) -> ResetOwnership {
+        stdfs::create_dir_all(root).unwrap();
+        stdfs::write(
+            root.join(OWNERSHIP_DOCUMENT_FILE),
+            format!("{{\"graphDigest\":\"{OWNERSHIP_ID}\"}}"),
+        )
+        .unwrap();
+        ResetOwnership {
+            owned: owned
+                .iter()
+                .map(|(relative, kind)| match kind {
+                    OwnedPathKind::Tree => OwnedPath::tree(root.join(relative)),
+                    OwnedPathKind::File => OwnedPath::file(root.join(relative)),
+                    OwnedPathKind::HardlinkFarm => OwnedPath::hardlink_farm(root.join(relative)),
+                })
+                .collect(),
+            external_sources: Vec::new(),
+        }
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn fixture(owned: &[(&str, OwnedPathKind)]) -> (tempfile::TempDir, ResetOwnership) {
+        let tmp = tempfile::tempdir().unwrap();
+        let ownership = deployment(tmp.path(), owned);
+        (tmp, ownership)
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn observed(root: &Path, ownership: &ResetOwnership) -> ResetObservation {
+        observe_reset(root, OWNERSHIP_ID, ownership).expect("observe")
+    }
+
+    #[test]
+    fn a_document_body_without_a_self_hash_has_no_ownership_id() {
+        assert_eq!(
+            parse_ownership_document(&format!("{{\"graphDigest\":\"{OWNERSHIP_ID}\"}}")),
+            Some(OWNERSHIP_ID.to_owned())
+        );
+        // A body that is not a document cannot establish ownership, so the
+        // caller refuses rather than reading an empty id that matches
+        // everything.
+        assert_eq!(parse_ownership_document("# d2b-managed begin\n"), None);
+        assert_eq!(parse_ownership_document("{\"graphDigest\":\"\"}"), None);
+        assert_eq!(parse_ownership_document("{\"graphDigest\":7}"), None);
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn the_matching_document_verifies_the_exact_inventory() {
+        let (tmp, ownership) = fixture(&[("zones", OwnedPathKind::Tree)]);
+        stdfs::create_dir_all(tmp.path().join("zones/one")).unwrap();
+        let observation = observed(tmp.path(), &ownership);
+        let verified = verify_reset(&observation, &ownership, &DrainEvidence::default()).unwrap();
+        assert_eq!(verified.ownership_id, OWNERSHIP_ID);
+        assert_eq!(verified.entries.len(), 1);
+        assert!(verified.entries[0].present);
+        assert_eq!(verified.present_entries().count(), 1);
+    }
+
+    /// A document edited between admission and removal names a different
+    /// deployment, so it is never an authorization to overwrite.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn a_document_edited_after_admission_is_never_an_authorization_to_overwrite() {
+        let (tmp, ownership) = fixture(&[("zones", OwnedPathKind::Tree)]);
+        stdfs::create_dir(tmp.path().join("zones")).unwrap();
+        let foreign = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+        stdfs::write(
+            tmp.path().join(OWNERSHIP_DOCUMENT_FILE),
+            format!("{{\"graphDigest\":\"{foreign}\"}}"),
+        )
+        .unwrap();
+        let observation = observed(tmp.path(), &ownership);
+        let refusal =
+            verify_reset(&observation, &ownership, &DrainEvidence::default()).unwrap_err();
+        assert_eq!(refusal.code(), "reset-foreign-ownership-document");
+        assert_eq!(
+            refusal,
+            ResetRefusal::ForeignOwnershipDocument {
+                path: tmp.path().join(OWNERSHIP_DOCUMENT_FILE),
+                digest: foreign.to_owned(),
+            }
+        );
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn a_root_with_no_deployment_document_refuses_rather_than_treating_it_as_unowned() {
+        let (tmp, ownership) = fixture(&[]);
+        stdfs::remove_file(tmp.path().join(OWNERSHIP_DOCUMENT_FILE)).unwrap();
+        let refusal = observe_reset(tmp.path(), OWNERSHIP_ID, &ownership).unwrap_err();
+        assert_eq!(refusal.code(), "reset-ownership-document-unreadable");
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn a_symlink_on_an_owned_path_is_refused_rather_than_resolved() {
+        let (tmp, ownership) = fixture(&[("escape", OwnedPathKind::Tree)]);
+        let outside = tmp.path().join("outside");
+        stdfs::create_dir(&outside).unwrap();
+        symlink(&outside, tmp.path().join("escape")).unwrap();
+        let refusal = observe_reset(tmp.path(), OWNERSHIP_ID, &ownership).unwrap_err();
+        assert_eq!(refusal.code(), "reset-symlink-escape");
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn an_owned_path_outside_the_deployment_root_is_refused() {
+        let (tmp, _empty) = fixture(&[]);
+        let elsewhere = tempfile::tempdir().unwrap();
+        let ownership = ResetOwnership {
+            owned: vec![OwnedPath::tree(elsewhere.path().join("data"))],
+            external_sources: Vec::new(),
+        };
+        stdfs::create_dir(elsewhere.path().join("data")).unwrap();
+        let refusal = observe_reset(tmp.path(), OWNERSHIP_ID, &ownership).unwrap_err();
+        assert_eq!(refusal.code(), "reset-ownership-outside-root");
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn a_declared_directory_that_is_a_file_is_refused() {
+        let (tmp, ownership) = fixture(&[("zones", OwnedPathKind::Tree)]);
+        stdfs::write(tmp.path().join("zones"), b"not a directory").unwrap();
+        let observation = observed(tmp.path(), &ownership);
+        let refusal =
+            verify_reset(&observation, &ownership, &DrainEvidence::default()).unwrap_err();
+        assert_eq!(refusal.code(), "reset-ownership-kind-mismatch");
+    }
+
+    /// A mounted foreign filesystem cannot be created unprivileged, so the
+    /// decision that refuses it is exercised on the observation it reads:
+    /// an owned path whose `st_dev` is not the deployment root's.
+    #[test]
+    fn an_owned_path_on_another_filesystem_is_refused() {
+        let (tmp, ownership) = fixture(&[("mounted", OwnedPathKind::Tree)]);
+        let mut observation = observed(tmp.path(), &ownership);
+        observation.owned[0].present = true;
+        observation.owned[0].inode_kind = Some(InodeKind::Dir);
+        observation.owned[0].device = Some(observation.deployment_device + 1);
+        let refusal =
+            verify_reset(&observation, &ownership, &DrainEvidence::default()).unwrap_err();
+        assert_eq!(refusal.code(), "reset-foreign-filesystem");
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn an_external_volume_source_inside_the_owned_set_is_refused() {
+        let (tmp, mut ownership) = fixture(&[("zones", OwnedPathKind::Tree)]);
+        stdfs::create_dir(tmp.path().join("zones")).unwrap();
+        ownership
+            .external_sources
+            .push(tmp.path().join("zones/operator-volume"));
+        let observation = observed(tmp.path(), &ownership);
+        let refusal =
+            verify_reset(&observation, &ownership, &DrainEvidence::default()).unwrap_err();
+        assert_eq!(refusal.code(), "reset-external-source-owned");
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn empty_state_is_not_drain_proof() {
+        let (tmp, ownership) = fixture(&[("zones", OwnedPathKind::Tree)]);
+        stdfs::create_dir(tmp.path().join("zones")).unwrap();
+        let observation = observed(tmp.path(), &ownership);
+        // The owned tree is empty; that is the shape fresh state wants and
+        // it is not evidence of a drain.
+        for evidence in [
+            DrainEvidence {
+                live_cgroup_members: vec![PathBuf::from("/sys/fs/cgroup/d2b.slice/zones/a/guest")],
+                ..DrainEvidence::default()
+            },
+            DrainEvidence {
+                live_processes: vec![PathBuf::from("/proc/1234")],
+                ..DrainEvidence::default()
+            },
+            DrainEvidence {
+                live_markers: vec![tmp.path().join("runtime/host-runtime.json")],
+                ..DrainEvidence::default()
+            },
+            DrainEvidence {
+                held_leases: vec![tmp.path().join("locks/usbip/1-1.2")],
+                ..DrainEvidence::default()
+            },
+            DrainEvidence {
+                active_host_generation: Some("generation-7".to_owned()),
+                ..DrainEvidence::default()
+            },
+        ] {
+            let refusal = verify_reset(&observation, &ownership, &evidence).unwrap_err();
+            assert_ne!(refusal.code(), "reset-ownership-outside-root");
+        }
+        assert!(verify_reset(&observation, &ownership, &DrainEvidence::default()).is_ok());
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn an_absent_owned_path_is_a_completed_reset_not_a_failure() {
+        let (tmp, ownership) = fixture(&[("zones", OwnedPathKind::Tree)]);
+        let observation = observed(tmp.path(), &ownership);
+        let verified = verify_reset(&observation, &ownership, &DrainEvidence::default()).unwrap();
+        assert_eq!(verified.entries.len(), 1);
+        assert!(!verified.entries[0].present);
+        assert_eq!(verified.present_entries().count(), 0);
     }
 }

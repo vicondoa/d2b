@@ -8,10 +8,13 @@ use core::fmt;
 
 use super::spawn_runner::SpawnRunnerPlan;
 
+// Worker-role matrix, exercised only by this file's tests.
 /// Closed GPU worker roles.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GpuBrokerRole {
     /// Full virtio-gpu worker.
+    #[allow(dead_code, reason = "device class with no producer: the role-to-device matrix that would build it is test-only")]
     Full,
     /// Render-node-only worker.
     RenderNode,
@@ -19,7 +22,9 @@ pub(crate) enum GpuBrokerRole {
     Video,
 }
 
+// Device grant classes, exercised only by this file's tests.
 /// Closed GPU device grant classes.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum GpuDeviceClass {
     /// KVM device.
@@ -29,17 +34,24 @@ pub(crate) enum GpuDeviceClass {
     /// DMA buffer device.
     Udmabuf,
     /// NVIDIA control device.
+    #[allow(dead_code, reason = "Nvidia classes are matched by the test-only role-to-device matrix but never constructed")]
     NvidiaCtl,
     /// NVIDIA device node.
+    #[allow(dead_code, reason = "Nvidia device class: matched by the test-only role-to-device matrix but never constructed")]
     NvidiaDevice,
     /// NVIDIA UVM device.
+    #[allow(dead_code, reason = "Nvidia UVM class: matched by the test-only role-to-device matrix but never constructed")]
+    #[allow(dead_code, reason = "matched by the test-only role-to-device matrix but never constructed")]
     NvidiaUvm,
 }
 
+// Opaque broker-side identity, exercised only by this file's tests.
 /// Opaque broker-side identity.
+#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GpuOpaqueIdentity([u8; 32]);
 
+#[cfg(test)]
 impl GpuOpaqueIdentity {
     /// Construct an identity at the trusted bundle/adapter boundary.
     pub(crate) const fn from_core(bytes: [u8; 32]) -> Self {
@@ -52,13 +64,16 @@ impl GpuOpaqueIdentity {
     }
 }
 
+#[cfg(test)]
 impl fmt::Debug for GpuOpaqueIdentity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("GpuOpaqueIdentity(<redacted>)")
     }
 }
 
+// Pre-open launch request, exercised only by this file's tests.
 /// Opaque GPU launch request validated before a device open or clone.
+#[cfg(test)]
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct GpuLaunchRequest {
     role: GpuBrokerRole,
@@ -69,6 +84,8 @@ pub(crate) struct GpuLaunchRequest {
     device_classes: Vec<GpuDeviceClass>,
 }
 
+#[cfg(test)]
+#[allow(dead_code, reason = "launch-request identity projection: read only by the test-only launch surface")]
 impl GpuLaunchRequest {
     /// Construct a request from Core-resolved opaque identities.
     pub(crate) fn from_core(
@@ -136,31 +153,30 @@ impl GpuLaunchRequest {
     }
 
     /// Borrow the opaque backing identity.
+    #[allow(dead_code, reason = "identity projection accessors read only by the test-only launch-request surface")]
     pub(crate) const fn backing(&self) -> GpuOpaqueIdentity {
         self.backing
     }
 
     /// Borrow the opaque platform identity.
+    #[allow(dead_code, reason = "identity projection accessor read only by the test-only launch-request surface")]
     pub(crate) const fn platform(&self) -> GpuOpaqueIdentity {
         self.platform
     }
-
-    /// Borrow the expected worker principal.
-    pub(crate) const fn principal(&self) -> GpuOpaqueIdentity {
-        self.principal
-    }
-
     /// Return the expected resource generation.
+    #[allow(dead_code, reason = "accessor kept for the launch-request field assertions; no test reads it yet")]
     pub(crate) const fn generation(&self) -> u64 {
         self.generation
     }
 
     /// Return the worker role.
+    #[allow(dead_code, reason = "accessor kept for the launch-request field assertions; no test reads it yet")]
     pub(crate) const fn role(&self) -> GpuBrokerRole {
         self.role
     }
 }
 
+#[cfg(test)]
 impl fmt::Debug for GpuLaunchRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -172,7 +188,9 @@ impl fmt::Debug for GpuLaunchRequest {
     }
 }
 
+// Process observation, exercised only by this file's tests.
 /// Broker-side process observation.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GpuProcessObservation {
     /// One exact process matched.
@@ -180,8 +198,10 @@ pub(crate) enum GpuProcessObservation {
     /// No exact process was found.
     Missing,
     /// Process identity was stale or reused.
+    #[allow(dead_code, reason = "identity-adoption refusals built only by the test-only launch-request surface")]
     StaleIdentity,
     /// More than one process matched.
+    #[allow(dead_code, reason = "ambiguous-identity refusal built only by the test-only launch-request surface")]
     Ambiguous,
 }
 
@@ -189,16 +209,22 @@ pub(crate) enum GpuProcessObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GpuBrokerError {
     /// A persisted identity is missing or stale.
+    #[allow(dead_code, reason = "raised only by the cfg(test) launch-request constructor")]
     StaleIdentity,
     /// The role and device allowlist disagree.
+    #[allow(dead_code, reason = "raised only by the cfg(test) role-to-device matrix check")]
     RoleDeviceMismatch,
     /// The caller's principal is not the signed worker principal.
+    #[allow(dead_code, reason = "raised only by the cfg(test) identity-adoption check")]
     WrongPrincipal,
     /// The observed platform differs from the admitted platform.
+    #[allow(dead_code, reason = "raised only by the cfg(test) identity-adoption check")]
     PlatformMismatch,
     /// The observed generation differs from the admitted generation.
+    #[allow(dead_code, reason = "raised only by the cfg(test) identity-adoption check")]
     GenerationMismatch,
     /// Restart found more than one matching process.
+    #[allow(dead_code, reason = "raised only by the cfg(test) multi-match identity-adoption check")]
     AmbiguousIdentity,
     /// A trusted runner plan does not match its GPU isolation profile.
     PlanShapeMismatch,
@@ -228,6 +254,8 @@ impl fmt::Display for GpuBrokerError {
 impl std::error::Error for GpuBrokerError {}
 
 /// Validate identity evidence before adopting a worker.
+// Identity adoption check, exercised only by this file's tests.
+#[cfg(test)]
 pub(crate) fn validate_observed_identity(
     request: &GpuLaunchRequest,
     observed_principal: GpuOpaqueIdentity,
@@ -444,6 +472,11 @@ mod tests {
                 host_gid_for_zero: 1000,
             }),
             umask: None,
+        presentation: crate::ops::spawn_runner::PresentationRealization::NamespaceFirstServiceSource,
+        admitted_presentation: crate::ops::spawn_runner::AdmittedPresentation {
+            private_execution_root: std::path::PathBuf::new(),
+            binds: Vec::new(),
+        },
         }
     }
 

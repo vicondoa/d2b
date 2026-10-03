@@ -2700,14 +2700,14 @@ pub(crate) fn parse_resource_type(value: &str) -> Result<ResourceTypeName, CliFa
         .map_err(|_| CliFailure::new(2, "ref-invalid: unknown ResourceType"))
 }
 
-pub(crate) fn standard_resource_types() -> &'static [&'static str; 23] {
+pub(crate) fn standard_resource_types() -> &'static [&'static str; STANDARD_RESOURCE_TYPES.len()] {
     &STANDARD_RESOURCE_TYPES
 }
 
 /// The resource types the managed plane serves: what a zone-wide read must
 /// cover, since a type this catalog names but the caller cannot read is a
 /// degraded read rather than an absent one.
-pub(crate) fn converted_resource_types() -> &'static [&'static str; 36] {
+pub(crate) fn converted_resource_types() -> &'static [&'static str; V3_CONVERTED_RESOURCE_TYPES.len()] {
     &V3_CONVERTED_RESOURCE_TYPES
 }
 

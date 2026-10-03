@@ -1,5 +1,6 @@
 use std::process::ExitCode;
 
+use d2b_broker::ops::host_reset::RESET_REFUSAL_EXIT;
 use d2b_broker::runtime::{RunError, parse_command, run};
 // The composition root is the broker's handler seam (KTD1): provider
 // handler crates are linked here, and the mechanical routing rule is
@@ -57,6 +58,17 @@ fn report_error(error: RunError) -> ExitCode {
         RunError::Protocol(message) => {
             eprintln!("broker protocol error: {message}");
             ExitCode::from(3)
+        }
+        // The one-shot ownership-bounded reset (U32, KTD15) refuses through
+        // a structured envelope on stdout, the same channel its success
+        // envelope uses, so the offline `d2b host reset` caller relays one
+        // shape whether the boundary admitted or declined.
+        RunError::Reset(report) => {
+            let rendered = serde_json::to_string(&report).unwrap_or_else(|_| {
+                "{\"ok\":false,\"code\":\"reset-envelope-unrenderable\"}".to_owned()
+            });
+            println!("{rendered}");
+            ExitCode::from(RESET_REFUSAL_EXIT)
         }
     }
 }

@@ -14,7 +14,10 @@ zone_session_srcs = glob(["src/**/*.rs"], allow_empty = True)
 d2b_rust_library(
     name = "d2b_contracts_zone_session",
     srcs = zone_session_srcs,
-    compile_data = ["Cargo.toml"],
+    compile_data = [
+        "//:generated_new_graph",  # keep: include! of the staged service-to-provider catalog
+        "Cargo.toml",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts:d2b_contracts",

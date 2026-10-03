@@ -50,6 +50,7 @@ mod gen_broker_operations;
 mod gen_layer_catalogs;
 mod inventory;
 mod nix_inventories;
+mod new_graph_closure;
 mod production_closure;
 mod blocking_census;
 mod operation_row_authority;
@@ -158,6 +159,11 @@ fn main() -> std::process::ExitCode {
                 gen_broker_operations::gen_broker_operations(repo_root()?)
             })
         }
+        [command] if command == "gen-new-graph" => {
+            run_task("gen-new-graph", || {
+                new_graph_closure::gen_new_graph(repo_root()?)
+            })
+        }
         [command] if command == "gen-nix-inventories" => {
             run_task("gen-nix-inventories", || {
                 nix_inventories::gen_nix_inventories(repo_root()?)
@@ -224,7 +230,7 @@ fn main() -> std::process::ExitCode {
         [command] if command == "deadcode-check" => deadcode::run(),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout [--fix]|blocking-census [<crate-path>...] [--json <path>] [--check <baseline.json>]|check-async-gate [--write-inventory] [<paths>...]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-broker-operations|gen-new-graph|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout [--fix]|blocking-census [<crate-path>...] [--json <path>] [--check <baseline.json>]|check-async-gate [--write-inventory] [<paths>...]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]"
             );
             std::process::ExitCode::FAILURE
         }

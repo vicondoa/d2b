@@ -6,7 +6,8 @@ use std::sync::Arc;
 use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
 use d2b_provider_audio_pipewire::AudioServiceSpec;
 use d2b_provider_audio_service::{
-    AudioService, audio_service_descriptor, audio_service_spec_decoder,
+    AUDIO_SERVICE_OPERATIONS, AudioService, audio_service_descriptor, audio_service_spec_decoder,
+    service_declared_methods, service_declares_operation,
 };
 use d2b_provider_wayland_policy::{
     AUDIO_SERVICE_TYPE, InteractionDriverArgs, InteractionDriverEffects, InteractionEffectError,
@@ -144,4 +145,81 @@ fn a_foreign_row_is_refused() {
         Err(InteractionEffectError::InvalidSpec(_))
     ));
     assert!(audio_service_spec_decoder().decode(b"[]").is_err());
+}
+
+// ── declared operation vocabulary ────────────────────────────────────────────
+
+/// The Service's declared operations are the only operations its methods are
+/// derived from, so the row and the callable surface cannot drift apart.
+#[test]
+fn the_declared_operations_are_the_ones_the_methods_are_derived_from() {
+    let spec = AudioServiceSpec::owner(
+        ResourceRef::parse("Endpoint/audio-host").expect("endpoint"),
+        "work",
+    );
+    assert_eq!(
+        AUDIO_SERVICE_OPERATIONS.to_vec(),
+        vec!["playback".to_owned(), "capture".to_owned()],
+        "one declared operation per stream direction"
+    );
+    for operation in &spec.operations {
+        assert!(
+            AUDIO_SERVICE_OPERATIONS.contains(&operation.as_str()),
+            "{operation} is outside the declared vocabulary"
+        );
+    }
+    let declared = service_declared_methods(&spec);
+    assert_eq!(
+        declared,
+        vec![
+            "set-speaker-grant",
+            "set-speaker-level",
+            "set-microphone-grant",
+            "set-microphone-gain",
+        ],
+        "the committed operations authorize exactly the family's declared methods"
+    );
+}
+
+/// A row that declares only playback authorizes only the speaker methods.
+#[test]
+fn one_declared_operation_authorizes_only_its_channel_methods() {
+    let mut spec = AudioServiceSpec::owner(
+        ResourceRef::parse("Endpoint/audio-host").expect("endpoint"),
+        "work",
+    );
+    spec.operations = vec!["capture".to_owned()];
+    assert!(service_declares_operation(&spec, "capture"));
+    assert!(!service_declares_operation(&spec, "playback"));
+    assert_eq!(
+        service_declared_methods(&spec),
+        vec!["set-microphone-grant", "set-microphone-gain"],
+        "the speaker methods are not declared by this row"
+    );
+}
+
+/// A row naming an operation outside the declared vocabulary is refused at
+/// admission rather than describing a capability nothing implements.
+#[test]
+fn an_undeclared_operation_is_refused_at_admission() {
+    let mut spec = AudioServiceSpec::owner(
+        ResourceRef::parse("Endpoint/audio-host").expect("endpoint"),
+        "work",
+    );
+    spec.operations.push("record-everything".to_owned());
+    let value = serde_json::to_value(&spec).expect("spec json");
+    assert!(matches!(
+        AudioService.validate(&envelope(&value)),
+        Err(InteractionEffectError::InvalidSpec(_))
+    ));
+
+    spec.operations.clear();
+    let value = serde_json::to_value(&spec).expect("spec json");
+    assert!(
+        matches!(
+            AudioService.validate(&envelope(&value)),
+            Err(InteractionEffectError::InvalidSpec(_))
+        ),
+        "a row declaring nothing answers no method at all"
+    );
 }

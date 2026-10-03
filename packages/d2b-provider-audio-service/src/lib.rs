@@ -13,7 +13,7 @@
 mod audio_service;
 
 pub use audio_service::{
-    AUDIO_SERVICE_PROVIDER_REF, AUDIO_SERVICE_RESYNC,
-    AudioService, AudioServiceFactory,
-    audio_service_descriptor, audio_service_spec_decoder,
+    AUDIO_SERVICE_OPERATIONS, AUDIO_SERVICE_PROVIDER_REF, AUDIO_SERVICE_RESYNC, AudioService,
+    AudioServiceFactory, audio_service_descriptor, audio_service_spec_decoder,
+    service_declared_methods, service_declares_operation,
 };

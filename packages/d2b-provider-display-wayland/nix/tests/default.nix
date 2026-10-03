@@ -110,11 +110,24 @@ in
         purpose = (projected.config.d2b._resourceCompiler
           .providerProjectionDisplayWayland.resourcesByZone.dev)
           ."wayland-session".spec.purpose;
+        # The compositor socket is a declared Endpoint whose only admitted
+        # subject is this session's proxy worker row.
+        compositorSubjects = (projected.config.d2b._resourceCompiler
+          .providerProjectionDisplayWayland.resourcesByZone.dev)
+          ."wayland-compositor-session".spec.consumerPolicy.allowedSubjects;
+        frontendSubjects = (projected.config.d2b._resourceCompiler
+          .providerProjectionDisplayWayland.resourcesByZone.dev)
+          ."wayland-session".spec.consumerPolicy.allowedSubjects;
       };
       expected = {
         processes = [ "wayland-frontend-session" "wayland-proxy-session" ];
-        resources = [ "wayland-session" ];
+        resources = [
+          "wayland-compositor-session"
+          "wayland-session"
+        ];
         purpose = "display-wayland-cross-domain";
+        compositorSubjects = [ "Process/wayland-proxy-session" ];
+        frontendSubjects = [ "Process/wayland-frontend-session" ];
       };
     };
     "provider-display-wayland/rejects-unknown-provider-field" = {

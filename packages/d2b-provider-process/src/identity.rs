@@ -11,9 +11,11 @@ use d2b_contracts_resource::v3::process::{
 };
 use d2b_contracts_resource::v3::{
     AdoptionPolicy, ControllerGeneration, DurationMs, ResourceGeneration, ResourceRef, ResourceUid,
-    ZoneId,
+    ZoneId, ZoneRevision,
 };
-use d2b_process_conformance::{GuestExecutionBinding, LaunchIdentity};
+use d2b_process_conformance::{
+    GuestExecutionBinding, LaunchIdentity, ProcessPlanRefusal, ProcessSubject,
+};
 
 use crate::worker_launch::{DeviceWorkerLaunch, ServingWorkerLaunch};
 
@@ -135,6 +137,40 @@ pub struct ProcessResourceIdentity {
     pub device_worker_launch: Option<DeviceWorkerLaunch>,
 }
 
+impl ProcessResourceIdentity {
+    /// The committed consumer identity one launch prepares its relationships
+    /// against.
+    ///
+    /// This is the one place the driver derives a [`ProcessSubject`], and
+    /// both Process lifetimes call it: a long-running `Process` and a
+    /// run-to-completion `EphemeralProcess` reach the plan through the same
+    /// derivation, and the only thing the returned subject distinguishes is
+    /// the lifetime the row's own reference declares (AE20, AE28).
+    ///
+    /// The row reference, uid, and Zone are already committed on the identity
+    /// the manager built, so nothing is re-read from the spec and no second
+    /// copy of the row's identity exists (R2, R35). The row's committed
+    /// generation is the revision preparation is pinned to: it is the counter
+    /// every ownership, view, consumer, provider-assignment, or policy change
+    /// advances, so a re-committed row cannot reuse an earlier plan (R35).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessPlanRefusal`] when the row reference names no
+    /// execution instance, or when the driver holds no Zone revision to pin
+    /// the preparation to. Both are refusals rather than defaults: a launch
+    /// prepared without a committed revision is a launch whose authority no
+    /// later change can invalidate.
+    pub fn subject(&self) -> Result<ProcessSubject, ProcessPlanRefusal> {
+        ProcessSubject::new(
+            self.resource_ref.clone(),
+            self.resource_uid.clone(),
+            self.zone.clone(),
+            ZoneRevision::new(self.resource_generation.get()),
+        )
+    }
+}
+
 /// The authored `metadata.ownerRef` of one row, when it carries one.
 ///
 /// A manager resolves an owner key only for owners that are its own rows, so
@@ -147,4 +183,70 @@ pub fn decode_metadata_owner_ref(metadata: &[u8]) -> Option<ResourceRef> {
         .get("ownerRef")
         .and_then(serde_json::Value::as_str)
         .and_then(|owner| ResourceRef::parse(owner).ok())
+}
+
+#[cfg(test)]
+mod subject_tests {
+    use super::*;
+    use d2b_contracts_resource::v3::execution_policy_resource::ExecutionInstanceKind;
+
+    fn identity(reference: &str) -> ProcessResourceIdentity {
+        ProcessResourceIdentity {
+            zone: ZoneId::parse("work").expect("a canonical Zone"),
+            resource_ref: ResourceRef::parse(reference).expect("a canonical reference"),
+            resource_uid: ResourceUid::parse("22222222-2222-4222-8222-222222222222")
+                .expect("a canonical uid"),
+            resource_generation: ResourceGeneration::new(4).expect("a nonzero generation"),
+            process_class: ProcessClass::Worker,
+            provider_ref: ResourceRef::parse("Provider/system-minijail")
+                .expect("a canonical reference"),
+            launch: LaunchIdentity::new(
+                None,
+                None,
+                ResourceRef::parse("Host/host-system").expect("a canonical reference"),
+                None,
+                "worker",
+                false,
+            )
+            .expect("a complete launch identity"),
+            zone_uid: None,
+            policy_revision: None,
+            provider_assignment_generation: None,
+            controller_generation: ControllerGeneration::new(1).expect("a nonzero generation"),
+            controller_provider_uid: None,
+            controller_provider_generation: None,
+            guest_execution: None,
+            worker_launch: None,
+            device_worker_launch: None,
+        }
+    }
+
+    /// AE28: both Process lifetimes reach the plan through one subject
+    /// derivation, and the only thing the derivation records is the lifetime
+    /// the row's own reference declares.
+    #[test]
+    fn both_lifetimes_reach_the_plan_through_one_subject() {
+        let long_running = identity("Process/worker").subject().expect("a Process subject");
+        let one_shot = identity("EphemeralProcess/flush").subject().expect("a one-shot subject");
+
+        assert_eq!(long_running.kind(), ExecutionInstanceKind::LongRunning);
+        assert_eq!(one_shot.kind(), ExecutionInstanceKind::OneShot);
+
+        // The committed identity is the row's own, read from the manager's
+        // identity rather than re-derived from the spec.
+        assert_eq!(
+            long_running.process_uid(),
+            &identity("Process/worker").resource_uid
+        );
+        assert_eq!(
+            long_running.resource_revision(),
+            ZoneRevision::new(4)
+        );
+    }
+
+    /// A row that is not an execution instance never reaches the plan path.
+    #[test]
+    fn a_row_that_is_not_an_execution_instance_is_refused() {
+        assert!(identity("Volume/data").subject().is_err());
+    }
 }

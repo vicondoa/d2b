@@ -10,7 +10,6 @@
 //! `try_load_resolver` → `BundleSlot::Tampered` → `BrokerError::BundleTampered`
 //! → `into_response()` pipeline as the live `serve` loop.
 
-#[cfg(not(feature = "layer1-bootstrap"))]
 mod broker_tampered {
     use d2b_broker::runtime::{probe_bundle_load_response, probe_bundle_load_response_with_policy};
     use d2b_contracts_broker::broker_wire::BrokerResponse;
@@ -47,7 +46,6 @@ mod broker_tampered {
             "artifactHashes": null,
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "zones": [
                 { "zone": "work", "path": "zones/work/resource-bundle.json" }
             ],

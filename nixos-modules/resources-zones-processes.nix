@@ -80,6 +80,28 @@ let
     "gid"
   ];
 
+  # KTD2: the authoring shorthand for one consumer binding request.
+  #
+  # A Process states the relationship it needs, and this layer compiles that
+  # declaration into the exact canonical request the projection consumes: the
+  # same desired bytes, framed with the same `d2b:v3:binding-request` domain.
+  # The shorthand is then dropped before the row is projected, so the
+  # declaration stays the only place a relationship is written down and no
+  # second relationship list is persisted beside it.
+  #
+  # Only the volume binding kind compiles here. The remaining kinds' desired
+  # schemas are contract vocabularies the projection owns; restating them in
+  # Nix would recreate the second source this layer removes, so an uncompiled
+  # kind is refused by name rather than approximated.
+  bindingRequestFields = [ "bindingRequests" ];
+  bindingKinds = [ "volume" ];
+  bindingSourceTypes = { volume = "Volume"; };
+  bindingAccess = [ "read-only" "read-write" "shared-write" ];
+  bindingToken = "^[a-z][a-z0-9-]*$";
+  bindingConsumerTypes = [ "Process" "EphemeralProcess" ];
+  maxBindingRequests = 32;
+  maxConsumerDeviceSlot = 64;
+
   tokenPattern = "^[a-z][a-z0-9-]{0,62}$";
   durationPattern = "^[0-9]+(ms|s|m|h)$";
 
@@ -176,6 +198,74 @@ let
       && builtins.elem parsed.type types
       && builtins.hasAttr parsed.name resources
       && resources.${parsed.name}.type == parsed.type;
+
+  identityModel = import ./resources-bundle.nix { inherit lib; };
+
+  text = value: if builtins.isString value then value else "";
+
+  # The exact desired request bytes. The key set, the value spelling, and the
+  # framing are the contract's, because a request fingerprint is only
+  # comparable when both sides render the same bytes.
+  desiredRequest = consumerRef: request:
+    identityModel.canonical {
+      access = text (attrOr request "access" "");
+      inherit consumerRef;
+      presentation = attrOr request "presentation" { };
+      slot = text (attrOr request "slot" "");
+      sourceRef = text (attrOr request "sourceRef" "");
+      view = text (attrOr request "view" "");
+    };
+
+  # The store-assigned identity of one declared resource key, derived with the
+  # same stable-identity helper every other Nix-side identity uses rather than
+  # a spelling invented here.
+  resourceUid = zoneName: resourceType: name:
+    identityModel.stableUid "d2b:v3:resource-uid"
+      "${zoneName}/${resourceType}/${name}";
+
+  presentationShapeValid = presentation:
+    let
+      kind = text (attrOr presentation "presentation" "");
+      keys = lib.sort lib.lessThan (builtins.attrNames presentation);
+      destination = attrOr presentation "destination" null;
+      deviceSlot = attrOr presentation "deviceSlot" null;
+    in
+    if kind == "filesystem" then
+      keys == [ "destination" "presentation" ]
+      && builtins.isString destination
+      && lib.hasPrefix "/" destination
+      && !(builtins.elem ".." (lib.splitString "/" destination))
+    else if kind == "block-device" then
+      keys == [ "deviceSlot" "presentation" ]
+      && builtins.isInt deviceSlot
+      && deviceSlot >= 0
+      && deviceSlot <= maxConsumerDeviceSlot
+    else false;
+
+  compiledRequest = zoneName: row: index: request:
+    let
+      consumerRef = "${row.resource.type}/${row.resourceName}";
+      source = parseRef (text (attrOr request "sourceRef" ""));
+      desired = desiredRequest consumerRef request;
+    in {
+      zone = zoneName;
+      inherit consumerRef;
+      kind = text (attrOr request "kind" "");
+      slot = text (attrOr request "slot" "");
+      fingerprint =
+        "sha256:${identityModel.framedDigest "d2b:v3:binding-request" (builtins.toJSON desired)}";
+      # The slot address is (Zone, consumer, kind, slot), the same address the
+      # consumer slot index resolves.
+      address = "${zoneName}/${consumerRef}#${text (attrOr request "kind" "")}:${text (attrOr request "slot" "")}";
+      path = "${row.path}.spec.bindingRequests.${toString index}";
+      sourceRef = text (attrOr request "sourceRef" "");
+      source = source;
+      sourceUid =
+        if source == null
+        then null
+        else resourceUid zoneName source.type source.name;
+      presentation = attrOr request "presentation" { };
+    };
 
   # A declared mount names its Volume in exactly one of two mutually exclusive
   # ways.
@@ -284,7 +374,8 @@ let
   processAssertions = row:
     let
       spec = row.spec;
-      fields = if row.resource.type == "Process" then processFields else ephemeralFields;
+      fields = (if row.resource.type == "Process" then processFields else ephemeralFields)
+        ++ bindingRequestFields;
       unknown = lib.filter
         (field: !(builtins.elem field (fields ++ genericExecutionFields)))
         (lib.attrNames (row.resource.spec or { }));
@@ -411,6 +502,115 @@ let
     ++ durationChecks
     ++ lib.concatLists (lib.imap0 (checkMount row) mounts);
 
+  # The compiled canonical consumer requests. Only the volume binding kind has
+  # a canonical request shape this layer owns, and the field is refused by
+  # name on any other consumer type rather than dropped: a request nobody
+  # compiles would otherwise be authored and silently ignored.
+  consumerRows = rows ++ providerProcessRows;
+
+  authoredRequests = row:
+    let
+      spec = attrOr row.resource "spec" { };
+    in
+    attrOr spec "bindingRequests" [ ];
+
+  compiledRequests = row:
+    let
+      authored = authoredRequests row;
+    in
+    if builtins.isList authored
+    then lib.imap0 (index: request:
+      compiledRequest row.zoneName row index request) authored
+    else [ ];
+
+  bindingRequestChecks = row:
+    let
+      authored = authoredRequests row;
+    in
+    if !builtins.isList authored then
+      [
+        {
+          assertion = false;
+          message = "${row.path}.spec.bindingRequests must be a list of canonical binding requests.";
+        }
+      ]
+    else
+      (lib.optionals (lib.length authored > maxBindingRequests) [
+        {
+          assertion = false;
+          message = "${row.path}.spec.bindingRequests must declare at most ${toString maxBindingRequests} requests.";
+        }
+      ])
+      ++ lib.concatLists (lib.imap0
+        (index: request:
+          let compiled = compiledRequest row.zoneName row index request;
+          sourceType = bindingSourceTypes.${compiled.kind} or "Volume";
+          in [
+            {
+              assertion = lib.elem compiled.kind bindingKinds;
+              message = ''
+                ${compiled.path}.kind must be one of
+                ${lib.concatStringsSep ", " bindingKinds}; another binding kind's
+                desired schema is compiled by the projection, not restated here.
+              '';
+            }
+            {
+              assertion = resolvesAs
+                row.zone.resources
+                [ sourceType ]
+                compiled.sourceRef;
+              message = "${compiled.path}.sourceRef must resolve to a ${sourceType} declared in the same Zone.";
+            }
+            {
+              assertion = builtins.match bindingToken compiled.slot != null;
+              message = "${compiled.path}.slot must be a bounded consumer slot token.";
+            }
+            {
+              assertion =
+                builtins.match bindingToken (text (attrOr request "view" "")) != null;
+              message = "${compiled.path}.view must be a bounded view token.";
+            }
+            {
+              assertion =
+                lib.elem (text (attrOr request "access" "")) bindingAccess;
+              message = "${compiled.path}.access must be read-only, read-write, or shared-write.";
+            }
+            {
+              assertion =
+                builtins.isAttrs request
+                && presentationShapeValid compiled.presentation;
+              message = "${compiled.path}.presentation must be an absolute filesystem destination or a bounded consumer device slot.";
+            }
+          ])
+        authored);
+
+  # A request this layer does not compile is refused where it was authored.
+  foreignBindingRequestChecks = lib.concatMap
+    (zoneName:
+      let zone = cfg.zones.${zoneName};
+      in
+      lib.map
+        (row: {
+          assertion = false;
+          message = ''
+            d2b.zones.${zoneName}.resources.${row.name}.spec.bindingRequests is
+            compiled only for a ${lib.concatStringsSep " or " bindingConsumerTypes}
+            consumer; a ${attrOr row.resource "type" "unknown"} row is projected
+            elsewhere, so its request would never be compiled.
+          '';
+        })
+        (lib.filter
+          (row:
+            !(builtins.elem
+              (attrOr row.resource "type" null)
+              bindingConsumerTypes)
+            && builtins.hasAttr "bindingRequests"
+              (attrOr row.resource "spec" { }))
+          (lib.mapAttrsToList
+            (name: resource: { inherit name resource; })
+            (attrOr zone "resources" { }))))
+    (lib.sort lib.lessThan (lib.attrNames cfg.zones));
+
   # The ProcessRole -> owning Provider map is generated from the process
   # family's `resource-types.json` declaration (U4), so renaming an owning
   # provider reference needs no hand edit here.
@@ -496,14 +696,65 @@ let
       })
     { }
     (rows ++ providerProcessRows);
+
+  # The compiled requests, in slot-address order, so two evaluations of one
+  # declaration compile the same rows and no author can hand-order them.
+  slotOrderedRequests = lib.sort
+    (left: right: left.address < right.address)
+    (lib.concatMap compiledRequests consumerRows);
+
+  # The projection's own Nix view of those rows. The compiled slot address and
+  # the source identity are compile-time bookkeeping; the canonical request
+  # the projection consumes is the row below.
+  consumerRequests = map
+    (request: {
+      zone = request.zone;
+      consumerRef = request.consumerRef;
+      kind = request.kind;
+      slot = request.slot;
+      fingerprint = request.fingerprint;
+    })
+    slotOrderedRequests;
+
+  # The consumer slot index, resolved once over the whole configuration: one
+  # (Zone, consumer, kind, slot) address is claimed once. An identical repeat
+  # coalesces, and a different payload for a live slot is refused rather than
+  # admitted beside its predecessor.
+  slotConflicts = lib.unique (lib.filter
+    (address:
+      lib.length (lib.unique (map
+        (request: request.fingerprint)
+        (lib.filter
+          (candidate: candidate.address == address)
+          slotOrderedRequests))) > 1)
+    (lib.unique (map (request: request.address) slotOrderedRequests)));
 in
 {
   config = {
-    assertions = lib.concatMap processAssertions (rows ++ providerProcessRows);
+    assertions =
+      lib.concatMap processAssertions consumerRows
+      ++ lib.concatMap bindingRequestChecks consumerRows
+      ++ foreignBindingRequestChecks
+      ++ lib.optionals (slotConflicts != [ ]) [
+        {
+          assertion = false;
+          message = ''
+            Two different canonical consumer requests claim one consumer slot:
+            ${lib.concatStringsSep ", " slotConflicts}. A slot is claimed once
+            and an identical repeat coalesces.
+          '';
+        }
+      ];
     d2b._resourceCompiler.processes = {
       byZone = compiled;
       roles = roleProviderMap;
       rows = rows ++ providerProcessRows;
+      # The compiled requests are an output of this layer, not a second
+      # relationship list: the shorthand that produced them is dropped before
+      # the row is projected. They sit beside the compiled rows rather than
+      # beside the table itself so the fold over the provider projections
+      # stays lazy, exactly as the compiled rows it joins do.
+      consumerRequests = consumerRequests;
     };
   };
 }

@@ -5,9 +5,18 @@
 //! per-Zone coordinator: a cursor is usable only when its `ownerProof` is
 //! unique and matches the handler's expected owner.  Ambiguous observations
 //! are quarantined rather than guessed.
+//!
+//! It also owns the link's cross-Zone share scope.  A ZoneLink carries a
+//! semantic share in one direction only: the Zone that owns an exported
+//! Service advertises it, and the Zone on the other end consumes the use its
+//! admitted lease bounds.  A link that consumed a share cannot be promoted to
+//! the advertising side - not by a reconnect and not by a restarted cursor -
+//! because a relay that could re-advertise would launder the source Zone's
+//! authority into a Zone that never owned it.
 
 use crate::zone_links::{ZoneLinkCursor, ZoneLinkError};
 use d2b_contracts_resource::v3::SchemaFingerprint;
+use d2b_contracts_zone_session::v3::component_session::OperationClass;
 
 pub use crate::zone_links::{
     BootstrapPsk, SealedEnrollment, ZoneLinkEffect, ZoneLinkEvent, ZoneLinkHandler,
@@ -17,6 +26,50 @@ pub use crate::zone_links::{
 pub use d2b_contracts_zone_session::v3::zone_routing::{
     ZoneLinkControllerGeneration, ZoneLinkRouteAdmissionRequest,
 };
+
+/// Which side of a cross-Zone semantic share this link operates on.
+///
+/// The scope is authority-owned and fixed when the handler is restored, not a
+/// per-call claim. `Owner` advertises this Zone's own Service; `Consumer`
+/// carries only the use this Zone's admitted export lease bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ZoneLinkShareScope {
+    /// This Zone owns the shared Service and advertises it onward.
+    Owner,
+    /// This Zone consumes the share and may carry only its own leased use.
+    Consumer,
+}
+
+impl ZoneLinkShareScope {
+    /// The scope a reconnected link resumes in.
+    ///
+    /// A reconnect re-establishes the transport, never the authority: the
+    /// scope is returned unchanged, so reconnecting cannot promote a consumer
+    /// into the advertising side.
+    pub const fn resumed_after_reconnect(self) -> Self {
+        self
+    }
+
+    /// Whether this scope may carry one route verb.
+    ///
+    /// A consumer may use what it leased: invoke the projection, open its
+    /// stream, observe it, and cancel it. It may not attach to a remote
+    /// resource, relay the share to a third Zone, re-advertise the export, or
+    /// exfiltrate through a support bundle - each of those turns a lease into
+    /// authority the owner Zone never delegated.
+    pub const fn admits_route(self, verb: OperationClass) -> bool {
+        match self {
+            Self::Owner => !matches!(verb, OperationClass::Attach),
+            Self::Consumer => matches!(
+                verb,
+                OperationClass::Invoke
+                    | OperationClass::OpenStream
+                    | OperationClass::Observe
+                    | OperationClass::Cancel
+            ),
+        }
+    }
+}
 
 /// Closed failure from owner-proof cursor adoption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +82,9 @@ pub enum ZoneLinkAdoptionError {
     OwnerProofMismatch,
     /// The cursor record cannot be used for this ZoneLink.
     CursorInvalid,
+    /// A durable observation carries a different share scope than the
+    /// authority registered for this link.
+    ShareScopeMismatch,
 }
 
 impl ZoneLinkAdoptionError {
@@ -39,6 +95,7 @@ impl ZoneLinkAdoptionError {
             Self::AmbiguousOwner => "zonelink-owner-proof-ambiguous",
             Self::OwnerProofMismatch => "zonelink-owner-proof-mismatch",
             Self::CursorInvalid => "zonelink-cursor-invalid",
+            Self::ShareScopeMismatch => "zonelink-share-scope-mismatch",
         }
     }
 }
@@ -50,6 +107,7 @@ impl core::fmt::Display for ZoneLinkAdoptionError {
 }
 
 impl std::error::Error for ZoneLinkAdoptionError {}
+
 
 /// Exact opaque owner proof issued by the Zone authority index.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -117,6 +175,7 @@ impl core::fmt::Debug for ZoneLinkOwnerProof {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZoneLinkCursorRecord {
     owner_proof: ZoneLinkOwnerProof,
+    share_scope: Option<ZoneLinkShareScope>,
     cursor: ZoneLinkCursor,
 }
 
@@ -125,6 +184,25 @@ impl ZoneLinkCursorRecord {
     pub const fn new(owner_proof: ZoneLinkOwnerProof, cursor: ZoneLinkCursor) -> Self {
         Self {
             owner_proof,
+            share_scope: None,
+            cursor,
+        }
+    }
+
+    /// Construct a cursor record that also carries the link's share scope.
+    ///
+    /// The scope is durable evidence, not a per-call claim: an authority that
+    /// registered this link in a scope refuses an observation that disagrees,
+    /// so a restarted cursor cannot quietly reclassify which side of the
+    /// cross-Zone share this Zone occupies.
+    pub const fn in_share_scope(
+        owner_proof: ZoneLinkOwnerProof,
+        share_scope: ZoneLinkShareScope,
+        cursor: ZoneLinkCursor,
+    ) -> Self {
+        Self {
+            owner_proof,
+            share_scope: Some(share_scope),
             cursor,
         }
     }
@@ -132,6 +210,11 @@ impl ZoneLinkCursorRecord {
     /// Borrow the exact owner proof.
     pub const fn owner_proof(&self) -> &ZoneLinkOwnerProof {
         &self.owner_proof
+    }
+
+    /// Return the durable share scope, when the record carries one.
+    pub const fn share_scope(&self) -> Option<ZoneLinkShareScope> {
+        self.share_scope
     }
 
     /// Return the durable route cursor.
@@ -187,14 +270,27 @@ impl ZoneLinkAdoption {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneLinkCursorAuthority {
     expected_owner: ZoneLinkOwnerProof,
+    share_scope: Option<ZoneLinkShareScope>,
     adoption: ZoneLinkAdoption,
 }
 
 impl ZoneLinkCursorAuthority {
     /// Restore one authority with no cursor observation.
     pub fn restore(expected_owner: ZoneLinkOwnerProof) -> Self {
+        Self::restore_in_share_scope(expected_owner, None)
+    }
+
+    /// Restore one authority whose link is bound to a cross-Zone share scope.
+    ///
+    /// The scope is fixed here, by the same authority that fixed the owner
+    /// proof, so no caller and no durable observation can move it afterwards.
+    pub fn restore_in_share_scope(
+        expected_owner: ZoneLinkOwnerProof,
+        share_scope: Option<ZoneLinkShareScope>,
+    ) -> Self {
         Self {
             expected_owner,
+            share_scope,
             adoption: ZoneLinkAdoption::Quarantined(ZoneLinkAdoptionError::OwnerProofMissing),
         }
     }
@@ -210,7 +306,9 @@ impl ZoneLinkCursorAuthority {
     /// Returns the [`ZoneLinkAdoption`] quarantine carrying
     /// [`ZoneLinkAdoptionError::OwnerProofMissing`] when no observation
     /// exists, [`ZoneLinkAdoptionError::OwnerProofMismatch`] when the
-    /// observation's proof differs, and
+    /// observation's proof differs,
+    /// [`ZoneLinkAdoptionError::ShareScopeMismatch`] when the authority fixed
+    /// a share scope and the observation carries a different one or none, and
     /// [`ZoneLinkAdoptionError::AmbiguousOwner`] when more than one
     /// observation exists.
     pub fn adopt(
@@ -225,6 +323,11 @@ impl ZoneLinkCursorAuthority {
         if first.owner_proof() != &self.expected_owner {
             self.adoption =
                 ZoneLinkAdoption::Quarantined(ZoneLinkAdoptionError::OwnerProofMismatch);
+            return self.adoption.clone();
+        }
+        if self.share_scope.is_some() && first.share_scope() != self.share_scope {
+            self.adoption =
+                ZoneLinkAdoption::Quarantined(ZoneLinkAdoptionError::ShareScopeMismatch);
             return self.adoption.clone();
         }
         if observed.next().is_some() {
@@ -243,6 +346,14 @@ impl ZoneLinkCursorAuthority {
     /// Borrow the owner proof fixed at handler registration.
     pub const fn expected_owner(&self) -> &ZoneLinkOwnerProof {
         &self.expected_owner
+    }
+
+    /// The cross-Zone share scope fixed at registration, when there is one.
+    ///
+    /// `None` is the unscoped link: it carries no share and therefore admits
+    /// no share-scoped route decision.
+    pub const fn share_scope(&self) -> Option<ZoneLinkShareScope> {
+        self.share_scope
     }
 
     /// Return the current restart adoption state.
@@ -287,9 +398,26 @@ impl ZoneLinkController {
         record: ZoneLinkRecord,
         owner_proof: ZoneLinkOwnerProof,
     ) -> Self {
+        Self::restore_in_share_scope(limits, key_policy, record, owner_proof, None)
+    }
+
+    /// Restore one handler whose link is bound to a cross-Zone share scope.
+    ///
+    /// The scope decides which route verbs this link may ever carry, so it is
+    /// fixed with the owner proof rather than supplied per call.
+    pub fn restore_in_share_scope(
+        limits: ZoneLinkLimits,
+        key_policy: ZoneLinkKeyPolicy,
+        record: ZoneLinkRecord,
+        owner_proof: ZoneLinkOwnerProof,
+        share_scope: Option<ZoneLinkShareScope>,
+    ) -> Self {
         Self {
             handler: ZoneLinkHandler::restore(limits, key_policy, record),
-            cursor_authority: ZoneLinkCursorAuthority::restore(owner_proof),
+            cursor_authority: ZoneLinkCursorAuthority::restore_in_share_scope(
+                owner_proof,
+                share_scope,
+            ),
         }
     }
 
@@ -332,6 +460,12 @@ impl ZoneLinkController {
     /// issuer. Core supplies only the operation request extracted from the
     /// committed context; the issuer owns authentication, clock, expiry, and
     /// evidence sealing.
+    ///
+    /// A link fixed in a share scope also refuses any verb that scope does not
+    /// carry, before a pass is opened or a durable record changes. That is
+    /// what stops a consuming Zone from relaying or re-advertising the share
+    /// it leases, and it applies to a reconnected link exactly as it applied
+    /// before the reconnect.
     pub fn issue_route_admission<T>(
         &mut self,
         request: ZoneLinkRouteAdmissionRequest,
@@ -339,6 +473,13 @@ impl ZoneLinkController {
     ) -> Result<T, ZoneLinkError> {
         if !self.cursor_authority.adoption().is_adopted() {
             return Err(ZoneLinkError::RouteAdmissionCursorUnavailable);
+        }
+        if self
+            .cursor_authority
+            .share_scope()
+            .is_some_and(|scope| !scope.admits_route(request.verb()))
+        {
+            return Err(ZoneLinkError::ShareScopeRefusesVerb);
         }
         let pass = self.handler.begin(ZoneLinkEvent::AdmitRoute { request })?;
         let proof = self.handler.commit(pass)?;

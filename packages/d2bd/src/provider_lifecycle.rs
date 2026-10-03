@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::os::fd::RawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,7 +30,10 @@ use async_trait::async_trait;
 use d2b_contracts_broker::broker_wire::{
     BrokerRequest, BrokerResponse, PublishTrustedContextValues,
 };
-use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    AuthoritySubject, AuthoritySubjectKind, CanonicalJsonObject, ResourceRef, StoreIncarnation,
+    ZoneId,
+};
 use d2bd_runtime::broker_transport::ModeBoundBrokerAdapter;
 use d2bd_runtime::target_runtime::DaemonMode;
 use d2b_provider_activation_nixos::ACTIVATION_EFFECTS_SERVICE;
@@ -179,6 +182,11 @@ pub(crate) enum ProviderStartupError {
     /// The zone's effect-service supervisor could not start (ractor
     /// runtime failure).
     EffectServiceSupervisorRefused { reason: String },
+    /// The verified deployment graph's authority was not published to the
+    /// broker. The Zone then holds no accepted projection, and no provider in
+    /// it may begin effects under an identity the broker has not accepted
+    /// (U7, KTD7).
+    AuthorityPublicationRefused { reason: String },
 }
 
 impl ProviderStartupError {
@@ -201,6 +209,7 @@ impl ProviderStartupError {
             Self::EffectServiceSupervisorRefused { .. } => {
                 "effect-service-supervisor-refused"
             }
+            Self::AuthorityPublicationRefused { .. } => "authority-publication-refused",
         }
     }
 
@@ -216,7 +225,9 @@ impl ProviderStartupError {
             | Self::EffectServiceFactoryMissing { provider_ref, .. }
             | Self::EffectServiceFacetUnenforced { provider_ref, .. }
             | Self::EffectServiceRegistrationUnknown { provider_ref, .. } => provider_ref,
-            Self::EffectServiceDuplicate { .. } | Self::EffectServiceSupervisorRefused { .. } => "",
+            Self::EffectServiceDuplicate { .. }
+            | Self::EffectServiceSupervisorRefused { .. }
+            | Self::AuthorityPublicationRefused { .. } => "",
             Self::Plane(refusal) => refusal.provider_ref,
         }
     }
@@ -273,6 +284,9 @@ impl ProviderStartupError {
             Self::EffectServiceSupervisorRefused { reason } => {
                 format!("{}:{reason}", self.code())
             }
+            Self::AuthorityPublicationRefused { reason } => {
+                format!("{}:{reason}", self.code())
+            }
         }
     }
 }
@@ -304,6 +318,9 @@ fn registration_reason(error: &ProviderDirectoryError) -> String {
         ),
         ProviderDirectoryError::RequiredBeforeOpen { type_name } => {
             format!("required-before-open:{}", type_name.as_str())
+        }
+        ProviderDirectoryError::RelationProjection(error) => {
+            format!("relation-projection:{}", error)
         }
     }
 }
@@ -522,6 +539,7 @@ const GUEST_FLEET_BASE_GENERATION: u64 = 1;
 #[derive(Clone)]
 pub(crate) struct TrustedContextPublication {
     adapter: ModeBoundBrokerAdapter,
+    broker_socket: PathBuf,
     controller_generation: u64,
     guest_generation: u64,
 }
@@ -537,13 +555,160 @@ impl TrustedContextPublication {
         daemon_uid: u32,
         controller_generation: u64,
     ) -> Self {
+        let broker_socket = broker_socket.into();
         Self {
-            adapter: ModeBoundBrokerAdapter::for_mode(mode, broker_socket, daemon_uid),
+            adapter: ModeBoundBrokerAdapter::for_mode(
+                mode,
+                broker_socket.clone(),
+                daemon_uid,
+            ),
+            broker_socket,
             controller_generation,
             guest_generation: GUEST_FLEET_BASE_GENERATION,
         }
     }
+
+    /// The broker socket this plane's origination leg dials.
+    ///
+    /// The authority publication rides the same leg, so the composition point
+    /// supplies one socket rather than a second privileged surface the two
+    /// bindings could resolve differently.
+    pub(crate) fn broker_socket(&self) -> &Path {
+        self.broker_socket.as_path()
+    }
 }
+
+/// The manager's authority publication coordinator, bound to the origination
+/// leg (U7, KTD6-KTD7).
+///
+/// This is the daemon's half of the freeze / commit / publish / acknowledge
+/// order, and its cold-start half is [`Self::publish_bootstrap`]: the verified
+/// deployment graph's own authority rows, transferred as the bounded snapshot
+/// a broker stores before it admits any effect for the Zone.
+#[derive(Debug, Clone)]
+pub struct AuthorityPublication {
+    coordinator: Arc<crate::authority_publication::AuthorityPublicationCoordinator>,
+}
+
+/// Why one verified deployment graph could not be published to the broker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootstrapPublicationError {
+    /// The verified document describes a different Zone than this binding
+    /// publishes for.
+    ZoneMismatch {
+        /// The Zone the verified document bootstraps.
+        published: String,
+        /// The Zone this coordinator publishes for.
+        bound: String,
+    },
+    /// The transfer itself was refused by the transport or by the broker.
+    Publication(crate::authority_publication::PublicationError),
+}
+
+impl core::fmt::Display for BootstrapPublicationError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ZoneMismatch { published, bound } => write!(
+                formatter,
+                "the verified deployment graph bootstraps Zone {published}, not the Zone {bound} \
+                 this coordinator publishes for"
+            ),
+            Self::Publication(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for BootstrapPublicationError {}
+
+/// The transaction identity every cold start publishes under.
+///
+/// A broker keys prepared transactions per Zone and never retires one, so a
+/// fixed identity makes a restart the same transaction resumed rather than a
+/// second identity stacked on an unchanged projection. It is a bounded
+/// lower-hex token because that is what the wire accepts.
+const BOOTSTRAP_PUBLICATION_TRANSACTION: &str = "facade";
+
+impl AuthorityPublication {
+    /// Bind the coordinator to one Zone's store generation, initiating subject,
+    /// and broker socket.
+    pub fn production(
+        zone: &ZoneId,
+        store_incarnation: StoreIncarnation,
+        initiating_subject: AuthoritySubject,
+        broker_socket: impl Into<PathBuf>,
+    ) -> Self {
+        let link = Arc::new(crate::authority_publication::OriginationPublicationLink::new(
+            broker_socket,
+            AUTHORITY_PUBLICATION_ROUND_TRIP,
+        ));
+        Self {
+            coordinator: Arc::new(
+                crate::authority_publication::AuthorityPublicationCoordinator::new(
+                    zone.as_str(),
+                    store_incarnation,
+                    initiating_subject,
+                    link,
+                ),
+            ),
+        }
+    }
+
+    /// The coordinator this binding owns.
+    pub fn coordinator(
+        &self,
+    ) -> Arc<crate::authority_publication::AuthorityPublicationCoordinator> {
+        Arc::clone(&self.coordinator)
+    }
+
+    /// Publish the verified deployment graph's authority to the broker (U7,
+    /// KTD7).
+    ///
+    /// This is the producer the protocol was built for. Without it the broker
+    /// holds no projection for the Zone, its posture stays unaccepted, and
+    /// every ordinary effect is refused as `UNACCEPTED_PROJECTION` - so the
+    /// accepted graph is never evaluated at all, and a candidate `RoleBinding`
+    /// that would grant its own creation is never read as unauthorized.
+    ///
+    /// The rows are the verified document's own committed bytes with the
+    /// relationship identity its accepted graph resolved; nothing here names a
+    /// row, a revision, or a uid. A document describing another Zone is
+    /// refused by name rather than published under an identity it was not
+    /// verified for.
+    pub async fn publish_bootstrap(
+        &self,
+        published: &crate::foundation_seed::PublishedBootstrap,
+    ) -> Result<(), BootstrapPublicationError> {
+        let (identity, snapshot) = published.authority_publication();
+        if identity.zone.as_str() != self.coordinator.zone() {
+            return Err(BootstrapPublicationError::ZoneMismatch {
+                published: identity.zone.as_str().to_owned(),
+                bound: self.coordinator.zone().to_owned(),
+            });
+        }
+        let transaction =
+            d2b_contracts_broker::broker_wire::PublicationTransactionId::parse(
+                BOOTSTRAP_PUBLICATION_TRANSACTION,
+            )
+            .map_err(|error| {
+                BootstrapPublicationError::Publication(
+                    crate::authority_publication::PublicationError::Transport {
+                        detail: error.to_string(),
+                    },
+                )
+            })?;
+        self.coordinator
+            .publish_snapshot(&transaction, &snapshot)
+            .await
+            .map_err(BootstrapPublicationError::Publication)
+    }
+}
+
+/// The whole-exchange budget one authority publication round trip gets.
+///
+/// It is deliberately generous: the control lane's own budget is the one that
+/// decides a fence's timeout, and a transport that is merely slow must not be
+/// mistaken for a broker that has stopped answering.
+const AUTHORITY_PUBLICATION_ROUND_TRIP: Duration = Duration::from_secs(20);
 
 /// The providers one plane starts, in the order they start.
 pub(crate) struct ProviderSet {
@@ -551,6 +716,12 @@ pub(crate) struct ProviderSet {
     state_root: PathBuf,
     providers: Vec<(ProviderDeclaration, Vec<DriverDescriptor>)>,
     trusted_context_publication: Option<TrustedContextPublication>,
+    /// The broker socket this plane publishes its verified authority over,
+    /// when the composition bound one (U7, KTD6-KTD7). The coordinator
+    /// itself is bound at start from the verified deployment graph, so the
+    /// store generation and the initiating subject are the document's own
+    /// rather than a caller's.
+    authority_broker_socket: Option<PathBuf>,
     /// Hosting factories for the declared effect services, keyed by service
     /// identity (U8, KTD5). A declared service without a factory refuses
     /// startup: the zone cannot host what it cannot build.
@@ -566,8 +737,28 @@ impl ProviderSet {
             state_root,
             providers: Vec::new(),
             trusted_context_publication: None,
+            authority_broker_socket: None,
             effect_service_factories: BTreeMap::new(),
         }
+    }
+
+    /// Bind this plane's authority publication over the origination leg (U7,
+    /// KTD6-KTD7).
+    ///
+    /// The socket is the same one the plane's trusted-context publication
+    /// rides: both are the daemon's own origination leg to one broker, so the
+    /// composition supplies one socket rather than two privileged surfaces
+    /// that could resolve differently.
+    ///
+    /// [`Self::start`] reads the verified deployment graph and publishes its
+    /// authority before any provider in this set attaches, so no provider
+    /// begins effects under an identity the broker has not accepted. A set
+    /// started without a socket publishes no authority at all: the rendezvous
+    /// stays fail-closed on the accepted-cursor half of every attested call,
+    /// which is the same posture a broker with no projection takes.
+    pub(crate) fn with_authority_publication(mut self, broker_socket: Option<PathBuf>) -> Self {
+        self.authority_broker_socket = broker_socket;
+        self
     }
 
     /// Bind this set's publication over the origination leg.
@@ -651,6 +842,7 @@ impl ProviderSet {
             state_root,
             providers,
             trusted_context_publication,
+            authority_broker_socket,
             effect_service_factories,
         } = self;
         let mut seen: BTreeMap<&'static str, ()> = BTreeMap::new();
@@ -664,6 +856,30 @@ impl ProviderSet {
                 });
             }
         }
+        // U7: the verified deployment graph's authority is published before
+        // any provider in this set attaches, so no provider begins effects
+        // under an identity the broker has not accepted. A plane with no
+        // socket bound publishes nothing and keeps the pre-cutover posture.
+        let authority_publication = match publish_verified_deployment_authority(
+            &zone,
+            &crate::foundation_seed::DeploymentBootstrap::deployment_root(),
+            authority_broker_socket,
+        )
+        .await
+        {
+            Ok(publication) => publication,
+            Err(error) => {
+                tracing::error!(
+                    zone = %zone.as_str(),
+                    %error,
+                    "verified deployment authority was not published; refusing to start any \
+                     provider under an unaccepted projection"
+                );
+                return Err(ProviderStartupError::AuthorityPublicationRefused {
+                    reason: error.to_string(),
+                });
+            }
+        };
         let declarations: Vec<(ProviderDeclaration, Arc<[DriverDescriptor]>)> = providers
             .into_iter()
             .map(|(declaration, drivers)| (declaration, Arc::<[DriverDescriptor]>::from(drivers)))
@@ -844,7 +1060,7 @@ impl ProviderSet {
             reason: error.to_string(),
         })?
         .0;
-        Ok(ProviderRuntime {
+        let runtime = ProviderRuntime {
             zone,
             port,
             providers,
@@ -853,9 +1069,77 @@ impl ProviderSet {
             directory: registrations.take_directory().await,
             operations,
             trusted_context_publication,
+            authority_publication,
             effect_services,
-        })
+        };
+
+        tracing::info!(
+            zone = %runtime.zone.as_str(),
+            published = runtime.authority_publication().is_some(),
+            "provider set started under the authority the broker accepted"
+        );
+        Ok(runtime)
     }
+}
+
+/// Publish the verified deployment graph's authority for one plane (U7,
+/// KTD7).
+///
+/// The coordinator is bound here, from the verified document, rather than at
+/// the composition point: the store generation and the initiating subject are
+/// facts the document establishes, and a composition that supplied its own
+/// would be publishing under an identity the graph was never verified for.
+///
+/// A plane the verified document does not describe publishes nothing. The
+/// deployment graph bootstraps exactly one Zone, and publishing its rows under
+/// a Zone it was not verified for would invent authority for that Zone.
+async fn publish_verified_deployment_authority(
+    zone: &ZoneId,
+    deployment_root: &Path,
+    broker_socket: Option<PathBuf>,
+) -> Result<Option<AuthorityPublication>, BootstrapPublicationError> {
+    use crate::foundation_seed::{DeploymentBootstrap, SYSTEM_ZONE};
+
+    let Some(broker_socket) = broker_socket else {
+        return Ok(None);
+    };
+    let document = DeploymentBootstrap::read_from_deployment_root(deployment_root)
+        .await
+        .map_err(|error| BootstrapPublicationError::Publication(
+            crate::authority_publication::PublicationError::Transport {
+                detail: format!(
+                    "the verified deployment graph at {} could not be read: {error}",
+                    deployment_root.display()
+                ),
+            },
+        ))?;
+    if document.zone.as_str() != SYSTEM_ZONE {
+        return Err(BootstrapPublicationError::ZoneMismatch {
+            published: document.zone.as_str().to_owned(),
+            bound: SYSTEM_ZONE.to_owned(),
+        });
+    }
+    if document.zone.as_str() != zone.as_str() {
+        return Ok(None);
+    }
+    let published = document
+        .publish(&crate::foundation_seed::core_declarations())
+        .map_err(|error| BootstrapPublicationError::Publication(
+            crate::authority_publication::PublicationError::Transport {
+                detail: format!("the verified deployment graph refused publication: {error}"),
+            },
+        ))?;
+    // The deployment root is the verified graph's own identity: nothing in
+    // the document can authorize its own introduction, and the broker admits a
+    // bootstrap subject only against that exact root.
+    let publication = AuthorityPublication::production(
+        zone,
+        published.store_incarnation().clone(),
+        AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+        broker_socket,
+    );
+    publication.publish_bootstrap(&published).await?;
+    Ok(Some(publication))
 }
 
 /// The providers one zone is running.
@@ -870,6 +1154,9 @@ pub(crate) struct ProviderRuntime {
     operations: Vec<ProviderOperations>,
     /// The origination-leg binding this set carries, when one is bound.
     trusted_context_publication: Option<TrustedContextPublication>,
+    /// The manager's authority publication coordinator, when one is bound
+    /// (U7, KTD6-KTD7).
+    authority_publication: Option<AuthorityPublication>,
     /// The zone's effect-service supervisor (U8, KTD5): one linked ractor
     /// actor per declared effect service, respawned from its durable row.
     /// The rendezvous binding resolves live bindings through this
@@ -1076,6 +1363,33 @@ impl ProviderRuntime {
                 );
             }
         }
+    }
+
+    /// Record the authority cursor the broker accepted for this Zone.
+    ///
+    /// The caller's publication coordinator drives this from the broker's
+    /// `Accepted` answer, so the rendezvous validates every forwarded effect
+    /// against broker-accepted authority rather than against the manager's own
+    /// view of its desired rows. A plane with no coordinator bound records
+    /// nothing and stays fail-closed on the accepted-cursor half.
+    #[allow(dead_code)] // U7 staged: called from the publication path U34 installs; the coordinator records the broker-accepted cursor.
+    pub(crate) async fn record_accepted_authority(&self, rendezvous: &ForwardRendezvous) {
+        let Some(publication) = &self.authority_publication else {
+            // A plane with no coordinator bound records nothing, and the
+            // rendezvous stays fail-closed on the accepted-cursor half of every
+            // attested call: there is no broker-accepted authority to serve
+            // under.
+            return;
+        };
+        let cursor = publication.coordinator().accepted().await;
+        rendezvous
+            .set_accepted_authority(self.zone.as_str(), cursor)
+            .await;
+    }
+
+    /// The coordinator this plane publishes authority through, when bound.
+    pub(crate) fn authority_publication(&self) -> Option<AuthorityPublication> {
+        self.authority_publication.clone()
     }
 
     /// Drain every provider, in the reverse of the order they started.
@@ -1843,5 +2157,640 @@ mod tests {
             .await
             .expect("call after restart");
         assert_eq!(response.payload, payload(serde_json::json!({ "echo": "after" })));
+    }
+
+    // -----------------------------------------------------------------------
+    // The verified deployment graph reaches the broker's projection
+    // (U7, KTD7)
+    //
+    // The far side of the socket below is not a stub that accepts anything:
+    // it answers with the broker's own wire types, reassembles the bounded
+    // snapshot and digests it exactly as the broker's transfer does, rebuilds
+    // the prior accepted graph through `AcceptedGraph::from_canonical_rows`
+    // - the same call the broker's `prior_graph` makes over its stored rows -
+    // and evaluates a candidate through `GraphAuthority::admit_mutation`,
+    // which is the one evaluator `evaluate_candidate` calls. The posture it
+    // reports is the broker's own mapping: an unfenced, accepted projection
+    // admits, anything else does not.
+    // -----------------------------------------------------------------------
+
+    use d2b_contracts_broker::broker_wire::{
+        AuthorityCursor, AuthorityProjectionRow, AuthorityPublicationEnvelope,
+        AuthorityPublicationOpen, AuthorityPublicationRequest, AuthorityPublicationResponse,
+        AuthoritySnapshot, OpenedPublicationSessionResponse, PrepareChangeRequest,
+        PreparedTransaction, PublicationLimits, PublicationMutationKind, PublicationRefusal,
+        PublicationSession, PublicationSessionBinding, PublicationTransactionId,
+        ZoneAuthorityState, PUBLICATION_CONTROL_NOT_BOUND, PUBLICATION_STALE_PREDECESSOR,
+        publication_candidate_digest,
+    };
+    use d2b_contracts_resource::v3::{
+        AdmissionDecision, AdmissionStage, DesiredDigest, DesiredRevision, RefusalReason,
+    };
+    use d2b_core::resource_authority::{
+        AcceptedGraph, GraphAuthority, GraphMutation, MutationKind, MutationSubjectEvidence,
+        ProjectionRow, TransportIdentity,
+    };
+
+    /// The Zone the verified deployment graph bootstraps.
+    const PEER_ZONE: &str = crate::foundation_seed::SYSTEM_ZONE;
+    const PEER_SESSION: &str = "peer-session-1";
+
+    /// What the far side of the publication socket holds.
+    struct BrokerPeer {
+        store_incarnation: Option<StoreIncarnation>,
+        accepted: AuthorityCursor,
+        state: ZoneAuthorityState,
+        rows: Vec<AuthorityProjectionRow>,
+        graph: Option<AcceptedGraph>,
+        transfer: Option<(String, u32, u32, Vec<u8>)>,
+        session_opens: usize,
+    }
+
+    impl BrokerPeer {
+        /// A peer that has never seen this Zone: no projection, and so no
+        /// accepted cursor and no authority.
+        fn new() -> Self {
+            Self {
+                store_incarnation: None,
+                accepted: AuthorityCursor::initial(),
+                state: ZoneAuthorityState::Unprovisioned,
+                rows: Vec::new(),
+                graph: None,
+                transfer: None,
+                session_opens: 0,
+            }
+        }
+
+        /// Whether this Zone has an accepted, unfenced projection.
+        fn admits(&self) -> bool {
+            matches!(self.state, ZoneAuthorityState::Unfenced { .. })
+        }
+
+        /// Answer one frame with the response the broker would send.
+        fn answer(&mut self, body: &[u8]) -> serde_json::Value {
+            if let Ok(open) = serde_json::from_slice::<AuthorityPublicationOpen>(body) {
+                self.session_opens += 1;
+                self.store_incarnation = Some(open.request.store_incarnation.clone());
+                let response = AuthorityPublicationResponse::Opened(
+                    OpenedPublicationSessionResponse {
+                        session: PublicationSession::parse(PEER_SESSION)
+                            .expect("a session token"),
+                        binding: PublicationSessionBinding {
+                            zone: open.request.zone.clone(),
+                            store_incarnation: open.request.store_incarnation.clone(),
+                            broker_epoch: 0,
+                            initiating_subject: open.request.initiating_subject.clone(),
+                            accepted: self.accepted.clone(),
+                        },
+                        limits: PublicationLimits::default(),
+                    },
+                );
+                return serde_json::to_value(response).expect("the open response serializes");
+            }
+            let envelope: AuthorityPublicationEnvelope =
+                serde_json::from_slice(body).expect("a publication envelope");
+            match envelope.request {
+                AuthorityPublicationRequest::BeginSnapshot(request) => {
+                    self.transfer = Some((
+                        request.transaction.to_string(),
+                        0,
+                        request.total_chunks,
+                        Vec::with_capacity(request.total_bytes as usize),
+                    ));
+                    let state = ZoneAuthorityState::SnapshotInProgress {
+                        store_incarnation: self.incarnation(),
+                        accepted: self.accepted.clone(),
+                        transaction: request.transaction,
+                        received_chunks: 0,
+                        total_chunks: request.total_chunks,
+                    };
+                    self.progressed(state)
+                }
+                AuthorityPublicationRequest::SnapshotChunk(request) => {
+                    let transfer = self
+                        .transfer
+                        .as_mut()
+                        .expect("a chunk arrives inside an open transfer");
+                    assert_eq!(transfer.0, request.transaction.to_string());
+                    transfer.1 = request.ordinal + 1;
+                    transfer.2 = request.total_chunks;
+                    transfer.3.extend_from_slice(&request.payload);
+                    let state = ZoneAuthorityState::SnapshotInProgress {
+                        store_incarnation: self.incarnation(),
+                        accepted: self.accepted.clone(),
+                        transaction: request.transaction,
+                        received_chunks: request.ordinal + 1,
+                        total_chunks: request.total_chunks,
+                    };
+                    self.progressed(state)
+                }
+                AuthorityPublicationRequest::EndSnapshot(request) => {
+                    let (transaction, received, total, bytes) =
+                        self.transfer.take().expect("a transfer is open");
+                    assert_eq!(transaction, request.transaction.to_string());
+                    assert_eq!(received, total, "the transfer was not truncated");
+                    assert_eq!(
+                        DesiredDigest::of(&bytes),
+                        request.digest,
+                        "the document the daemon sent is not the document it digested"
+                    );
+                    let snapshot: AuthoritySnapshot =
+                        serde_json::from_slice(&bytes).expect("the snapshot document decodes");
+                    self.install(snapshot)
+                }
+                AuthorityPublicationRequest::PrepareChange(request) => self.prepare(request),
+                other => panic!("the bootstrap publication sent {other:?}"),
+            }
+        }
+
+        /// Install one whole snapshot: the rows the Zone's decisions read.
+        fn install(&mut self, snapshot: AuthoritySnapshot) -> serde_json::Value {
+            assert_eq!(snapshot.zone, PEER_ZONE, "the document names its own Zone");
+            self.accepted = snapshot.cursor.clone();
+            self.rows = snapshot.rows.clone();
+            self.graph = AcceptedGraph::from_canonical_rows(
+                ZoneId::parse(snapshot.zone.as_str()).expect("a canonical Zone"),
+                snapshot.store_incarnation.clone(),
+                snapshot.root_subject.clone(),
+                snapshot.rows.iter().map(|row| {
+                    match (&row.source_uid, &row.consumer_uid) {
+                        (Some(source), Some(consumer)) => ProjectionRow::with_identity(
+                            &row.resource_ref,
+                            &row.admitted,
+                            source,
+                            consumer,
+                        ),
+                        _ => ProjectionRow::new(&row.resource_ref, &row.admitted),
+                    }
+                }),
+            )
+            .ok();
+            let state = ZoneAuthorityState::Unfenced {
+                store_incarnation: snapshot.store_incarnation,
+                accepted: self.accepted.clone(),
+            };
+            self.progressed(state)
+        }
+
+        /// Evaluate one candidate against the prior accepted graph.
+        fn prepare(&mut self, request: PrepareChangeRequest) -> serde_json::Value {
+            let prior = self
+                .graph
+                .clone()
+                .expect("a candidate is evaluated against an accepted graph");
+            let kind = match request.kind {
+                PublicationMutationKind::Create => MutationKind::Create,
+                PublicationMutationKind::UpdateSpec => MutationKind::UpdateSpec,
+                PublicationMutationKind::UpdateMetadata => MutationKind::UpdateMetadata,
+                PublicationMutationKind::Delete => MutationKind::Delete,
+            };
+            let evidence =
+                MutationSubjectEvidence::new(request.subject.clone(), TransportIdentity::Broker);
+            let mut targets: Vec<ResourceRef> = request
+                .candidate
+                .iter()
+                .map(|row| row.resource_ref.clone())
+                .chain(request.removed.iter().cloned())
+                .collect();
+            targets.sort();
+            targets.dedup();
+            for target in targets {
+                let mutation = GraphMutation::new(prior.zone().clone(), evidence.clone(), kind, target);
+                if let AdmissionDecision::Refused { stage, reason } =
+                    GraphAuthority::admit_mutation(&mutation, &prior)
+                {
+                    let code = if stage == AdmissionStage::Authorize {
+                        PUBLICATION_CONTROL_NOT_BOUND
+                    } else {
+                        PUBLICATION_STALE_PREDECESSOR
+                    };
+                    let refusal = AuthorityPublicationResponse::Refused(PublicationRefusal {
+                        code: code.to_owned(),
+                        stage,
+                        reason,
+                        fenced: true,
+                        state: self.state.clone(),
+                    });
+                    return serde_json::to_value(refusal).expect("the refusal serializes");
+                }
+            }
+            let prepared = AuthorityPublicationResponse::Prepared(PreparedTransaction {
+                transaction: request.transaction,
+                expected: request.expected,
+                committed: request.committed,
+                digest: request.digest,
+                reducing: false,
+                state: self.state.clone(),
+            });
+            serde_json::to_value(prepared).expect("the prepared transaction serializes")
+        }
+
+        fn incarnation(&self) -> StoreIncarnation {
+            self.store_incarnation
+                .clone()
+                .expect("a session was opened before any other message")
+        }
+
+        /// Record the Zone's posture the way the broker's worker does, then
+        /// answer with it.
+        fn progressed(&mut self, state: ZoneAuthorityState) -> serde_json::Value {
+            self.state = state.clone();
+            serde_json::to_value(AuthorityPublicationResponse::Progressed(state))
+                .expect("the projection state serializes")
+        }
+    }
+
+    /// Serve the publication socket on a thread of its own and share the
+    /// state the test reads.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    /// One consistent read of the far side's held state.
+    ///
+    /// A test that asserts several facts about the peer must not hold the
+    /// guard across them, so each read copies out what it needs and drops the
+    /// guard immediately.
+    struct PeerSnapshot {
+        state: ZoneAuthorityState,
+        admits: bool,
+        session_opens: usize,
+        rows: Vec<AuthorityProjectionRow>,
+        graph: Option<AcceptedGraph>,
+        accepted: AuthorityCursor,
+    }
+
+    impl PeerSnapshot {
+        /// Whether the Zone's posture admits an ordinary effect.
+        fn admits(&self) -> bool {
+            self.admits
+        }
+
+        /// Whether the far side rebuilt a prior graph from the rows it received.
+        fn graph_is_some(&self) -> bool {
+            self.graph.is_some()
+        }
+    }
+
+    /// The far side's answer to one publication request, read under the
+    /// peer's lock.
+    ///
+    /// Synchronous on purpose: an async context taking a `std::sync::Mutex`
+    /// guard is a blocking call, and the peer is only ever locked for a copy
+    /// that never spans an await.
+    fn peer_answer(peer: &std::sync::Mutex<BrokerPeer>, body: &[u8]) -> serde_json::Value {
+        let mut peer = peer.lock().expect("the peer state mutex");
+        peer.answer(body)
+    }
+
+    /// How many publication sessions the far side has opened.
+    fn peer_session_opens(peer: &std::sync::Mutex<BrokerPeer>) -> usize {
+        let peer = peer.lock().expect("the peer state mutex");
+        peer.session_opens
+    }
+
+    /// The far side's held state, read as a snapshot the caller can assert
+    /// against without keeping the guard.
+    fn peer_snapshot(peer: &std::sync::Mutex<BrokerPeer>) -> PeerSnapshot {
+        let peer = peer.lock().expect("the peer state mutex");
+        PeerSnapshot {
+            state: peer.state.clone(),
+            admits: peer.admits(),
+            session_opens: peer.session_opens,
+            rows: peer.rows.clone(),
+            graph: peer.graph.clone(),
+            accepted: peer.accepted.clone(),
+        }
+    }
+
+    /// Serve the publication socket on a thread of its own and share the
+    /// state the test reads.
+    ///
+    /// The bind and listen happen HERE, on the caller's thread, before the
+    /// accept loop is spawned. A caller that connects the instant this
+    /// returns must not race the bind: binding inside the spawned closure
+    /// leaves the socket path absent until that thread is scheduled, so a
+    /// `connect` issued immediately after the spawn fails with ENOENT and
+    /// surfaces as "could not reach the privileged broker socket". That
+    /// window widens with load - it passed in isolation and failed twice in
+    /// five runs of the full binary - and no test can close it from its own
+    /// side, because the peer is the other end. Binding before the spawn
+    /// makes the listener's existence a precondition of the return, which is
+    /// what every caller already assumes.
+    fn serve_broker_peer(path: &Path) -> Arc<std::sync::Mutex<BrokerPeer>> {
+        let shared = Arc::new(std::sync::Mutex::new(BrokerPeer::new()));
+        let owned = Arc::clone(&shared);
+        let socket = socket2::Socket::new(
+            socket2::Domain::UNIX,
+            socket2::Type::from(libc::SOCK_SEQPACKET),
+            None,
+        )
+        .expect("a seqpacket socket");
+        socket
+            .bind(&socket2::SockAddr::unix(path).expect("a unix address"))
+            .expect("the publication socket binds");
+        socket.listen(64).expect("the publication socket listens");
+        let listener = std::os::unix::net::UnixListener::from(std::os::fd::OwnedFd::from(socket));
+        std::thread::spawn(move || {
+            for connection in listener.incoming() {
+                let stream = connection.expect("the publication socket accepts");
+                while let Ok(body) = d2bd_runtime::unix_transport::read_frame(&stream) {
+                    let response = owned.lock().expect("the peer state mutex").answer(&body);
+                    if d2bd_runtime::unix_transport::write_json_frame(&stream, &response).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        shared
+    }
+
+    /// The verified deployment graph the deployment publishes, sealed over
+    /// its own canonical bytes with the document's own digest domain.
+    fn verified_deployment_graph() -> crate::foundation_seed::DeploymentBootstrap {
+        use crate::foundation_seed::{
+            BootstrapAuthorityRow, DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN, DEPLOYMENT_BOOTSTRAP_SCHEMA,
+            DeploymentBootstrap,
+        };
+        let mut document = DeploymentBootstrap {
+            schema_version: DEPLOYMENT_BOOTSTRAP_SCHEMA.to_owned(),
+            zone: ZoneId::parse(PEER_ZONE).expect("the foundation Zone"),
+            store_incarnation: StoreIncarnation::parse("foundation-1").expect("a store generation"),
+            state_volume: "Volume/d2b-state".to_owned(),
+            implementations: vec!["activation-nixos".to_owned()],
+            roles: vec![BootstrapAuthorityRow {
+                reference: "Role/operation-publisher".to_owned(),
+                admitted: serde_json::json!({
+                    "rules": [{
+                        "resourceTypes": ["Operation"],
+                        "verbs": ["create"],
+                        "subresources": [],
+                        "resourceNames": [],
+                        "zones": [],
+                        "executionRefs": [],
+                        "sessionVerbs": []
+                    }],
+                    "operationRefs": []
+                }),
+            }],
+            role_bindings: vec![BootstrapAuthorityRow {
+                reference: "RoleBinding/system-minijail-self-operation-publisher".to_owned(),
+                admitted: serde_json::json!({
+                    "roleRef": "Role/operation-publisher",
+                    "subjects": ["Provider/system-minijail"]
+                }),
+            }],
+            graph_digest: String::new(),
+        };
+        let preimage =
+            DeploymentBootstrap::canonical_bytes_without_digest(&document).expect("the preimage");
+        document.graph_digest = d2b_contracts_resource::v3::framed_canonical_digest(
+            DEPLOYMENT_BOOTSTRAP_DIGEST_DOMAIN,
+            &preimage,
+        );
+        document
+    }
+
+    /// Publish the verified graph at a deployment root, exactly as the
+    /// installer publishes it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn write_deployment_root(root: &Path) {
+        let document = verified_deployment_graph();
+        std::fs::create_dir_all(root).expect("the deployment root is created");
+        std::fs::write(
+            root.join(crate::foundation_seed::DEPLOYMENT_BOOTSTRAP_FILE),
+            serde_json::to_vec(&document).expect("the document renders"),
+        )
+        .expect("the verified graph is published");
+    }
+
+    /// The Zone's label, resolved once.
+    fn peer_zone() -> ZoneId {
+        ZoneId::parse(PEER_ZONE).expect("the foundation Zone")
+    }
+
+    /// U7: the plane's production producer publishes the verified deployment
+    /// graph's authority, and the far side of the publication socket moves
+    /// from holding no projection to an accepted, unfenced one.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_plane_publishes_the_verified_deployment_authority() {
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let root = scratch.path().join("deployment");
+        let socket = scratch.path().join("publication.sock");
+        write_deployment_root(&root);
+        let peer = serve_broker_peer(&socket);
+        {
+            let held = peer_snapshot(&peer);
+            assert_eq!(
+                held.state,
+                ZoneAuthorityState::Unprovisioned,
+                "before the daemon publishes, the broker holds no projection for the Zone"
+            );
+            assert!(!held.admits(), "an unprovisioned Zone admits no ordinary effect");
+        }
+
+        let publication = publish_verified_deployment_authority(
+            &peer_zone(),
+            &root,
+            Some(socket.clone()),
+        )
+        .await
+        .expect("the verified deployment graph publishes");
+        assert!(
+            publication.is_some(),
+            "the foundation plane publishes its verified authority"
+        );
+
+        let held = peer_snapshot(&peer);
+        assert_eq!(held.session_opens, 1, "the publication opened one session");
+        assert!(
+            held.admits(),
+            "the Zone's posture moved from Unaccepted to accepted"
+        );
+        assert!(
+            held.graph_is_some(),
+            "the broker's prior graph is rebuilt from the published rows"
+        );
+        let published: Vec<String> = held
+            .rows
+            .iter()
+            .map(|row| row.resource_ref.to_canonical_string())
+            .collect();
+        assert_eq!(
+            published,
+            [
+                "Role/operation-publisher",
+                "RoleBinding/system-minijail-self-operation-publisher"
+            ],
+            "the published set is the verified document's own authority rows"
+        );
+        for row in &held.rows {
+            assert_eq!(
+                row.desired_digest,
+                DesiredDigest::of(&row.admitted.to_canonical_bytes()),
+                "{} travels as the bytes the broker accepted",
+                row.resource_ref.to_canonical_string()
+            );
+            assert_eq!(
+                row.desired_revision,
+                DesiredRevision::INITIAL,
+                "a cold start installs each row at the revision it committed at"
+            );
+        }
+        assert_eq!(
+            held.accepted,
+            AuthorityCursor::initial(),
+            "a cold start installs the accepted root at the cursor a broker already holds"
+        );
+    }
+
+    /// U7: the published graph is what the broker evaluates a candidate
+    /// against, so a `RoleBinding` that would grant its own creation refuses
+    /// while the mutation the same graph does grant prepares.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_role_binding_cannot_grant_its_own_creation() {
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let root = scratch.path().join("deployment");
+        let socket = scratch.path().join("publication.sock");
+        write_deployment_root(&root);
+        let peer = serve_broker_peer(&socket);
+        publish_verified_deployment_authority(&peer_zone(), &root, Some(socket.clone()))
+            .await
+            .expect("the verified deployment graph publishes");
+
+        // The grant the verified graph really carries: the Process provider
+        // may create an `Operation`.
+        let granted = serde_json::to_vec(&candidate(
+            "b1",
+            AuthoritySubject::named(
+                AuthoritySubjectKind::Provider,
+                ResourceRef::parse("Provider/system-minijail").expect("a provider reference"),
+            ),
+            vec![projection_row("Operation/process-run-worker")],
+        ))
+        .expect("the candidate serializes");
+        let answer: AuthorityPublicationResponse =
+            serde_json::from_value(peer_answer(&peer, &granted))
+                .expect("the answer is a publication response");
+        assert!(
+            matches!(answer, AuthorityPublicationResponse::Prepared(_)),
+            "the published grant admits the mutation it covers, so the refusal below is about \
+             the self-grant and not about a graph that grants nothing"
+        );
+
+        // The self-grant: a `RoleBinding` that names the very subject the
+        // mutation runs as, introduced by that same subject.
+        let self_grant = serde_json::to_vec(&candidate(
+            "b2",
+            AuthoritySubject::named(
+                AuthoritySubjectKind::User,
+                ResourceRef::parse("User/new-admin").expect("a user reference"),
+            ),
+            vec![projection_row("RoleBinding/new-admin")],
+        ))
+        .expect("the candidate serializes");
+        let answer: AuthorityPublicationResponse =
+            serde_json::from_value(peer_answer(&peer, &self_grant))
+                .expect("the answer is a publication response");
+        let AuthorityPublicationResponse::Refused(refusal) = answer else {
+            panic!("a candidate that grants its own creation must not prepare");
+        };
+        assert_eq!(refusal.code, PUBLICATION_CONTROL_NOT_BOUND);
+        assert_eq!(refusal.stage, AdmissionStage::Authorize);
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::IdentityNotAuthorized,
+            "the candidate's own grant is absent from the prior state it is decided against"
+        );
+    }
+
+    /// A plane the verified document does not describe publishes nothing: the
+    /// deployment graph bootstraps exactly one Zone, and its rows under
+    /// another Zone's name would invent authority there.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plane_the_verified_graph_does_not_describe_publishes_nothing() {
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let root = scratch.path().join("deployment");
+        let socket = scratch.path().join("publication.sock");
+        write_deployment_root(&root);
+        let peer = serve_broker_peer(&socket);
+        let publication = publish_verified_deployment_authority(
+            &ZoneId::parse("guest-lab").expect("a zone-local label"),
+            &root,
+            Some(socket),
+        )
+        .await
+        .expect("a zone-local plane is not a refusal");
+        assert!(
+            publication.is_none(),
+            "no verified authority for that Zone means nothing is published"
+        );
+        assert_eq!(
+            peer_session_opens(&peer),
+            0,
+            "no session was opened for a Zone the document does not describe"
+        );
+    }
+
+    /// A deployment root with no verified graph refuses rather than
+    /// publishing an empty projection that would read as authority with none.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plane_without_a_verified_deployment_graph_refuses_to_start() {
+        let scratch = tempfile::tempdir().expect("tempdir");
+        let error = publish_verified_deployment_authority(
+            &peer_zone(),
+            &scratch.path().join("absent"),
+            Some(scratch.path().join("publication.sock")),
+        )
+        .await
+        .expect_err("an unverified deployment root is refused, not defaulted");
+        assert!(
+            matches!(error, BootstrapPublicationError::Publication(_)),
+            "the refusal names the transport the document could not be read over, got {error}"
+        );
+    }
+
+    /// One `PrepareChange` candidate over the broker's own wire request.
+    fn candidate(
+        transaction: &str,
+        subject: AuthoritySubject,
+        rows: Vec<AuthorityProjectionRow>,
+    ) -> AuthorityPublicationEnvelope {
+        let accepted = AuthorityCursor::initial();
+        AuthorityPublicationEnvelope {
+            zone: PEER_ZONE.to_owned(),
+            session: PublicationSession::parse(PEER_SESSION).expect("a session token"),
+            request: AuthorityPublicationRequest::PrepareChange(PrepareChangeRequest {
+                transaction: PublicationTransactionId::parse(transaction)
+                    .expect("a bounded transaction token"),
+                store_incarnation: StoreIncarnation::parse("foundation-1")
+                    .expect("a store generation"),
+                expected: accepted.clone(),
+                committed: accepted.clone(),
+                digest: publication_candidate_digest(&rows, &[]),
+                subject,
+                kind: PublicationMutationKind::Create,
+                candidate: rows,
+                removed: Vec::new(),
+            }),
+        }
+    }
+
+    /// One candidate row: the committed bytes and the revision it commits at.
+    fn projection_row(reference: &str) -> AuthorityProjectionRow {
+        let admitted = CanonicalJsonObject::parse(
+            &serde_json::to_vec(&serde_json::json!({ "declared": reference }))
+                .expect("the fixture row renders"),
+        )
+        .expect("a canonical JSON object");
+        AuthorityProjectionRow {
+            resource_ref: ResourceRef::parse(reference).expect("a canonical reference"),
+            desired_revision: DesiredRevision::INITIAL,
+            desired_digest: DesiredDigest::of(&admitted.to_canonical_bytes()),
+            admitted,
+            source_uid: None,
+            consumer_uid: None,
+        }
     }
 }

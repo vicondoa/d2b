@@ -843,6 +843,8 @@ mod tests {
             controller_generation: 3,
             guest_generation: 4,
             initiating_identity: "daemon".to_owned(),
+            accepted_sequence: d2b_contracts_resource::v3::ZoneDesiredSequence::INITIAL,
+            accepted_digest: d2b_contracts_resource::v3::DesiredDigest::of(&[]),
             deadline_ms: 25_000,
         };
         let chain = d2b_audit::evidence_chain::EvidenceChain::root("invocation-16", "daemon");

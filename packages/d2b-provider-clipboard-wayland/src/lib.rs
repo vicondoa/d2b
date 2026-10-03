@@ -36,9 +36,17 @@ pub use runtime::{
     ClipboardRuntimeError,
 };
 pub use service::{
-    AuthenticatedClipboardSession, AuthenticatedPasteRoute, ClipboardBridgePort, ClipboardConfig,
-    ClipboardServiceError, ClipboardServiceRole, ClipdHost, DisplayDependency, GuestSelectionEvent,
-    VerifiedClipboardAttachments,
+    AdmittedClipboardEndpoint, AuthenticatedClipboardSession, AuthenticatedPasteRoute,
+    CLIPBOARD_BRIDGE_SERVICE, CLIPBOARD_MANAGEMENT_SERVICE, CLIPBOARD_PICKER_SERVICE,
+    CLIPBOARD_SERVICES, ClipboardBridgePort, ClipboardConfig, ClipboardEndpointBinding,
+    ClipboardEndpointError, ClipboardEndpointEvidence, ClipboardEndpointFence,
+    ClipboardEndpointGrant, ClipboardEndpointPhase, ClipboardEndpointRefusal,
+    ClipboardEndpointRole,
+    ClipboardHostEndpoints, ClipboardServiceError, ClipboardServiceRole, ClipdHost,
+    DeclaredClipboardService, DisplayDependency, GuestSelectionEvent,
+    VerifiedClipboardAttachments, admit_clipboard_endpoint, clipboard_endpoint_bindings,
+    clipboard_service_declaration, clipboard_service_declares, clipboard_service_role,
+    declaration,
 };
 
 /// Canonical Provider reference.

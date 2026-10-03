@@ -34,7 +34,7 @@ const RESOURCE_TYPE_QUALIFIER: &str = ".d2bus.org.";
 pub const SYSTEM_ZONE_NAME: &str = "system";
 
 /// The complete standard ResourceType catalog.
-pub const STANDARD_RESOURCE_TYPES: [&str; 23] = [
+pub const STANDARD_RESOURCE_TYPES: [&str; 27] = [
     "Zone",
     "ZoneLink",
     "Provider",
@@ -50,24 +50,28 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 23] = [
     "VolumeBinding",
     "Network",
     "Device",
+    "CredentialBinding",
+    "DeviceBinding",
     "User",
     "Credential",
     "Endpoint",
     "ResourceExport",
     "ResourceImport",
-    // The controller family's policy types: unqualified, always-committed
-    // vocabulary whose rows the foundation seed writes.
-    "Command",
     "Operation",
     "SeccompProfile",
+    "EndpointBinding",
+    "ExecutionPolicy",
+    "NetworkBinding",
 ];
 
 // The resource-type authority is generated from the per-crate
-// `resource-types.json` declarations;the layout check's parity and drift
-// gates own it (`cargo xtask check-provider-crate-layout`),and `--fix`
-// regenerates it.
+// `resource-types.json` declarations and staged under the repository's
+// `generated/new-graph/` closure, the one byte the daemon's contracts and
+// the daemon itself compile. `cargo xtask gen-new-graph` renders it and
+// drift-gates it byte for byte; `cargo xtask check-provider-crate-layout
+// --fix` installs it.
 
-include!("generated/v3_converted_resource_types.rs");
+include!("../../../generated/new-graph/v3_converted_resource_types.rs");
 
 /// The storage plane that owns one resource type (R35/F1: an exclusive
 /// per-type partition, no dual authority).

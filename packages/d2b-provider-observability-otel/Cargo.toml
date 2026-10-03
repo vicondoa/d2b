@@ -13,6 +13,9 @@ disallowed_methods = "deny"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 
+[features]
+test-support = []
+
 [dependencies]
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
@@ -23,3 +26,13 @@ tracing = "0.1"
 serde_json.workspace = true
 rustix = { workspace = true }
 zeroize = "1"
+
+[[test]]
+name = "binding_controller"
+path = "tests/binding_controller.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "ingress_metric_policy"
+path = "tests/ingress_metric_policy.rs"
+required-features = ["test-support"]

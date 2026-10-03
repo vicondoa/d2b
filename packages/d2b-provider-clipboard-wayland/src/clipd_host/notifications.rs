@@ -89,6 +89,9 @@ fn reason_label(reason: ReasonCode) -> &'static str {
         ReasonCode::MemoryCapExceeded => "clipboard memory cap was exceeded",
         ReasonCode::AuditFailure => "audit queue is unavailable",
         ReasonCode::VirtualKeyboardFailed => "virtual keyboard paste replay failed",
+        ReasonCode::EndpointAbsent => "no admitted clipboard endpoint carries this transfer",
+        ReasonCode::EndpointWithdrawn => "the clipboard endpoint was withdrawn",
+        ReasonCode::EndpointRefused => "the clipboard endpoint refused this transfer",
     }
 }
 
@@ -123,6 +126,9 @@ fn is_user_visible_failure(reason: ReasonCode) -> bool {
             | ReasonCode::MemoryCapExceeded
             | ReasonCode::AuditFailure
             | ReasonCode::VirtualKeyboardFailed
+            | ReasonCode::EndpointAbsent
+            | ReasonCode::EndpointWithdrawn
+            | ReasonCode::EndpointRefused
     )
 }
 

@@ -2,10 +2,19 @@
 
 use std::fmt;
 
-use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    BindingKind, BindingLifecycleState, BindingObservation, ChildBindingRequest,
+    ChildRequestDefaults, ChildSupportCeiling, ReleaseOutcome, RequestedRights, ResourceRef,
+    ResourceUid, VolumeBindingRequest, ZoneId,
+};
 use d2b_core_controller::OwnedChildKind;
 
-use crate::{descriptor::VerifiedGuestSetupDescriptor, identity::GuestChildBatch};
+use crate::{
+    adoption::BindingAdoptionStatus,
+    descriptor::VerifiedGuestSetupDescriptor,
+    execution_parent::GuestExecutionParent,
+    identity::GuestChildBatch,
+};
 
 /// Readiness of one dependency family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,6 +245,348 @@ fn child_refs(batch: &GuestChildBatch) -> Vec<ResourceRef> {
         .iter()
         .map(|mutation| mutation.target().clone())
         .collect()
+}
+
+/// One admitted relationship the Guest itself consumes (AE32).
+///
+/// The request is the Guest's own desired declaration, and the evidence is
+/// the observation of the relationship the source provider admitted for it.
+/// Both halves are fenced to exact identities, so an ownership, view,
+/// consumer, or source-replacement change cannot be satisfied by a cached
+/// readiness value (R35, R41).
+#[derive(Clone, PartialEq, Eq)]
+pub struct AdmittedGuestBinding {
+    request: VolumeBindingRequest,
+    source_uid: Option<ResourceUid>,
+    observation: Option<BindingObservation>,
+}
+
+impl AdmittedGuestBinding {
+    /// Construct one relationship with no observation yet.
+    fn new(request: VolumeBindingRequest) -> Self {
+        Self {
+            request,
+            source_uid: None,
+            observation: None,
+        }
+    }
+
+    /// Borrow the Guest's own desired request.
+    pub const fn request(&self) -> &VolumeBindingRequest {
+        &self.request
+    }
+
+    /// Borrow the source identity the latest observation was made under.
+    pub const fn source_uid(&self) -> Option<&ResourceUid> {
+        self.source_uid.as_ref()
+    }
+
+    /// Borrow the latest fenced observation.
+    pub const fn observation(&self) -> Option<&BindingObservation> {
+        self.observation.as_ref()
+    }
+
+    /// Whether the source side is prepared under the current fence.
+    ///
+    /// This is the pre-start condition alone. It never folds in the
+    /// consumer's completion, because a Guest that has not booted cannot have
+    /// mounted and treating that as a failure would make its own start gate
+    /// wait on itself (R39).
+    pub fn source_prepared(&self) -> bool {
+        self.observation
+            .is_some_and(|observation| observation.prepare().is_complete())
+    }
+
+    /// Whether the consumer side has completed under the current fence.
+    pub fn consumer_complete(&self) -> bool {
+        self.observation
+            .is_some_and(|observation| observation.consumer_completion().is_complete())
+    }
+
+    /// Whether no outstanding use of this relationship remains.
+    pub fn released(&self) -> bool {
+        self.observation
+            .is_some_and(|observation| matches!(observation.release(), ReleaseOutcome::Released))
+    }
+}
+
+/// Why the admitted graph refused to record or accept one observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdmittedGraphError {
+    /// The observed relationship is not one the Guest consumes.
+    ///
+    /// A support ceiling and a child default are inputs to someone else's
+    /// decision, so neither can be recorded here: there is no path by which
+    /// they become Guest use.
+    UnknownRelationship,
+    /// The execution-parent fragment could not be classified.
+    ExecutionParent,
+}
+
+impl fmt::Display for AdmittedGraphError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::UnknownRelationship => "guest-graph-unknown-relationship",
+            Self::ExecutionParent => "guest-graph-execution-parent-unclassified",
+        })
+    }
+}
+
+impl std::error::Error for AdmittedGraphError {}
+
+/// The Guest's pre-start condition over its admitted relationships (R39).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestStartGate {
+    /// Every relationship the Guest consumes has its source prepared, so the
+    /// VMM Process may transition to running. Consumer completion follows
+    /// the boot rather than gating it (R40).
+    Permitted,
+    /// At least one source is still preparing.
+    SourcePending,
+    /// At least one relationship refused under its own identity.
+    Refused,
+}
+
+impl GuestStartGate {
+    /// Whether the VMM Process may transition to running.
+    pub const fn permits_start(self) -> bool {
+        matches!(self, Self::Permitted)
+    }
+}
+
+/// The consumer-side completion of the Guest's admitted relationships.
+///
+/// It is observed only after boot, and it is reported rather than waited on:
+/// the two conditions stay separate so storage preparation never forms a
+/// startup cycle with the mount the Guest makes after it starts (AE21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestConsumerCompletion {
+    /// The Guest has not started, so no mount exists to observe yet.
+    NotYetRunning,
+    /// Every observed consumer side completed.
+    Complete,
+    /// The consumer is running and reports at least one relationship did not
+    /// complete. The start gate is unaffected; this is a post-boot
+    /// regression, not a pre-boot condition.
+    Incomplete,
+}
+
+/// The admitted graph backing one Cloud Hypervisor Guest.
+///
+/// This is the composition the graph contract describes, and it replaces the
+/// flattened attachment lists as the source of the start gate:
+///
+/// - the child target-support ceiling bounds what a child of this Guest may
+///   request and contributes no member, no wait, and no access (AE31);
+/// - the Guest's own consumption is one admitted relationship per request,
+///   each with the Guest as its consumer (AE32);
+/// - a child default shapes one named child's request and never becomes a
+///   Guest relationship or a Guest boot dependency (AE33).
+///
+/// Nothing here is an independently authored policy table. Every field is
+/// either a classified input or an observation of an admitted relationship,
+/// so the launch decision cannot be made by a list the provider authored.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AdmittedGuestGraph {
+    guest_ref: ResourceRef,
+    support: ChildSupportCeiling,
+    bindings: Vec<AdmittedGuestBinding>,
+    child_defaults: Vec<ChildRequestDefaults>,
+}
+
+impl AdmittedGuestGraph {
+    /// Compose the graph from one classified execution parent.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a fragment with no ceiling or with a support entry the binding
+    /// kinds do not admit. An absent ceiling would be a target that admits
+    /// anything, which is the opposite of what an empty attachment list
+    /// means.
+    pub fn from_execution_parent(
+        guest_ref: ResourceRef,
+        parent: &GuestExecutionParent,
+    ) -> Result<Self, AdmittedGraphError> {
+        let support = parent
+            .support_ceiling()
+            .ok_or(AdmittedGraphError::ExecutionParent)?
+            .clone();
+        Ok(Self {
+            bindings: parent
+                .parent_use()
+                .cloned()
+                .map(AdmittedGuestBinding::new)
+                .collect(),
+            guest_ref,
+            support,
+            child_defaults: parent.child_defaults().cloned().collect(),
+        })
+    }
+
+    /// Borrow the Guest this graph describes.
+    pub const fn guest_ref(&self) -> &ResourceRef {
+        &self.guest_ref
+    }
+
+    /// Borrow the child target-support ceiling.
+    pub const fn support_ceiling(&self) -> &ChildSupportCeiling {
+        &self.support
+    }
+
+    /// Borrow the relationships the Guest itself consumes.
+    pub fn guest_bindings(&self) -> &[AdmittedGuestBinding] {
+        &self.bindings
+    }
+
+    /// Borrow the defaults supplied to named children.
+    pub fn child_defaults(&self) -> &[ChildRequestDefaults] {
+        &self.child_defaults
+    }
+
+    /// Record one observation of a relationship the Guest consumes.
+    ///
+    /// The caller decides whether the observed row still describes this
+    /// relationship; this method only records what survived that decision.
+    /// A row under a different source identity is a successor relationship
+    /// rather than a continuation, so the earlier source's readiness is
+    /// dropped instead of carried over (R19, R35).
+    ///
+    /// # Errors
+    ///
+    /// Refuses a relationship this Guest does not consume, which is the
+    /// structural half of AE31 and AE33: a ceiling entry and a child default
+    /// are not relationships and can never reach this method.
+    pub fn observe_binding(
+        &mut self,
+        request: &VolumeBindingRequest,
+        source_uid: &ResourceUid,
+        observation: BindingObservation,
+    ) -> Result<BindingAdoptionStatus, AdmittedGraphError> {
+        if request.consumer_ref() != &self.guest_ref {
+            return Err(AdmittedGraphError::UnknownRelationship);
+        }
+        let Some(binding) = self
+            .bindings
+            .iter_mut()
+            .find(|binding| binding.request() == request)
+        else {
+            return Err(AdmittedGraphError::UnknownRelationship);
+        };
+        let status = if binding.source_uid.as_ref() == Some(source_uid) {
+            if binding.observation.is_some() {
+                BindingAdoptionStatus::Current
+            } else {
+                BindingAdoptionStatus::Adopted
+            }
+        } else {
+            BindingAdoptionStatus::Adopted
+        };
+        binding.source_uid = Some(source_uid.clone());
+        binding.observation = Some(observation);
+        Ok(status)
+    }
+
+    /// The Guest's pre-start condition over every relationship it consumes.
+    ///
+    /// The gate reads source preparation alone. A Guest whose storage export
+    /// is prepared but not yet mounted may start, and the mount that follows
+    /// is observed afterwards rather than waited for here (AE6, AE21).
+    pub fn start_gate(&self) -> GuestStartGate {
+        let mut pending = false;
+        for binding in &self.bindings {
+            match binding.observation() {
+                None => pending = true,
+                Some(observation) => {
+                    if matches!(observation.state(), BindingLifecycleState::Refused) {
+                        return GuestStartGate::Refused;
+                    }
+                    if !observation.prepare().is_complete() {
+                        pending = true;
+                    }
+                }
+            }
+        }
+        if pending {
+            GuestStartGate::SourcePending
+        } else {
+            GuestStartGate::Permitted
+        }
+    }
+
+    /// The consumer-side completion that follows the permitted start.
+    pub fn consumer_completion(&self) -> GuestConsumerCompletion {
+        if self
+            .bindings
+            .iter()
+            .any(|binding| !binding.source_prepared())
+        {
+            return GuestConsumerCompletion::NotYetRunning;
+        }
+        if self
+            .bindings
+            .iter()
+            .all(AdmittedGuestBinding::consumer_complete)
+        {
+            GuestConsumerCompletion::Complete
+        } else {
+            GuestConsumerCompletion::Incomplete
+        }
+    }
+
+    /// Whether any relationship still holds outstanding use.
+    ///
+    /// This is the last fact a stop has to settle: descendants are drained
+    /// and the Guest's own use is released before the Guest's finalizer may
+    /// be cleared (R36).
+    pub fn use_outstanding(&self) -> bool {
+        self.bindings.iter().any(|binding| !binding.released())
+    }
+
+    /// Shape one child's request with this Guest's defaults (AE33) and
+    /// check it against the child's support ceiling (AE31).
+    ///
+    /// A request the ceiling does not admit is refused: the ceiling is the
+    /// constraint, and applying the defaults never widens what a child may
+    /// ask for.
+    pub fn shape_child_request(
+        &self,
+        draft: &ChildBindingRequest,
+    ) -> Result<ChildBindingRequest, AdmittedGraphError> {
+        let shaped = match self
+            .child_defaults
+            .iter()
+            .find(|defaults| defaults.child_ref() == draft.consumer_ref())
+        {
+            Some(defaults) => draft.apply_defaults(defaults),
+            None => Ok(draft.clone()),
+        }
+        .map_err(|_| AdmittedGraphError::ExecutionParent)?;
+        let Some(rights) = shaped.rights() else {
+            return Ok(shaped);
+        };
+        if !self.support.admits(shaped.kind(), rights) {
+            return Err(AdmittedGraphError::ExecutionParent);
+        }
+        Ok(shaped)
+    }
+
+    /// The ceiling's verdict on one child request, for callers that already
+    /// shaped the request.
+    pub fn admits_child_request(&self, kind: BindingKind, rights: RequestedRights) -> bool {
+        self.support.admits(kind, rights)
+    }
+}
+
+impl fmt::Debug for AdmittedGuestGraph {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AdmittedGuestGraph")
+            .field("guest_ref", &self.guest_ref)
+            .field("support_entries", &self.support.entries().len())
+            .field("guest_bindings", &self.bindings.len())
+            .field("child_defaults", &self.child_defaults.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]

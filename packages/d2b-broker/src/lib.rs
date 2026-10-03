@@ -5,16 +5,19 @@
 //
 // - `deprecated`: cgroup vm_leaf_path migration is tracked but the deprecated
 //   path is still referenced in legacy code paths kept for v1.1.x compat.
-// - `clippy::dead_code`: helper functions (e.g. apply_mount_actions, apply)
-//   are public API of internal modules that downstream callers may use.
 // - `clippy::large_enum_variant`, `clippy::result_large_err`: TypedError
 //   variants intentionally carry rich context; boxing tracked separately.
 // - `clippy::too_many_arguments`: broker spawn pipeline has wide signatures
 //   for safety (forgetting an arg = sandbox bypass).
 // - `clippy::needless_borrows_for_generic_args`, `clippy::cmp_owned`,
 //   `clippy::io_other`, `clippy::needless_borrow`: stylistic.
+//
+// `dead_code` is NOT crate-wide. Every allow for it names the item it covers
+// and states why that item is still dead: either a resource-holding field
+// whose value must not be dropped, or a completed surface whose committed
+// catalog row puts the wire owner on a family crate, so this crate has no
+// caller for it yet.
 #![allow(deprecated)]
-#![allow(dead_code)]
 #![allow(clippy::large_enum_variant)]
 #![allow(clippy::result_large_err)]
 #![allow(clippy::too_many_arguments)]
@@ -23,19 +26,17 @@
 #![allow(clippy::io_other_error)]
 #![allow(clippy::needless_borrow)]
 
-// The non-bootstrap runtime path is supported and wires against the
-// real opaque-ID `d2b_contracts_broker::broker_wire::BrokerRequest` contract via
-// the `live_handlers` module. The bootstrap path remains available
-// behind the `layer1-bootstrap` feature for the legacy probe-hello /
-// probe-stub / probe-export-audit test harnesses; new code should
-// target the real wire.
-//
-// `tests/broker-default-features-build.sh` was updated to
-// reflect this clean break (default features now empty); the
-// no-default-features gate at `tests/broker-no-default-features.sh`
-// asserts the production binary compiles clean.
-
 pub mod audit;
+// The broker's admitted authority projection (U7, KTD6-KTD7): the serialized
+// per-Zone worker that orders PrepareChange, CommitChange,
+// cancellation/recovery, and BeginEffect, and owns the projection cursor,
+// prepared fences, and effect/reservation journal.
+pub mod authority_projection;
+// The broker's single owner of every source reservation (U8, KTD9): the
+// arbitrated claim per source, the attenuated realization legs a binding
+// helper runs under, and the ordered pre-drain a binding owner advances
+// before its children are finalized (KTD10).
+pub mod binding_reservations;
 pub mod catalog;
 pub mod envelope;
 pub mod fd_passing;
@@ -44,7 +45,6 @@ pub mod forwarding;
 // reconcile-executor calls). Pure-shaped: take their inputs directly so
 // the dispatch layer is the only mixer of wire decoding + bundle
 // resolution + live execution.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub mod kernel_ops;
 pub mod live_handlers;
 // Broker operation handlers. `ops::mod` declares 31 arms and only the
@@ -67,5 +67,3 @@ pub use d2b_contracts_broker::broker_wire::BrokerProfile;
 #[cfg(test)]
 mod seccomp_compile_tests;
 
-#[cfg(feature = "layer1-bootstrap")]
-pub mod bootstrap;

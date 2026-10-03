@@ -13,6 +13,7 @@ use d2b_contracts_resource::v3::{
     ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
     identity::{ReconnectGeneration, SessionPurpose},
 };
+use d2b_provider_guest::target_control::GuestTargetContract;
 use d2b_provider_guest::target_service::{
     GuestTargetEffect, GuestTargetEffectError, GuestTargetEffects, GuestTargetService,
     target_control_services,
@@ -31,7 +32,7 @@ use d2b_session_unix::FramedVsockTransport;
 use d2bd_runtime::guest_mode::{
     BootIdentity, GUEST_COMPONENT_SESSION_PURPOSE, GuestIdentity, GuestRuntime,
 };
-use d2bd_runtime::target_runtime::AdmissionLimits;
+use d2bd_runtime::target_runtime::{AdmissionLimits, GuestParentSessionEvidence};
 
 const AUTHORITY_ZONE: &str = "work";
 const TARGET_TYPE: &str = "Endpoint";
@@ -619,4 +620,129 @@ fn guest_identity(generation: u64) -> GuestIdentity {
         1,
     )
     .expect("Guest identity")
+}
+
+// ---------------------------------------------------------------------------
+// The common Guest target/session contract over a real authenticated session
+// ---------------------------------------------------------------------------
+
+/// One graph-backed service under the common contract, with the contract kept
+/// for assertions.
+struct GraphFixture {
+    f: Fixture,
+    contract: Arc<StdMutex<GuestTargetContract>>,
+}
+
+impl GraphFixture {
+    fn new(generation: u64) -> Self {
+        let f = Fixture::recording(generation);
+        let contract = Arc::new(StdMutex::new(
+            GuestTargetContract::bind(evidence(generation)).expect("the evidence names a Guest"),
+        ));
+        // The graph-backed service is the same dispatch as the zone-scoped
+        // one; only the admission scope differs.
+        let service = Arc::new(GuestTargetService::graph_backed(
+            Arc::clone(&f.runtime),
+            Arc::clone(&contract),
+            GuestTargetEffects::from([(
+                ResourceTypeName::new(TARGET_TYPE),
+                RecordingEffect::new() as Arc<dyn GuestTargetEffect>,
+            )]),
+        ));
+        service.bind_session(generation).expect("connect the contract");
+        Self { f: Fixture { service, ..f }, contract }
+    }
+
+    fn contract(&self) -> std::sync::MutexGuard<'_, GuestTargetContract> {
+        self.contract.lock().expect("contract")
+    }
+}
+
+fn evidence(session_generation: u64) -> GuestParentSessionEvidence {
+    GuestParentSessionEvidence::bind(
+        &guest_identity(1),
+        ResourceRef::parse("Provider/runtime-example").expect("Provider ref"),
+        session_generation,
+    )
+    .expect("graph evidence")
+}
+
+/// The graph contract fences the same requests the zone-scoped service fences,
+/// and it adds the ownership the pre-graph surface has no place to keep: over
+/// a real authenticated ComponentSession, a replaced source never inherits the
+/// previous source's realization, and a lost session neither deletes it nor
+/// mints a new one.
+#[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+async fn the_graph_contract_fences_a_real_session_without_provider_knowledge() {
+    let f = GraphFixture::new(1);
+
+    assert!(
+        matches!(
+            f.f.realize(realize_request("relay", 1, spec())).await,
+            TargetControlResponse::Realized { .. }
+        ),
+        "the admitted assignment realizes"
+    );
+    assert_eq!(
+        f.contract().binding(&source("relay")).map(|binding| binding.source_uid()),
+        Some([7; 16]),
+        "the contract holds the source uid it admitted"
+    );
+
+    let replaced = TargetControlRequest::Realize(realize_request("relay", 1, spec()));
+    let replacement = TargetControlRequest::Realize(GuestRealizeRequest::new(
+        TargetControlAssignment::new(source("relay"), [8; 16], 3, 1),
+        spec(),
+        target_local_spec_digest(&spec()),
+        "/run/d2b/relay.sock",
+    ));
+    let TargetControlResponse::Realized { realization } = f.f.service.handle(replaced).await else {
+        panic!("the same uid must realize idempotently");
+    };
+    assert_eq!(realization.source_uid(), &[7; 16], "the same uid keeps the same realization");
+    assert_eq!(realization.state(), TargetInstanceState::Ready);
+    assert_eq!(
+        f.f.service.handle(replacement).await,
+        TargetControlResponse::SessionUnavailable,
+        "a replaced source never inherits the previous source's realization"
+    );
+    assert!(
+        f.f.instance("relay").is_none(),
+        "the record the replacement was not allowed to inherit is forgotten"
+    );
+    assert!(f.contract().bindings().is_empty(), "and so is its ownership");
+
+    // A lost session keeps what it owned and admits nothing until a strictly
+    // newer session reconnects and re-adopts.
+    assert!(
+        matches!(
+            f.f.realize(realize_request("sibling", 1, spec())).await,
+            TargetControlResponse::Realized { .. }
+        ),
+        "the second source is realized"
+    );
+    let retained = f.contract().bindings();
+    assert_eq!(retained.len(), 1);
+    f.f.service.disconnect_session(1).expect("session lost");
+    assert_eq!(
+        f.f.service.handle(TargetControlRequest::Adopt { assignment: assignment("sibling", 1) }).await,
+        TargetControlResponse::SessionUnavailable,
+        "a lost session cannot re-adopt its own realization"
+    );
+    assert_eq!(f.contract().bindings(), retained, "the ownership is retained");
+    assert!(f.f.instance("sibling").is_some(), "the realization is retained too");
+    f.f.service.bind_session(2).expect("reconnect");
+    assert!(
+        matches!(
+            f.f.adopt("sibling", 2).await,
+            TargetControlResponse::Adopted(GuestAdoption::Adopted(_))
+        ),
+        "the newer session re-adopts the retained realization"
+    );
+    assert_eq!(
+        f.contract().binding(&source("sibling")).map(|binding| binding.session_generation()),
+        Some(2),
+        "the ownership re-binds to the live session"
+    );
 }

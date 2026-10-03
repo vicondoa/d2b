@@ -3,16 +3,20 @@
 use std::fmt;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{
+    BindingAdmission, BindingAuthorization, FreshnessTuple, ResourceRef, ResourceUid, SourceAdmission,
+    ZoneId,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::{
     GUEST_CONFIG_IDENTIFIER, MAX_CONFIG_BYTES,
     service::{
-        ConfigApproveRequest, ConfigDiffRequest, ConfigRejectRequest, ConfigStageRequest,
-        ConfigStatusRequest, ConfigSyncRequest, ConfigSyncResponse, validate_destination,
-        validate_guest_ref, validate_identifier, validate_view_identifier,
+        ConfigApproveRequest, ConfigAttachment, ConfigDiffRequest, ConfigRefusal,
+        ConfigRejectRequest, ConfigStageRequest, ConfigStatusRequest, ConfigSyncRequest,
+        ConfigSyncResponse, validate_destination, validate_guest_ref, validate_identifier,
+        validate_view_identifier,
     },
 };
 
@@ -273,11 +277,68 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
+/// The evidence one configuration publication is admitted against.
+///
+/// Every field arrives from outside this Provider: the identities from the
+/// store, the grant from the Role evaluation, the scoped decision from the
+/// Volume owner, and the freshness evidence from the committed rows. Grouping
+/// them keeps that provenance visible at the call site and keeps the
+/// publication entry from reading as a set of independent arguments a caller
+/// could assemble loosely.
+#[derive(Debug, Clone, Copy)]
+pub struct ConfigPublication<'a> {
+    /// The Zone the attachment belongs to.
+    pub zone: &'a ZoneId,
+    /// The source Volume's store identity.
+    pub source_uid: &'a ResourceUid,
+    /// The consumer Guest's store identity.
+    pub consumer_uid: &'a ResourceUid,
+    /// The Role evaluation's authorization evidence.
+    pub authorization: &'a BindingAuthorization,
+    /// The Volume owner's own decision, scoped to this exact relationship.
+    pub source: &'a SourceAdmission,
+    /// The committed dependency rows the admission is fenced against.
+    pub dependencies: &'a [FreshnessTuple],
+}
+
 /// Service-only config Provider policy.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ConfigService;
 
 impl ConfigService {
+    /// Admit one configuration attachment for publication.
+    ///
+    /// Configuration generates the canonical declaration and then invokes the
+    /// admitted activation; it never decides that its own document is
+    /// authorized. The grant and the source Volume's own scoped decision
+    /// arrive from outside, so a staged document that names this Provider's
+    /// own authority, or that requires a presentation the configuration
+    /// backend does not realize, is refused at the enforcing stage rather
+    /// than published.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ConfigRefusal`] naming the relationship and the enforcing
+    /// stage: `Authorize` when no authorization evidence is presented,
+    /// `Admit` when the source does not admit the exact request, and `Prepare`
+    /// when the required presentation facet is outside the declared support.
+    pub fn publish(
+        &self,
+        attachment: &ConfigAttachment,
+        inputs: &ConfigPublication<'_>,
+    ) -> Result<BindingAdmission, ConfigRefusal> {
+        attachment
+            .admit(
+                inputs.zone.clone(),
+                inputs.source_uid.clone(),
+                inputs.consumer_uid.clone(),
+                inputs.authorization,
+                inputs.source,
+                inputs.dependencies,
+            )
+            .map_err(|refusal| ConfigRefusal::new(attachment.clone(), refusal))
+    }
+
     /// Read one Guest document through current authenticated session evidence.
     ///
     /// # Errors

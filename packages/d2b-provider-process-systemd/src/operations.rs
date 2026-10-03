@@ -35,7 +35,9 @@ use d2b_contracts_broker::broker_wire::{
 use d2b_contracts_broker::kernel_client::{
     KernelInvocation, KernelInvokeError, envelope_invoke_kernel,
 };
-use d2b_contracts_resource::v3::{CanonicalJsonObject, canonical_json_bytes};
+use d2b_contracts_resource::v3::{
+    CanonicalJsonObject, ConfinementFacet, ExecutionInstanceKind, canonical_json_bytes,
+};
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent};
 use d2b_core::kernel_seat;
 use d2b_resource_types::{
@@ -218,18 +220,16 @@ fn validate_request(
         return Err(UNIT_INVALID_REQUEST);
     }
 
-    fn sandbox_supported(plan: &SandboxLaunchPlan) -> bool {
-        plan.namespace_classes.is_empty()
-            && plan.capability_classes.is_empty()
-            && plan.seccomp_class.as_str() == "strict"
-            && plan.no_new_privileges
-            && !plan.start_root
-            && matches!(
-                plan.environment_class,
-                d2b_contracts_resource::v3::process::EnvironmentClass::Minimal
-            )
-            && plan.read_only_root
-            && plan.user_namespace.is_none()
+    // The confinement this launch requires, and the confinement the trusted
+    // runner row declares, both have to be inside what this backend actually
+    // enforces. A required namespace class, a required capability, a required
+    // syscall filter, a user namespace, or a mount/destination policy is not
+    // something a transient unit can express, so the launch refuses here -
+    // before any manager call - rather than starting without it.
+    if let Some(plan) = &request.sandbox_plan
+        && !sandbox_plan_is_enforceable(plan)
+    {
+        return Err(UNIT_INVALID_REQUEST);
     }
     let intent = bundle
         .find_runner_intent(request.bundle_runner_intent_ref.as_str())
@@ -262,9 +262,21 @@ fn validate_request(
     if request.domain != expected_domain {
         return Err(UNIT_IDENTITY_MISMATCH);
     }
-    if let Some(plan) = &request.sandbox_plan
-        && !sandbox_supported(plan)
-    {
+
+    // The trusted runner row's own confinement has to fit this backend too.
+    // It is a second input, not a restatement: the request's plan says what
+    // the launch asks for, and the row says what the deployment granted it.
+    if !intent_confinement_is_enforceable(intent) {
+        return Err(UNIT_INVALID_REQUEST);
+    }
+    // The consumer identity that participates in the unit name is either
+    // absent (the configured-runner path, which names no graph row) or a
+    // complete pair naming an execution instance. A half-bound pair, or a
+    // reference that is not a `Process` or `EphemeralProcess`, is refused: a
+    // name this family derives must identify one committed consumer row and
+    // nothing else, or a stop or an adoption could address a unit this
+    // request never described.
+    if !consumer_identity_is_well_formed(request) {
         return Err(UNIT_INVALID_REQUEST);
     }
     let expected_user = intent
@@ -319,6 +331,101 @@ fn validate_request(
         return Err(UNIT_INVALID_REQUEST);
     }
     Ok(intent.clone())
+}
+
+/// Whether one requested launch plan fits what this backend enforces.
+///
+/// The plan is the launch's declared requirement, not an authority: it is
+/// checked against the family's declared support rather than translated field
+/// by field into properties it cannot express. Every facet the plan names is
+/// required, so one the family does not enforce is a refusal, never a
+/// dropped field (R27).
+fn sandbox_plan_is_enforceable(plan: &SandboxLaunchPlan) -> bool {
+    // The family applies exactly two confinement properties, so the plan's
+    // requested posture has to be the one it applies. Asking for a writable
+    // root or for privilege escalation to stay available is not a weaker
+    // request this backend can honour: it is a posture outside the declared
+    // set, and the launch refuses rather than running with a property the
+    // plan never asked for.
+    if !plan.no_new_privileges
+        || !plan.read_only_root
+        || plan.start_root
+        || !matches!(
+            plan.environment_class,
+            d2b_contracts_resource::v3::process::EnvironmentClass::Minimal
+        )
+    {
+        return false;
+    }
+    let support = crate::enforced_confinement_facets();
+    let mut required: Vec<ConfinementFacet> = plan
+        .namespace_classes
+        .iter()
+        .copied()
+        .map(ConfinementFacet::from_namespace)
+        .collect();
+    if !plan.capability_classes.is_empty() {
+        required.push(ConfinementFacet::CapabilityCeiling);
+    }
+    if plan.user_namespace.is_some() {
+        required.push(ConfinementFacet::UserNamespace);
+    }
+    // A requested syscall filter is a filter this family never loads: the
+    // transient unit it starts carries no `SystemCallFilter` property, so any
+    // plan asking for one is a requirement that would otherwise be dropped.
+    // "off" is the only class that asks for nothing, and it is what a launch
+    // this backend can actually run carries.
+    if plan.seccomp_class.as_str() != "off" {
+        required.push(ConfinementFacet::SyscallFilter);
+    }
+    required.push(ConfinementFacet::NoNewPrivileges);
+    required.push(ConfinementFacet::ReadOnlyRoot);
+    required.iter().all(|facet| support.enforces(*facet))
+}
+
+/// Whether the trusted runner row's confinement fits what this backend
+/// enforces.
+///
+/// The row is a second, independent input: a deployment that granted the
+/// runner a namespace, a capability, a syscall filter, a user namespace, or
+/// a mount policy is asking for confinement a transient unit cannot apply.
+/// That request refuses rather than launching with the grant silently
+/// absent, which is the case the plan's problem frame calls out (R27, R50).
+fn intent_confinement_is_enforceable(intent: &ResolvedRunnerIntent) -> bool {
+    if intent.namespaces.mount
+        || intent.namespaces.pid
+        || intent.namespaces.net
+        || intent.namespaces.ipc
+        || intent.namespaces.uts
+        || intent.namespaces.user
+        || !intent.capabilities.is_empty()
+        || intent.seccomp_policy_ref.is_some()
+        || intent.user_namespace.is_some()
+    {
+        return false;
+    }
+    let policy = &intent.mount_policy;
+    policy.read_only_paths.is_empty()
+        && policy.writable_paths.is_empty()
+        && policy.device_binds.is_empty()
+        && policy.bind_mounts.is_empty()
+}
+
+/// Whether the consumer identity a request names is one committed row.
+///
+/// A request either names no graph consumer at all (the configured-runner
+/// path, whose unit name is derived from the verified bundle binding alone)
+/// or names a complete `Process`/`EphemeralProcess` pair. Anything else
+/// cannot identify the row a unit belongs to, so the request refuses before
+/// the name is derived.
+fn consumer_identity_is_well_formed(
+    request: &d2b_contracts_broker::broker_wire::UnitRequest,
+) -> bool {
+    match (&request.resource_ref, &request.resource_uid) {
+        (None, None) => true,
+        (Some(reference), Some(_)) => ExecutionInstanceKind::of_reference(reference).is_some(),
+        _ => false,
+    }
 }
 
 fn user_bus_path(uid: u32) -> PathBuf {
@@ -798,6 +905,13 @@ impl OperationHandler for StartSystemdUnitHandler {
             intent.argv.clone(),
             false,
         )];
+        // The confinement properties are this family's own, not a
+        // translation of whatever the request asked for: the family always
+        // disables privilege escalation and marks the unit's filesystem
+        // read-only, and `validate_request` has already refused any request
+        // whose plan requires a facet this backend does not enforce. The
+        // only caller value that survives is the umask, and it is bounded
+        // and typed by the plan contract.
         let mut properties = vec![
             ("Type", Value::from("exec")),
             ("ExecStart", Value::from(exec_start)),
@@ -1151,7 +1265,6 @@ fn fixture_resolver_with_execution(execution_ref: &str, uid: u32) -> BundleResol
         Bundle {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
             realm_workloads_launcher_v2_path: None,
             generation: BundleGeneration {
@@ -1424,6 +1537,228 @@ mod tests {
             validate_request(&bundle, &request),
             Err(UNIT_INVALID_REQUEST),
             "a Guest execution reference requires a Guest execution binding"
+        );
+    }
+
+    /// Scenario 2 / R27: a requested confinement this backend cannot apply
+    /// refuses. Every facet below is one a transient unit this family starts
+    /// never sets, so accepting the plan would mean starting without it.
+    #[test]
+    fn a_requested_facet_this_backend_cannot_enforce_is_refused() {
+        use d2b_contracts_broker::broker_wire::SandboxLaunchPlan;
+        use d2b_contracts_resource::v3::process::{
+            EnvironmentClass, MappingClass, NamespaceClass, UserNamespaceSpec,
+        };
+
+        let minimal = |mutate: &dyn Fn(&mut SandboxLaunchPlan)| {
+            let bundle = fixture_resolver();
+            let mut request = fixture_unit_request();
+            let mut plan = SandboxLaunchPlan {
+                digest: "sha256:plan".to_owned(),
+                domain: d2b_contracts_resource::v3::execution_policy::ExecutionDomain::User,
+                namespace_classes: Vec::new(),
+                capability_classes: Vec::new(),
+                // No filter is requested: this family never loads one, so a
+                // plan that asks for a "strict" filter is refused rather
+                // than started without it.
+                seccomp_class: d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
+                    "off",
+                )
+                .expect("a canonical token"),
+                no_new_privileges: true,
+                start_root: false,
+                environment_class: EnvironmentClass::Minimal,
+                read_only_root: true,
+                umask: None,
+                oom_score_adj: 0,
+                user_namespace: None,
+            };
+            mutate(&mut plan);
+            request.sandbox_plan = Some(plan);
+            (bundle, request)
+        };
+
+        // The declared support admits exactly this shape, so the refusals
+        // below are the decision and not a blanket denial.
+        let (bundle, request) = minimal(&|_| {});
+        assert_eq!(
+            validate_request(&bundle, &request).map(|intent| intent.role_id),
+            Ok("role".to_owned()),
+            "the confinement this backend applies is admitted: {bundle:?}"
+        );
+
+        for (label, refusing) in [
+            (
+                "a mount namespace",
+                Box::new(|plan: &mut SandboxLaunchPlan| {
+                    plan.namespace_classes = vec![NamespaceClass::Mount];
+                }) as Box<dyn Fn(&mut SandboxLaunchPlan)>,
+            ),
+            (
+                "a required capability",
+                Box::new(|plan: &mut SandboxLaunchPlan| {
+                    plan.capability_classes = vec![
+                        d2b_contracts_resource::v3::process::CapabilityClass::NetworkBind,
+                    ];
+                }),
+            ),
+            (
+                "a user namespace",
+                Box::new(|plan: &mut SandboxLaunchPlan| {
+                    plan.user_namespace = Some(UserNamespaceSpec {
+                        mapping_class: MappingClass::ProcessPrincipalRoot,
+                    });
+                }),
+            ),
+            (
+                "a writable root",
+                Box::new(|plan: &mut SandboxLaunchPlan| plan.read_only_root = false),
+            ),
+            (
+                "a strict syscall filter",
+                Box::new(|plan: &mut SandboxLaunchPlan| {
+                    plan.seccomp_class =
+                        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse("strict")
+                            .expect("a canonical token");
+                }),
+            ),
+            (
+                "privilege escalation left enabled",
+                Box::new(|plan: &mut SandboxLaunchPlan| plan.no_new_privileges = false),
+            ),
+        ] {
+            let (bundle, request) = minimal(&*refusing);
+            assert_eq!(
+                validate_request(&bundle, &request),
+                Err(UNIT_INVALID_REQUEST),
+                "{label} is not something this backend applies, so it refuses"
+            );
+        }
+    }
+
+    /// Scenario 5 / AE19: a trusted runner row that asks for a mount
+    /// destination, a named view, or a bind is asking for a filesystem
+    /// presentation a transient unit cannot confine a workload to. The
+    /// launch refuses before any manager call rather than starting with the
+    /// policy silently dropped, which is the case the plan's problem frame
+    /// names.
+    #[test]
+    fn a_trusted_row_carrying_a_mount_policy_is_refused_before_launch() {
+        let bundle = fixture_resolver();
+        let intent = bundle
+            .find_runner_intent("runner:vm:vm:role:role")
+            .expect("the fixture resolver has this runner");
+        assert!(
+            intent_confinement_is_enforceable(intent),
+            "a row with no confinement this backend lacks is enforceable"
+        );
+
+        let mut with_bind = intent.clone();
+        with_bind.mount_policy.bind_mounts = vec![d2b_core::sandbox_profile::BindMount {
+            src: "/srv/data".to_owned(),
+            dst: "/data".to_owned(),
+        }];
+        assert!(
+            !intent_confinement_is_enforceable(&with_bind),
+            "a bind mount is a presentation this backend cannot realize"
+        );
+
+        let mut with_writable = intent.clone();
+        with_writable.mount_policy.writable_paths = vec![d2b_core::sandbox_profile::WritablePath {
+            path: "/var/lib/d2b".to_owned(),
+            purpose: "component state".to_owned(),
+        }];
+        assert!(
+            !intent_confinement_is_enforceable(&with_writable),
+            "a writable host path is a grant this backend does not realize"
+        );
+
+        let mut with_capability = intent.clone();
+        let mut with_filter = intent.clone();
+        with_capability.capabilities = vec!["CAP_SYS_ADMIN".to_owned()];
+        assert!(
+            !intent_confinement_is_enforceable(&with_capability),
+            "a required capability needs a bounding set this family never sets"
+        );
+
+        with_filter.seccomp_policy_ref = Some("SeccompProfile/desktop".to_owned());
+        assert!(
+            !intent_confinement_is_enforceable(&with_filter),
+            "a required syscall filter needs a property this family never sets"
+        );
+    }
+
+    /// Scenario 3: the consumer identity a request names must be one
+    /// complete committed row, and a unit this family never minted is never
+    /// adopted or stopped.
+    #[test]
+    fn a_foreign_consumer_identity_cannot_name_a_unit() {
+        let bundle = fixture_resolver();
+        let mut request = fixture_unit_request();
+        assert!(
+            consumer_identity_is_well_formed(&request),
+            "the configured-runner path names no consumer row"
+        );
+
+        request.resource_uid = Some(
+            d2b_contracts_resource::v3::ResourceUid::parse(
+                "123e4567-e89b-42d3-a456-426614174000",
+            )
+            .expect("a canonical uid"),
+        );
+        assert_eq!(
+            validate_request(&bundle, &request),
+            Err(UNIT_INVALID_REQUEST),
+            "a half-bound consumer identity names no row at all"
+        );
+
+        request.resource_ref =
+            Some(d2b_contracts_resource::v3::ResourceRef::parse("Process/worker").expect("canonical"));
+        assert!(
+            consumer_identity_is_well_formed(&request),
+            "a complete Process pair is the shape the graph uses"
+        );
+
+        request.resource_ref =
+            Some(d2b_contracts_resource::v3::ResourceRef::parse("Volume/secret").expect("canonical"));
+        assert_eq!(
+            validate_request(&bundle, &request),
+            Err(UNIT_INVALID_REQUEST),
+            "a resource that is not an execution instance cannot be a unit's consumer"
+        );
+    }
+
+    #[test]
+    fn a_unit_in_a_foreign_slice_is_never_adopted() {
+        assert!(
+            cgroup_identity(
+                "/user.slice/user-1000.slice/user@1000.service/app.slice/d2b-process-good.service",
+                "d2b-process-good.service",
+                UnitDomain::User,
+                1000,
+            )
+            .is_ok(),
+            "the family's own user-scope placement is ours"
+        );
+        assert_eq!(
+            cgroup_identity(
+                "/user.slice/user-1000.slice/user@1000.service/background.slice/d2b-process-good.service",
+                "d2b-process-good.service",
+                UnitDomain::User,
+                1000,
+            ),
+            Err(UNIT_IDENTITY_MISMATCH),
+            "the same unit in another slice of the same user manager is foreign"
+        );
+        assert_eq!(
+            cgroup_identity(
+                "/system.slice/d2b-process-good.service",
+                "d2b-process-good.service",
+                UnitDomain::System,
+                1000,
+            ),
+            Err(UNIT_IDENTITY_MISMATCH),
+            "a unit outside the family's own slice is foreign"
         );
     }
 

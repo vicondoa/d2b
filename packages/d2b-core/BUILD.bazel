@@ -115,6 +115,20 @@ d2b_rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
+d2b_rust_test(
+    name = "deployment_bootstrap_contract",
+    srcs = ["tests/deployment_bootstrap_contract.rs"],
+    compile_data = ["Cargo.toml"],
+    data = ["//bazel/checks/fixtures:fixture_smoke"],
+    env = {"D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)"},
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        ":d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 
 d2b_rust_test(
     name = "d2b-core-fuzz-host",
@@ -249,6 +263,11 @@ d2b_rust_test(
     name = "d2b_core_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_core",
+    # The row-class table the Nix eval case over `nixos-modules/lib.nix` is
+    # evaluated against, read by the same test that composes the accounts on
+    # this side of the boundary.
+    data = ["//tests/unit/nix:cases/host-worker-accounts.json"],
+    env = {"D2B_HOST_WORKER_ACCOUNTS": "$(rootpath //tests/unit/nix:cases/host-worker-accounts.json)"},
     deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

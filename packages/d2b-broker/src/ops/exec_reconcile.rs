@@ -1340,7 +1340,11 @@ fn chown_atomic_target(path: &Path, uid: u32, gid: u32) -> Result<(), ReconcileE
     })
 }
 
-#[cfg(any(test, feature = "fake-backends"))]
+// This module is a unit-test harness and is private: it is never re-exported,
+// so nothing outside this crate's own tests can reach it. The
+// `fake-backends` arm compiled it into the non-test library, where every item
+// in it was unreachable. Gate it on `test` alone.
+#[cfg(test)]
 mod fake {
     use super::*;
     use std::collections::BTreeMap;
@@ -1350,6 +1354,7 @@ mod fake {
     /// Recording fake executor for unit/integration tests. Captures
     /// each operation in order; assert with [`Self::take_log`].
     #[derive(Debug, Default)]
+    #[allow(dead_code, reason = "the out-of-tree fake-backend oracle harness: its only driver is an external test binary built with this feature, so nothing inside the crate constructs it")]
     pub struct FakeReconcileExecutor {
         log: Mutex<Vec<ReconcileOp>>,
         file_values: Mutex<BTreeMap<PathBuf, Vec<u8>>>,
@@ -1359,6 +1364,7 @@ mod fake {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
+    #[allow(dead_code, reason = "the out-of-tree fake-backend oracle harness: its only driver is an external test binary built with this feature, so nothing inside the crate constructs it")]
     pub enum ReconcileOp {
         ApplyNftScript {
             binary: PathBuf,
@@ -1409,6 +1415,7 @@ mod fake {
     }
 
     impl FakeReconcileExecutor {
+        #[allow(dead_code, reason = "the fake-backend test log and fault injectors the out-of-tree oracle drives")]
         pub fn new() -> Self {
             Self::default()
         }

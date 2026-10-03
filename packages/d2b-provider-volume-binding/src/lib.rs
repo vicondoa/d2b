@@ -40,4 +40,6 @@ pub use effects_service::{
     BINDING_EFFECTS_SERVICE, BindingEffectsService, BindingEffectsServiceFactory,
 };
 pub use facets::{BindingEffectFacets, GuestMountSource, SocketReadySource, SocketRemoveSource};
-pub use row_readers::{binding_readiness_current, parsed_binding_spec};
+pub use row_readers::{
+    binding_readiness_current, parsed_binding_spec, parsed_consumer_request,
+};

@@ -1,0 +1,5 @@
+{
+  "crate": "d2b-provider-transport-azure-relay",
+  "provider": "transport-azure-relay",
+  "services": []
+}

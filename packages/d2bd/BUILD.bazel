@@ -24,6 +24,7 @@ exports_files(
 d2bd_srcs = glob(["src/**/*.rs"], allow_empty = True)
 
 d2bd_compile_data = [
+    "//:generated_new_graph",  # keep: include! of the staged provider registration table
     "//tests/fixtures:deny-unknown/host-valid.json",  # keep
     "//:docs/reference/policy/principal-allocation.json",  # keep: include_str! by the foundation seed
     "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
@@ -65,9 +66,9 @@ d2bd_shared_deps = [
     "//packages/d2b-provider-emergency-policy:d2b_provider_emergency_policy",
     "//packages/d2b-provider-resource-export:d2b_provider_resource_export",
     "//packages/d2b-provider-resource-import:d2b_provider_resource_import",
-    "//packages/d2b-provider-command:d2b_provider_command",
     "//packages/d2b-provider-operation:d2b_provider_operation",
     "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
+    "//packages/d2b-provider-execution-policy:d2b_provider_execution_policy",
     "//packages/d2b-provider-host:d2b_provider_host",
     "//packages/d2b-provider-user:d2b_provider_user",
     "//packages/d2b-provider-observability-otel:d2b_provider_observability_otel",
@@ -178,9 +179,9 @@ d2bd_test_support_deps = [
         "//packages/d2b-provider-emergency-policy:d2b_provider_emergency_policy",
         "//packages/d2b-provider-resource-export:d2b_provider_resource_export",
         "//packages/d2b-provider-resource-import:d2b_provider_resource_import",
-        "//packages/d2b-provider-command:d2b_provider_command",
-        "//packages/d2b-provider-operation:d2b_provider_operation",
+            "//packages/d2b-provider-operation:d2b_provider_operation",
         "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
+        "//packages/d2b-provider-execution-policy:d2b_provider_execution_policy",
         "//packages/d2b-provider-telemetry-service:d2b_provider_telemetry_service",
         "//packages/d2b-provider-telemetry-binding:d2b_provider_telemetry_binding",
         "//packages/d2b-provider-guest-azure-virtual-machine:d2b_provider_guest_azure_virtual_machine",
@@ -251,9 +252,9 @@ d2bd_test_support_deps = [
     "//packages/d2b-provider-emergency-policy:d2b_provider_emergency_policy_test_support",
     "//packages/d2b-provider-resource-export:d2b_provider_resource_export_test_support",
     "//packages/d2b-provider-resource-import:d2b_provider_resource_import_test_support",
-    "//packages/d2b-provider-command:d2b_provider_command_test_support",
     "//packages/d2b-provider-operation:d2b_provider_operation_test_support",
     "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile_test_support",
+    "//packages/d2b-provider-execution-policy:d2b_provider_execution_policy_test_support",
     "//packages/d2b-provider-telemetry-service:d2b_provider_telemetry_service_test_support",
     "//packages/d2b-provider-telemetry-binding:d2b_provider_telemetry_binding_test_support",
     "//packages/d2b-provider-guest-azure-virtual-machine:d2b_provider_guest_azure_virtual_machine_test_support",
@@ -547,10 +548,12 @@ d2b_rust_test(
     data = [
         ":cargo_workspace_sources",
         ":d2bd",
+        "//bazel/checks/fixtures:fixture_smoke",
         "//tests/fixtures:deny-unknown/host-valid.json",
     ],
     env = {
         "CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)",
+        "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
         "D2BD_HOST_FIXTURE": "$(rootpath //tests/fixtures:deny-unknown/host-valid.json)",
     },
     env_inherit = ["PATH"],
@@ -591,24 +594,35 @@ d2b_rust_test(
 
 d2b_rust_test(
     name = "resource_operator_activation",
-    srcs = [
-        "tests/resource_operator_activation.rs",
-        "tests/zone_provider_acceptance.rs",
-    ],
+    srcs = ["tests/resource_operator_activation.rs"],
     compile_data = ["Cargo.toml"],
     crate_root = "tests/resource_operator_activation.rs",
     visibility = ["//visibility:public"],
     deps = [
         ":d2bd_lib_test_support",
-        "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+# The Zone provider acceptance file is its own integration binary, not a
+# second source of `resource_operator_activation`: listing it in that
+# target's `srcs` left it uncompiled, because the target has one crate root,
+# so a break here reached `make check` green while `cargo test` failed.
+d2b_rust_test(
+    name = "zone_provider_acceptance",
+    srcs = ["tests/zone_provider_acceptance.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/zone_provider_acceptance.rs",
+    visibility = ["//visibility:public"],
+    deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-core-controller:d2b_core_controller_test_support",
         "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm_test_support",
         "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland_test_support",
         "//packages/d2b-provider-network-local:d2b_provider_network_local_test_support",
+        "//packages/d2b-provider-guest:d2b_provider_guest_test_support",
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor_test_support",
         "//packages/d2b-provider-volume-local:d2b_provider_volume_local_test_support",
         "//packages/d2b-resource-api:d2b_resource_api_test_support",
@@ -659,6 +673,124 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "graph_mutation_admission",
+    srcs = ["tests/graph_mutation_admission.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "@crates//:ractor",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "generated_provider_hosting",
+    srcs = ["tests/generated_provider_hosting.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+        "@crates//:async-trait",
+        "@crates//:tokio",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "authority_publication",
+    srcs = ["tests/authority_publication.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "policy_resource_authority",
+    srcs = ["tests/policy_resource_authority.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-core:d2b_core",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "foundation_authority",
+    srcs = ["tests/foundation_authority.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-provider-host:d2b_provider_host",
+        "//packages/d2b-provider-system-core:d2b_provider_system_core",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-provider-user:d2b_provider_user",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+        "@crates//:async-trait",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "import_binding_authority",
+    srcs = ["tests/import_binding_authority.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-provider-resource-export:d2b_provider_resource_export",
+        "//packages/d2b-provider-resource-import:d2b_provider_resource_import",
+        "//packages/d2b-provider-zone-link:d2b_provider_zone_link",
+        "//packages/d2b-resource-types:d2b_resource_types",
+        "@crates//:tokio",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "graph_limits_and_emergency",
+    srcs = ["tests/graph_limits_and_emergency.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-provider-emergency-policy:d2b_provider_emergency_policy",
+        "//packages/d2b-provider-quota:d2b_provider_quota",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "@crates//:tokio",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "mode_separation",
     srcs = ["tests/mode_separation.rs"],
     compile_data = ["Cargo.toml"],
@@ -700,4 +832,59 @@ d2b_rust_doc_test(
 test_suite(
     name = "all-tests",
     tags = ["-local", "-no-remote-exec"],
+)
+
+d2b_rust_test(
+    name = "cloud_hypervisor_graph_inputs",
+    srcs = ["tests/cloud_hypervisor_graph_inputs.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-guest:d2b_provider_guest",
+        "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "cross_layer_acceptance",
+    srcs = ["tests/cross_layer_acceptance.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-broker:d2b_broker",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-provider-provider:d2b_provider_provider",
+        "//packages/d2b-resource-compiler:d2b_resource_compiler",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "@crates//:async-trait",
+        "@crates//:base64",
+        "@crates//:ring",
+        "@crates//:tokio",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "authority_resynchronization",
+    srcs = ["tests/authority_resynchronization.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2bd_lib",
+        "//packages/d2b-broker:d2b_broker",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "@crates//:async-trait",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

@@ -35,6 +35,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::authority_common::{declaration_paths, Declaration};
 use serde::{Deserialize, Serialize};
 
 /// The committed operation rows.
@@ -51,7 +52,6 @@ const CATALOG_OUT: &str = "packages/d2b-broker/src/generated/broker_operation_ca
 const TRIAGE_OUT: &str = "docs/reference/broker-operation-triage.md";
 /// The directory-glob root the per-crate declarations live under.
 const PACKAGES_DIR: &str = "packages";
-const PROVIDER_PREFIX: &str = "d2b-provider-";
 /// The per-crate operation declaration file (KTD3/U2).
 const DECLARATION_FILE: &str = "operations.json";
 
@@ -633,26 +633,19 @@ fn validate_row_ids(rows: &[Row], source: &str) -> Result<(), Box<dyn std::error
 
 /// Read every declaring crate's operation declaration file into
 /// (crate-name, declared rows) pairs, in crate order.
+///
+/// The crate set is [`declaration_paths`]', which refuses a provider crate
+/// carrying no declaration rather than dropping it: a renamed
+/// `operations.json` would otherwise remove its crate's rows from the merged
+/// catalog with the drift gate still green over the smaller input.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn load_declarations(
     repo_root: &Path,
 ) -> Result<DeclaringCrates, Box<dyn std::error::Error>> {
-    let packages_dir = repo_root.join(PACKAGES_DIR);
-    let mut entries: Vec<_> = fs::read_dir(&packages_dir)
-        .map_err(|error| render_error(format!("read {}: {error}", packages_dir.display())))?
-        .collect::<Result<_, _>>()
-        .map_err(|error| render_error(format!("read a packages entry: {error}")))?;
-    entries.sort_by_key(|entry| entry.file_name());
     let mut crates = Vec::new();
-    for entry in entries {
-        let crate_name = entry.file_name().to_string_lossy().into_owned();
-        if !crate_name.starts_with(PROVIDER_PREFIX) {
-            continue;
-        }
-        let declaration_path = entry.path().join(DECLARATION_FILE);
-        if !declaration_path.is_file() {
-            continue;
-        }
+    let declared = declaration_paths(repo_root, Declaration::Operations)
+        .map_err(render_error)?;
+    for (crate_name, declaration_path) in declared {
         let text = fs::read_to_string(&declaration_path).map_err(|error| {
             render_error(format!("read {}: {error}", declaration_path.display()))
         })?;
@@ -766,6 +759,24 @@ fn build_catalog(repo_root: &Path) -> Result<Catalog, Box<dyn std::error::Error>
     let declarations = load_declarations(repo_root)?;
     merge_catalog(&committed, &declarations)
 }
+
+/// Every authored input this module merges, named so the declaration-driven
+/// generator can prove it reads none of them (KTD1/U4).
+///
+/// These files are the pre-declaration authoring form. The unchanged
+/// production entry point still reads them until the cutover, and the
+/// declaration-driven path this unit stages must not: a projection that read
+/// any of them would be a second source rather than a view of the
+/// declaration.
+#[cfg(test)]
+pub(crate) const RETIRED_MERGE_INPUTS: &[&str] = &[
+    "docs/reference/policy/broker-operations.json",
+    "docs/reference/policy/principal-allocation.json",
+    "packages/d2b-provider-*/operations.json",
+    "packages/d2b-provider-*/registrations.json",
+    "packages/d2b-provider-*/service-catalog.json",
+    "packages/d2b-provider-*/resource-types.json",
+];
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write(
@@ -1307,6 +1318,22 @@ pub fn gen_broker_operations(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The declaration-driven path reads none of the authored inputs this
+    /// module merges. The list is asserted rather than asserted-in-prose: a
+    /// regression that reintroduced one would have to declare it in the
+    /// projection's own closed input list.
+    #[test]
+    fn the_declaration_projection_reads_no_retired_merge_input() {
+        assert!(RETIRED_MERGE_INPUTS.contains(&"docs/reference/policy/broker-operations.json"));
+        for input in d2b_contracts_provider::v3::projection::GRAPH_PROJECTION_INPUTS {
+            assert!(
+                !RETIRED_MERGE_INPUTS.contains(input),
+                "the projection may not read the authored input {input}"
+            );
+        }
+        assert_eq!(d2b_contracts_provider::v3::projection::GRAPH_PROJECTION_INPUTS, &["provider-declaration"]);
+    }
 
     /// The committed catalog document, read once for the validation tests.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

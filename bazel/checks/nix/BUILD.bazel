@@ -4,7 +4,13 @@ package(default_visibility = ["//visibility:public"])
 
 _SURFACES = {
     "daemon": {
-        "cases": [],
+        # The row-class table the `host-worker-accounts` case and
+        # `packages/d2b-core`'s own test are read through, declared here
+        # because `tests/unit/nix` is a separate Bazel package and this
+        # surface reads the table by its own path.
+        "files": ["tests/unit/nix/cases/host-worker-accounts.json"],
+        "package": "tests/unit/nix",
+        "cases": ["host-worker-accounts"],
         "modules": [
             "nixos-modules/host-broker.nix",
             "nixos-modules/host-daemon.nix",
@@ -18,7 +24,7 @@ _SURFACES = {
         "files": [
             "bazel/checks/fixtures/BUILD.bazel",
             "docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json",
-            "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",
+    "docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",
             "flake.nix",
             "Makefile",
             "nixos-modules/rust-host-tools.nix",
@@ -36,6 +42,7 @@ _SURFACES = {
     "component-session": {
         "cases": ["gateway-component-session", "guest-component-session"],
         "files": [
+            "nixos-modules/deployment-bootstrap.nix",
             "nixos-modules/vm-evaluator.nix",
         ],
         "modules": [
@@ -89,6 +96,7 @@ _SURFACES = {
             "nixos-modules/generated/provider-projections.nix",
             "nixos-modules/generated/resource-inventories.nix",
             "nixos-modules/generated/resource-types.nix",
+            "nixos-modules/deployment-bootstrap.nix",
             "nixos-modules/generated/zone-spec-canonical.nix",
             "nixos-modules/resources-bundle.nix",
             "nixos-modules/resources.nix",
@@ -122,6 +130,37 @@ _SURFACES = {
             "packages/d2b-provider-guest-qemu-media/nix/default.nix",
         ],
     },
+    "declaration-projection": {
+        "cases": ["declaration-projection"],
+        "package": "packages/d2b-provider-volume-local",
+        "files": [
+            "nix/provider-artifact.nix",
+            "nixos-modules/generated/process-role-providers.nix",
+            "nixos-modules/generated/provider-catalog-shape.nix",
+            "nixos-modules/generated/provider-projections.nix",
+            "nixos-modules/generated/resource-inventories.nix",
+            "nixos-modules/generated/resource-types.nix",
+            "nixos-modules/deployment-bootstrap.nix",
+            "nixos-modules/generated/zone-spec-canonical.nix",
+            "nixos-modules/resources-bundle.nix",
+            "nixos-modules/resources.nix",
+            "nixos-modules/zone-resources-json.nix",
+        ],
+        "modules": [
+            "nixos-modules/bundle-artifacts.nix",
+            "nixos-modules/bundle-zones.nix",
+            "nixos-modules/options-artifacts.nix",
+            "nixos-modules/options-resources.nix",
+            "nixos-modules/options-zones-resources.nix",
+            "nixos-modules/options-zones.nix",
+            "nixos-modules/provider-catalog.nix",
+            "nixos-modules/provider-runtime-contracts.nix",
+            "nixos-modules/resources-zones-processes.nix",
+            "nixos-modules/resources-zone-control.nix",
+            "nixos-modules/zone-resources.nix",
+            "packages/d2b-provider-volume-local/nix/options-volumes.nix",
+        ],
+    },
     "provider-catalog": {
         "cases": ["provider-catalog", "provider-elf-shim", "provider-runtime-contracts"],
         "package": "packages/d2b-provider-activation-nixos",
@@ -150,14 +189,17 @@ _SURFACES = {
         "package": "tests/unit/nix",
         "raw_cases": True,
     },
-    "privileges-json-drift": {
+    # The isolated new-graph policy surface (U33). Its only staged inputs are
+    # the test-owned projection and the test-owned surface; no production
+    # option module and no generated artifact participate, so the new graph's
+    # Nix half is proven without touching what production evaluates.
+    "graph-policy": {
         "cases": [],
         "files": [
-            "docs/reference/policy/broker-operations.json",
+            "tests/unit/nix/graph-policy.nix",
         ],
-        "modules": [
-            "nixos-modules/privileges-json.nix",
-        ],
+        "modules": [],
+        "package": "tests/unit/nix",
         "raw_cases": True,
     },
 }

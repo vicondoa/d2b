@@ -45,8 +45,12 @@ impl NotificationProviderDescriptor {
     }
 
     /// Notification named streams.
+    ///
+    /// The streams come from the Provider's declared service (U28), so the
+    /// signed descriptor projection and the session layer read one source for
+    /// the stream names rather than two lists that can drift.
     pub const fn streams(&self) -> &'static [&'static str] {
-        &["DesktopNotificationSink", "DesktopNotificationObserver"]
+        crate::admission::NOTIFICATION_SERVICE.streams
     }
 
     /// Validate the descriptor contract.

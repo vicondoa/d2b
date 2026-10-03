@@ -1,0 +1,5 @@
+{
+  "crate": "d2b-provider-volume-virtiofs",
+  "provider": "volume-virtiofs",
+  "services": []
+}

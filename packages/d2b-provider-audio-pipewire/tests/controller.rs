@@ -227,13 +227,13 @@ fn shared_finalization_does_not_enable_the_promoted_binding_through_the_old_medi
         first.finalize(AudioLeaseId::new(1)).unwrap(),
         Some(AudioLeaseId::new(2))
     );
-    assert_eq!(first.mediator().grant(), AudioGrant::Off);
-    assert_eq!(second.mediator().grant(), AudioGrant::Off);
+    assert_eq!(first.mediator().microphone_grant(), AudioGrant::Off);
+    assert_eq!(second.mediator().microphone_grant(), AudioGrant::Off);
 
     second
         .reconcile(&requested, "zone-a", AudioLeaseId::new(2))
         .unwrap();
-    assert_eq!(second.mediator().grant(), AudioGrant::On);
+    assert_eq!(second.mediator().microphone_grant(), AudioGrant::On);
 }
 
 #[test]
@@ -355,7 +355,7 @@ fn queued_microphone_reconcile_does_not_mute_the_active_owner() {
         controller.active_microphone_lease(),
         Some(AudioLeaseId::new(1))
     );
-    assert_eq!(controller.mediator().grant(), AudioGrant::On);
+    assert_eq!(controller.mediator().microphone_grant(), AudioGrant::On);
 }
 
 #[test]
@@ -378,7 +378,7 @@ fn finalization_mutes_before_promoting_the_next_microphone_owner() {
         controller.active_microphone_lease(),
         Some(AudioLeaseId::new(2))
     );
-    assert_eq!(controller.mediator().grant(), AudioGrant::On);
+    assert_eq!(controller.mediator().microphone_grant(), AudioGrant::On);
 }
 
 #[test]
@@ -469,4 +469,287 @@ fn ready_audio_service_without_an_authored_binding_has_no_children() {
         .unwrap_err(),
         d2b_provider_audio_pipewire::AudioControllerError::Admission
     );
+}
+
+// ── admitted endpoint relationships ──────────────────────────────────────────
+
+mod admitted {
+    use d2b_contracts_resource::v3::{
+        BindingSlot, EndpointAttachmentKind, EndpointBindingRequest, ResourceGeneration,
+        ResourceRef, ResourceUid, ZoneRevision, execution_policy::BoundedToken,
+    };
+    use d2b_provider_audio_pipewire::{
+        AdmittedAudioSession, AudioBindingController, AudioBindingFence, AudioBindingSpec,
+        AudioChannel, AudioGrant, AudioMediatorError, AudioSessionOrigin,
+        AudioSessionPlan, FakeAudioMediator, LevelPercent, validate_audio_binding,
+        validate_audio_binding_in_zone, validate_audio_service, AudioServiceSpec,
+    };
+
+    fn fence(byte: u8, generation: u64) -> AudioBindingFence {
+        AudioBindingFence::new(
+            ResourceUid::from_bytes(&[byte; 16]).expect("uuid"),
+            ResourceGeneration::new(generation).expect("generation"),
+            ZoneRevision::new(7),
+        )
+    }
+
+    fn request(channel: AudioChannel, endpoint: &str) -> EndpointBindingRequest {
+        EndpointBindingRequest::new(
+            ResourceRef::parse(endpoint).expect("endpoint"),
+            ResourceRef::parse("Guest/workstation").expect("guest"),
+            BindingSlot::parse(channel.binding_slot()).expect("slot"),
+            EndpointAttachmentKind::Connect,
+            BoundedToken::parse(channel.declared_purpose()).expect("purpose"),
+        )
+        .expect("endpoint binding request")
+    }
+
+    fn session(
+        channel: AudioChannel,
+        fence: &AudioBindingFence,
+        origin: AudioSessionOrigin,
+    ) -> AdmittedAudioSession {
+        AdmittedAudioSession::new(
+            channel,
+            request(channel, "Endpoint/audio-host"),
+            fence.clone(),
+            origin,
+        )
+        .expect("admitted session")
+    }
+
+    fn binding() -> AudioBindingSpec {
+        AudioBindingSpec::new(
+            ResourceRef::parse("audio.d2bus.org.AudioService/host-audio").expect("service"),
+            ResourceRef::parse("Guest/workstation").expect("target"),
+            "zone-a",
+        )
+    }
+
+    #[test]
+    fn the_owner_service_declares_the_endpoint_its_bindings_request() {
+        let spec = AudioServiceSpec::owner(
+            ResourceRef::parse("Endpoint/audio-host").expect("endpoint"),
+            "zone-a",
+        );
+        validate_audio_service(&spec).expect("the owner row validates");
+        assert_eq!(spec.implementation_endpoint_refs.len(), 1);
+        assert!(spec.operations.contains(&"playback".to_owned()));
+        assert!(spec.operations.contains(&"capture".to_owned()));
+    }
+
+    #[test]
+    fn an_imported_projection_declares_no_local_backing_endpoint() {
+        let spec = AudioServiceSpec::projection("zone-a").expect("projection row");
+        validate_audio_service(&spec).expect("the projection row validates");
+        assert!(
+            spec.implementation_endpoint_refs.is_empty(),
+            "an imported Service has no local endpoint a binding could request"
+        );
+    }
+
+    #[test]
+    fn the_admitted_pass_carries_each_channel_through_its_own_relationship() {
+        let speaker_fence = fence(0x11, 1);
+        let microphone_fence = fence(0x22, 1);
+        let plan = AudioSessionPlan::new(
+            Some(session(
+                AudioChannel::Speaker,
+                &speaker_fence,
+                AudioSessionOrigin::Owner,
+            )),
+            Some(session(
+                AudioChannel::Microphone,
+                &microphone_fence,
+                AudioSessionOrigin::Owner,
+            )),
+        );
+        let mut requested = binding();
+        requested.grants.speaker = AudioGrant::On;
+        requested.grants.mic = AudioGrant::On;
+        requested.grants.speaker_level = Some(LevelPercent::new(35).expect("level"));
+
+        let mut controller = AudioBindingController::new(FakeAudioMediator::ready());
+        controller
+            .reconcile_admitted(
+                &requested,
+                "zone-a",
+                d2b_provider_audio_pipewire::AudioLeaseId::new(1),
+                &plan,
+                &[speaker_fence.clone(), microphone_fence.clone()],
+            )
+            .expect("the admitted pass reconciles");
+        assert_eq!(controller.mediator().grant(), AudioGrant::On);
+        assert_eq!(controller.mediator().microphone_grant(), AudioGrant::On);
+        assert_eq!(
+            controller.mediator().level(),
+            Some(LevelPercent::new(35).expect("level"))
+        );
+    }
+
+    #[test]
+    fn an_unadmitted_channel_is_refused_before_the_effect_runs() {
+        let speaker_fence = fence(0x11, 1);
+        let plan = AudioSessionPlan::new(
+            Some(session(
+                AudioChannel::Speaker,
+                &speaker_fence,
+                AudioSessionOrigin::Owner,
+            )),
+            None,
+        );
+        let mut requested = binding();
+        requested.grants.speaker = AudioGrant::On;
+        requested.grants.mic = AudioGrant::On;
+
+        let mut controller = AudioBindingController::new(FakeAudioMediator::ready());
+        let failure = controller
+            .reconcile_admitted(
+                &requested,
+                "zone-a",
+                d2b_provider_audio_pipewire::AudioLeaseId::new(1),
+                &plan,
+                &[speaker_fence],
+            )
+            .expect_err("the microphone has no admitted relationship");
+        assert_eq!(
+            failure,
+            d2b_provider_audio_pipewire::AudioControllerError::Mediator(
+                AudioMediatorError::EndpointBindingNotAdmitted
+            ),
+            "the refusal names the absent relationship, not a generic failure"
+        );
+        assert_eq!(
+            controller.mediator().grant(),
+            AudioGrant::Off,
+            "the pass refuses before any channel effect runs, so the speaker \
+             grant is not applied alongside a refused microphone"
+        );
+        assert_eq!(
+            controller.mediator().grant_calls(),
+            0,
+            "no channel effect reached the session"
+        );
+    }
+
+    #[test]
+    fn an_imported_projection_cannot_reach_a_local_host_grant() {
+        let projected = fence(0x33, 1);
+        let plan = AudioSessionPlan::new(
+            Some(session(
+                AudioChannel::Speaker,
+                &projected,
+                AudioSessionOrigin::ImportedProjection,
+            )),
+            None,
+        );
+        let mut requested = binding();
+        requested.grants.speaker = AudioGrant::On;
+
+        let mut controller = AudioBindingController::new(FakeAudioMediator::ready());
+        let failure = controller
+            .reconcile_admitted(
+                &requested,
+                "zone-a",
+                d2b_provider_audio_pipewire::AudioLeaseId::new(1),
+                &plan,
+                &[projected],
+            )
+            .expect_err("a projection cannot grant locally");
+        assert_eq!(
+            failure,
+            d2b_provider_audio_pipewire::AudioControllerError::Mediator(
+                AudioMediatorError::ImportedProjectionCannotGrant
+            )
+        );
+        assert_eq!(controller.mediator().grant(), AudioGrant::Off);
+    }
+
+    #[test]
+    fn restart_reports_host_and_guest_observations_separately() {
+        let admitted = fence(0x11, 1);
+        let plan = AudioSessionPlan::new(
+            Some(session(
+                AudioChannel::Speaker,
+                &admitted,
+                AudioSessionOrigin::Owner,
+            )),
+            None,
+        );
+        let mut requested = binding();
+        requested.grants.speaker = AudioGrant::On;
+
+        let mut controller = AudioBindingController::new(FakeAudioMediator::ready());
+        let live = controller
+            .reconcile_admitted(
+                &requested,
+                "zone-a",
+                d2b_provider_audio_pipewire::AudioLeaseId::new(1),
+                &plan,
+                std::slice::from_ref(&admitted),
+            )
+            .expect("the admitted pass reconciles");
+        assert_eq!(
+            live.status.host_readiness,
+            d2b_provider_audio_pipewire::HostAudioReadiness::Ready
+        );
+        assert_eq!(
+            live.status.guest_readiness,
+            d2b_provider_audio_pipewire::GuestAudioReadiness::Ready
+        );
+
+        // After the relationship is re-committed, a restarted controller
+        // observes the host side as unavailable while the Guest's own
+        // observation is unchanged.
+        let mut restarted = AudioBindingController::new(FakeAudioMediator::ready());
+        let failure = restarted
+            .reconcile_admitted(
+                &requested,
+                "zone-a",
+                d2b_provider_audio_pipewire::AudioLeaseId::new(1),
+                &plan,
+                &[fence(0x11, 2)],
+            )
+            .expect_err("the re-committed relationship is not the admitted one");
+        assert_eq!(
+            failure,
+            d2b_provider_audio_pipewire::AudioControllerError::Mediator(
+                AudioMediatorError::EndpointBindingNotCurrent
+            )
+        );
+    }
+
+    #[test]
+    fn a_cross_zone_binding_is_refused_before_any_relationship_is_requested() {
+        let mut cross_zone = binding();
+        cross_zone.zone = "zone-b".to_owned();
+        let speaker_fence = fence(0x11, 1);
+        let plan = AudioSessionPlan::new(
+            Some(session(
+                AudioChannel::Speaker,
+                &speaker_fence,
+                AudioSessionOrigin::Owner,
+            )),
+            None,
+        );
+        let mut controller = AudioBindingController::new(FakeAudioMediator::ready());
+        let failure = controller
+            .reconcile_admitted(
+                &cross_zone,
+                "zone-a",
+                d2b_provider_audio_pipewire::AudioLeaseId::new(1),
+                &plan,
+                &[speaker_fence],
+            )
+            .expect_err("a binding cannot realize from another Zone's Service");
+        assert_eq!(
+            failure,
+            d2b_provider_audio_pipewire::AudioControllerError::Admission
+        );
+        validate_audio_binding(&cross_zone).expect("the row itself is well formed");
+        assert_eq!(
+            validate_audio_binding_in_zone(&cross_zone, "zone-a"),
+            Err(d2b_provider_audio_pipewire::AudioAdmissionError::CrossZone)
+        );
+    }
 }

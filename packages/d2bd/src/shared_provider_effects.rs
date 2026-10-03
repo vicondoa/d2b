@@ -54,9 +54,13 @@ use sha2::{Digest, Sha256};
 use crate::ServerState;
 use crate::resource_plane_v3::ResourcePlaneV3;
 use crate::resource_runtime::{ASSIGNMENT_EPOCH, ZoneResourceRuntime};
-use d2b_provider_device::{DeviceComponent, DeviceResourceState};
+use d2b_provider_device::binding::{DeviceInventory, DeviceInventoryEntry, DevicePresence};
+use d2b_provider_device::{
+    DeviceComponent, DeviceResourceState, component_for_provider, declared_device_functions,
+};
 use d2b_provider_device_gpu::facets::GpuRuntime;
 use d2b_provider_device_security_key::SecurityKeyComponent;
+use d2b_provider_device_tpm::TpmResourceControllerError;
 use d2b_provider_device_tpm::facets::TpmRuntime;
 use d2b_provider_device_usbip::facets::UsbipRuntime;
 use d2b_provider_device_usbip::UsbipComponent;
@@ -539,6 +543,18 @@ const NETWORK_CONFIG_VOLUME_SCHEMA_VERSION: &str =
 const NETWORK_CONFIG_CONTENT_KIND: &str = d2b_provider_volume_local::NETWORK_CONFIG_CONTENT_KIND;
 const NETWORK_CONFIG_FILE_OWNER: &str = d2b_provider_volume_local::NETWORK_CONFIG_FILE_OWNER;
 const NETWORK_CONFIG_FILE_MODE: &str = d2b_provider_volume_local::NETWORK_CONFIG_FILE_MODE;
+
+/// The closed cause a TPM Device row carries when its admission read refused:
+/// the committed row was unreadable, was not this Device, named another
+/// Provider, or did not target this Guest. The runtime's own error says which;
+/// the row only needs one code that says "admission", not which step, because
+/// the adapter's warn line still carries the concrete error.
+const TPM_ADMISSION_UNAVAILABLE: &str = "device-tpm-admission-unavailable";
+
+/// The closed cause a TPM Device row carries when the controller refused for a
+/// reason that is not one of its effect errors: a controller already finalized,
+/// or one whose retained state never reached reconcile.
+const TPM_CONTROLLER_INVALID_STATE: &str = "device-tpm-controller-invalid-state";
 
 /// The content fence the old effects threaded into every config-Volume
 /// projection (assignment and provenance only: the identity fields were
@@ -1070,7 +1086,17 @@ impl ProductionSharedProviderEffects {
             .cloned()
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let network_generation = request.generation;
-        let network_ref = key_ref(&request.target)?.to_canonical_string();
+        let network_key_ref = key_ref(&request.target)?;
+        let network_ref = network_key_ref.to_canonical_string();
+        // This Network's own store-assigned uid, read from its committed row
+        // rather than from the request, for the same reason the consumers'
+        // uids are read from theirs: a relationship is admitted against the
+        // identities the store assigned, not against a caller's claim.
+        let network_uid = runtime
+            .committed_resource_stored(&network_key_ref, "network-binding-source-identity")
+            .await
+            .map_err(|_| SharedProviderEffectError::InvalidResource)?
+            .uid;
         let mut guest_uids = Vec::with_capacity(spec.attachments().len());
         let mut attachment_generation = network_generation.get();
         for attachment in spec.attachments() {
@@ -1153,6 +1179,69 @@ impl ProductionSharedProviderEffects {
                 .ok_or(SharedProviderEffectError::InvalidResource)?;
             attachment_generation = attachment_generation.max(generation);
         }
+        // U17: the committed `NetworkBinding` relationships this Network's
+        // fabric admits. Each carries the consumer's own typed request, and
+        // that request is the only source of the consumer policy the live
+        // config render writes, so a Network that declares no membership
+        // renders the fabric alone rather than a default policy.
+        //
+        // The committed rows of that type whose `networkRef` is this Network.
+        // Each row's stored spec BASE is the `NetworkBindingSpec` the
+        // producing pass minted; the consumer's identity is read from the
+        // consumer's own committed row rather than from the relationship, so a
+        // row naming a consumer the plane cannot resolve is an error rather
+        // than a silently wrong relationship. The family's own
+        // `served_network_consumers` re-derives each row name from the
+        // committed identities and refuses a mismatch, and skips a row whose
+        // `executionRef` this Network no longer attaches, so a stale row
+        // yields no membership instead of a wrong one.
+        let mut committed = Vec::new();
+        for row in runtime
+            .committed_resources_of_type("NetworkBinding")
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)?
+        {
+            if row.pointer("/spec/networkRef").and_then(Value::as_str)
+                != Some(network_ref.as_str())
+            {
+                continue;
+            }
+            let execution_ref = row
+                .pointer("/spec/executionRef")
+                .and_then(Value::as_str)
+                .and_then(|value| ResourceRef::parse(value).ok())
+                .ok_or(SharedProviderEffectError::InvalidResource)?;
+            let name = row
+                .pointer("/metadata/name")
+                .and_then(Value::as_str)
+                .and_then(|value| d2b_contracts_resource::v3::BoundedToken::parse(value.to_owned()).ok())
+                .ok_or(SharedProviderEffectError::InvalidResource)?;
+            let consumer = runtime
+                .committed_resource_stored(&execution_ref, "network-binding-consumer-identity")
+                .await
+                .map_err(|_| SharedProviderEffectError::InvalidResource)?;
+            let consumer_uid = consumer.uid;
+            let spec = row
+                .pointer("/spec")
+                .and_then(Value::as_object)
+                .ok_or(SharedProviderEffectError::InvalidResource)?;
+            committed.push(
+                d2b_provider_network_local::CommittedNetworkBinding::new(
+                    name,
+                    serde_json::to_vec(spec).map_err(|_| SharedProviderEffectError::InvalidResource)?,
+                    consumer_uid,
+                ),
+            );
+        }
+        let relationships = d2b_provider_network_local::served_network_consumers(
+            &d2b_contracts_resource::v3::ZoneId::parse(self.zone.as_str())
+                .map_err(|_| SharedProviderEffectError::InvalidResource)?,
+            &network_key_ref,
+            &network_uid,
+            spec,
+            &committed,
+        )
+        .map_err(|_| SharedProviderEffectError::InvalidResource)?;
         let installed_generation = resolver
             .installed_generation_identity()
             .and_then(|identity| {
@@ -1174,6 +1263,7 @@ impl ProductionSharedProviderEffects {
             ),
             spec.clone(),
             guest_uids,
+            relationships,
         )
         .map_err(|_| SharedProviderEffectError::InvalidResource)?;
         let plane = self
@@ -1362,6 +1452,74 @@ impl ProductionSharedProviderEffects {
 impl ProductionSharedProviderEffects {
     /// One GPU authority digest (old `DaemonSharedProviderEffects::gpu_digest`
     /// with the driver's controller generation in place of the old context).
+    /// The named device capabilities this GPU Device has admitted bindings
+    /// for.
+    ///
+    /// A worker's device set used to be answered by the launch template: the
+    /// `videoNvidiaDecode` setting chose a template name and the closed
+    /// posture table for that name supplied the nodes. The admitted side of
+    /// that decision now comes from the Device source: every named
+    /// capability the trusted inventory resolved is a capability a worker
+    /// here may reach, and the controller refuses a shape that needs one the
+    /// inventory did not back.
+    async fn gpu_device_grants(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<d2b_provider_device_gpu::GpuDeviceGrants, SharedProviderEffectError> {
+        let inventory =
+            d2b_provider_device::facets::DeviceInventorySource::device_inventory(self, request)
+                .await?;
+        d2b_provider_device_gpu::GpuDeviceGrants::new(inventory.present_functions())
+            .map_err(|_| SharedProviderEffectError::InvalidResource)
+    }
+
+    /// The opaque physical authority one named Device capability resolves
+    /// to.
+    ///
+    /// The key frames the row's durable identity, its desired generation, and
+    /// the manager's controller generation around the function name, so it is
+    /// stable for one committed row and changes when that row's authority
+    /// evidence changes. It is deliberately not derived from a device-node
+    /// path, a serial, a PCI slot, or a template name: nothing a caller can
+    /// spell reaches the authority key.
+    fn device_authority_key(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+        function: &str,
+    ) -> d2b_contracts_resource::v3::DeviceAuthorityKey {
+        let mut digest = Sha256::new();
+        digest.update(b"d2b:device-authority/v1");
+        digest.update([0]);
+        digest.update(request.uid.as_str().as_bytes());
+        digest.update([0]);
+        digest.update(request.generation.get().to_be_bytes());
+        digest.update(self.controller_generation.get().to_be_bytes());
+        digest.update(function.as_bytes());
+        let bytes: [u8; 32] = digest.finalize().into();
+        d2b_contracts_resource::v3::DeviceAuthorityKey::from_core(bytes)
+    }
+
+    /// Whether the verified host device-node matrix still backs one named
+    /// Device capability.
+    ///
+    /// Only a capability the matrix declares a class for can be observed at
+    /// all. A capability with no class is observed absent, which fails its
+    /// admission closed rather than guessing a node path the operator never
+    /// declared.
+    fn device_presence(&self, function: &str) -> DevicePresence {
+        let Some(class) = device_function_host_class(function) else {
+            return DevicePresence::Absent;
+        };
+        let readback = d2b_host::devices::read_device_metadata(
+            &std::path::PathBuf::from(class.default_path()),
+        );
+        if readback.exists {
+            DevicePresence::Present
+        } else {
+            DevicePresence::Absent
+        }
+    }
+
     fn gpu_digest(
         &self,
         domain: &str,
@@ -1635,7 +1793,7 @@ impl ProductionSharedProviderEffects {
                     error = %error,
                     "TPM device admission refused",
                 );
-                SharedProviderEffectError::Unavailable
+                SharedProviderEffectError::UnavailableWithCause(TPM_ADMISSION_UNAVAILABLE)
             })?;
         let mut controller = {
             let mut controllers = state
@@ -1645,6 +1803,7 @@ impl ProductionSharedProviderEffects {
             match controllers.remove(&request.uid) {
                 Some(controller) => controller,
                 None => d2b_provider_device_tpm::TpmResourceController::new(
+                    self.zone.clone(),
                     request.uid.clone(),
                     key_ref(&request.target)?,
                     execution_ref.clone(),
@@ -1676,12 +1835,23 @@ impl ProductionSharedProviderEffects {
         )
         .await
         .map_err(|error| {
+            // The controller reduces every typed effect refusal to a
+            // `TpmResourceEffectError`, which already carries a closed code.
+            // That code is the whole diagnosis, and it used to stop here: the
+            // row then published `shared-provider-unavailable` and nothing
+            // else for every pass of the retry, so the one warn line above was
+            // the only record and a bounded journal tail need not contain it.
+            let cause = match error {
+                TpmResourceControllerError::Effect(effect) => effect.code(),
+                TpmResourceControllerError::InvalidState => TPM_CONTROLLER_INVALID_STATE,
+            };
             tracing::warn!(
                 error = ?error,
+                cause = cause,
                 device = %device_ref.to_canonical_string(),
                 "TPM device controller reconcile failed",
             );
-            SharedProviderEffectError::Unavailable
+            SharedProviderEffectError::UnavailableWithCause(cause)
         });
         match result {
             Ok(outcome) => {
@@ -2143,6 +2313,10 @@ impl ProductionSharedProviderEffects {
             ));
         }
         let (_runtime, admission, tokens, settings, holder_ref) = self.gpu_admission(request).await?;
+        // The device capabilities are read from the trusted host inventory
+        // before the controller cache is locked: the read is asynchronous and
+        // no lock guard may be held across an await.
+        let grants = self.gpu_device_grants(request).await?;
         let mut controllers = state.gpu_controllers()
             .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
@@ -2151,6 +2325,7 @@ impl ProductionSharedProviderEffects {
             None => d2b_provider_device_gpu::GpuController::new_authorized(
                 admission.clone(),
                 settings.clone(),
+                grants,
                 tokens.clone(),
             )
             .map_err(|_| SharedProviderEffectError::InvalidResource)?,
@@ -2529,7 +2704,7 @@ impl ProductionSharedProviderEffects {
                 None,
             )
             .await
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
+            .map_err(|_| SharedProviderEffectError::UnavailableWithCause(TPM_ADMISSION_UNAVAILABLE))?;
         let mut controller = {
             let mut controllers = state
                 .tpm_controllers()
@@ -2570,12 +2745,20 @@ impl ProductionSharedProviderEffects {
                         .map_err(|_| SharedProviderEffectError::Unavailable)?;
                     controllers.insert(request.uid.clone(), controller);
                 }
+                // The same closed code the reconcile arm carries, so a
+                // teardown that will not finish names the controller refusal
+                // holding it instead of reporting one flat code.
+                let cause = match error {
+                    TpmResourceControllerError::Effect(effect) => effect.code(),
+                    TpmResourceControllerError::InvalidState => TPM_CONTROLLER_INVALID_STATE,
+                };
                 tracing::warn!(
                     error = ?error,
+                    cause = cause,
                     device = %key_ref(&request.target)?.to_canonical_string(),
                     "TPM device controller finalize failed",
                 );
-                Err(SharedProviderEffectError::Unavailable)
+                Err(SharedProviderEffectError::UnavailableWithCause(cause))
             }
         }
     }
@@ -2775,6 +2958,107 @@ impl d2b_provider_device_security_key::facets::SecurityKeyRuntime
             SecurityKeyComponent::Service => self.finalize_security_key_service(request).await,
             SecurityKeyComponent::Binding => self.finalize_security_key_binding(request).await,
         }
+    }
+}
+
+/// The verified host device-node class backing one named Device capability.
+///
+/// This is the adapter's private translation from the Device provider's
+/// declared capability names to the host matrix rows it can be read from. It
+/// carries no path of its own: the path is the matrix row's, and a name with
+/// no row is observed absent.
+fn device_function_host_class(function: &str) -> Option<d2b_host::devices::DeviceClass> {
+    use d2b_host::devices::DeviceClass;
+    Some(match function {
+        "tpm" => DeviceClass::Tpm,
+        "dri" | "render-node" | "nvidia-device" => DeviceClass::Dri,
+        "udmabuf" => DeviceClass::Udmabuf,
+        "nvidia-ctl" => DeviceClass::NvidiaCtl,
+        "nvidia-uvm" => DeviceClass::NvidiaUvm,
+        _ => return None,
+    })
+}
+
+// The Device source's trusted inventory facet (U16): a `Device` row's
+// declared selector is resolved against the verified host device-node matrix
+// into opaque physical authority keys, and the presence observed for each.
+// The keys are minted here, in the trusted adapter, from the row's own
+// durable identity, its generation, and the manager's controller
+// generation - never from a device-node path, a serial, or a template name.
+/// U16: the authority evidence one committed `DeviceBinding`'s presence is
+/// decided against.
+///
+/// This refuses, and that is the honest answer rather than a missing one. The
+/// evidence is `GraphAuthority::admit_mutation`'s authorization over the
+/// committed row, the authority journal's freshness for it, and the
+/// relationship's observed standing - and this plane has no accepted graph for
+/// its own Zone to admit against, because the verified deployment graph is
+/// per-deployment and the admission is per-Zone.
+///
+/// A driver that cannot prove its evidence reports the relationship degraded,
+/// which is the fail-closed direction: a `DeviceBinding` is visibly unproven
+/// rather than silently delivered. It does not revoke - uncertainty and
+/// revocation are different answers.
+#[async_trait]
+impl d2b_provider_device::facets::DeviceBindingAuthoritySource for ProductionSharedProviderEffects {
+    async fn binding_evidence(
+        &self,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<
+        d2b_provider_device::binding::DeviceBindingEvidence,
+        SharedProviderEffectError,
+    > {
+        Err(SharedProviderEffectError::Unavailable)
+    }
+}
+
+#[async_trait]
+impl d2b_provider_device::facets::DeviceInventorySource for ProductionSharedProviderEffects {
+    async fn device_inventory(
+        &self,
+        request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<DeviceInventory, SharedProviderEffectError> {
+        // The committed Device row carries the envelope's own `providerRef`
+        // alongside the spec facets. `DeviceSpec` denies unknown fields, so the
+        // envelope fields are stripped before decoding - the same strip the
+        // network path does. Decoding without it failed for every Device row.
+        let mut spec_value = (*request.spec).clone();
+        if let Some(spec_object) = spec_value.as_object_mut() {
+            for field in ["providerRef", "updatePolicy", "provider"] {
+                spec_object.remove(field);
+            }
+        }
+        let spec: d2b_contracts_resource::v3::DeviceSpec =
+            serde_json::from_value(spec_value)
+                .map_err(|_| SharedProviderEffectError::InvalidResource)?;
+        let provider_ref = request
+            .spec
+            .get("providerRef")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                request
+                    .metadata
+                    .get("providerRef")
+                    .and_then(Value::as_str)
+            })
+            .ok_or(SharedProviderEffectError::InvalidResource)?;
+        let component =
+            component_for_provider(provider_ref).ok_or(SharedProviderEffectError::InvalidResource)?;
+        let entries: Result<Vec<DeviceInventoryEntry>, SharedProviderEffectError> =
+            declared_device_functions(component, &spec)
+                .into_iter()
+                .map(|function| {
+                    let key = self.device_authority_key(request, function.as_str());
+                    let presence = self.device_presence(function.as_str());
+                    Ok(DeviceInventoryEntry::new(
+                        function,
+                        key,
+                        d2b_contracts_resource::v3::DeviceAuthorityArbitration::Exclusive,
+                        presence,
+                    ))
+                })
+                .collect();
+        DeviceInventory::new(entries?).map_err(|_| SharedProviderEffectError::InvalidResource)
     }
 }
 
@@ -3240,7 +3524,6 @@ mod tests {
         let mut bundle = json!({
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "zones": [],
             "artifactHashes": {},
             "generation": {
@@ -3434,6 +3717,8 @@ mod tests {
         (
             dir,
             crate::resource_plane_v3::ConstructionInputs {
+                deployment_graph: None,
+            server_state: None,
                 zone: zone.clone(),
                 zone_token: d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
                     zone.as_str().to_owned(),
@@ -3477,6 +3762,7 @@ mod tests {
                 guest_facets: guest_facets.clone(),
                 interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
+                authority_publisher: Some(d2b_resource_runtime::test_support::RecordingPublisher::new()),
                 // U1/U14/U5/U7/U8/U6/U10/U12/U15: the plane hosts every converted
                 // family's declared effects services from the same facet
                 // sets their driver factories are built from, exactly as the
@@ -3590,6 +3876,7 @@ mod tests {
                     ),
                 ]),
                 foundation: None,
+                bundle: None,
             },
         )
     }
@@ -3762,7 +4049,6 @@ mod tests {
             Bundle {
                 bundle_version: 1,
                 schema_version: "v3".to_owned(),
-                privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
                 realm_workloads_launcher_v2_path: None,
                 generation: BundleGeneration {

@@ -135,21 +135,25 @@ impl InteractionType for WaylandSession {
     }
 
     /// The session's cross-domain trust: the Guest, Host, User, and policy
-    /// rows its spec names.
+    /// rows its spec names, plus the authorized `ExecutionPolicy` its
+    /// workers' privileges are admitted under when the session names one.
     fn dependencies(
         &self,
         envelope: &InteractionSpecEnvelope,
     ) -> Result<Vec<ResourceRef>, InteractionEffectError> {
         let spec = envelope.base_spec::<WaylandSessionSpec>()?;
-        Ok(vec![
+        let mut dependencies = vec![
             spec.guest_ref().clone(),
             spec.host_ref().clone(),
             spec.user_ref().clone(),
             spec.policy_ref().clone(),
-        ])
+        ];
+        dependencies.extend(spec.execution_policy_ref().cloned());
+        Ok(dependencies)
     }
 
-    /// The two workers and their private endpoints, as manager child rows.
+    /// The two workers, the session's compositor source, and each worker's
+    /// private endpoint, as manager child rows.
     fn desired_children(
         &self,
         children: &InteractionChildContext<'_>,
@@ -196,6 +200,7 @@ pub fn wayland_session_descriptor(
         execution: d2b_provider_wayland_policy::INTERACTION_EXECUTION_DOMAINS,
         exportable: false,
         reads: &[
+            WellKnownType::EXECUTION_POLICY,
             WellKnownType::GUEST,
             WellKnownType::HOST,
             WellKnownType::USER,

@@ -33,6 +33,7 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -59,6 +60,7 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
+        "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -134,6 +136,10 @@ filegroup(
             "integration/**/*",
             "nix/**/*",
             "README.md",
+            "operations.json",
+            "registrations.json",
+            "resource-types.json",
+            "service-catalog.json",
             "src/**/*.rs",
             "tests/**/*.rs",
         ],

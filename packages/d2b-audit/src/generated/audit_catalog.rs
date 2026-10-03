@@ -12,6 +12,7 @@ pub const RESOURCE_TYPES: &[&str] = &[
     "Volume",
     "VolumeBinding",
     "Endpoint",
+    "EndpointBinding",
     "Host",
     "User",
     "activation-nixos.d2bus.org.NixosGeneration",
@@ -39,9 +40,12 @@ pub const RESOURCE_TYPES: &[&str] = &[
     "EmergencyPolicy",
     "ResourceExport",
     "ResourceImport",
-    "Command",
     "Operation",
     "SeccompProfile",
+    "CredentialBinding",
+    "DeviceBinding",
+    "ExecutionPolicy",
+    "NetworkBinding",
     "vendor",
 ];
 /// The resource verbs that write an audit row, in contract order.

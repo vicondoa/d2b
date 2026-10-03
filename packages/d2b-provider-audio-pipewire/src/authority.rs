@@ -1,5 +1,10 @@
 //! Bounded owner-Service audio authority.
 
+use crate::{
+    AudioChannel,
+    mediator::{AdmittedAudioSession, AudioBindingFence, AudioSessionOrigin},
+};
+use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroUsize,
@@ -15,6 +20,132 @@ impl AudioLeaseId {
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
+
+    /// Mint the lease one admitted relationship's committed identity mints.
+    ///
+    /// The lease is identity evidence, not a counter: a controller that
+    /// restarts over the same committed relationship resumes the same lease,
+    /// while a relationship re-committed under a new generation is a
+    /// different lease and can never inherit the previous one's authority.
+    pub fn for_binding(uid: &ResourceUid, generation: ResourceGeneration) -> Self {
+        // FNV-1a over the committed identities. This is an in-process
+        // identity token, not a capability: the authority to act still comes
+        // from the admitted relationship, so a collision here can at worst
+        // make two relationships look like one lease to the caller, never
+        // grant one relationship's access to another.
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut absorb = |bytes: &[u8]| {
+            for byte in bytes {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        absorb(uid.as_str().as_bytes());
+        absorb(b"\0");
+        absorb(&generation.get().to_le_bytes());
+        // The lowest bit is forced so a minted lease is never zero, which
+        // the caller reads as "no relationship admitted".
+        Self(hash | 1)
+    }
+}
+
+
+/// The admitted relationship one channel's bookkeeping rides.
+///
+/// The recorded fence is the evidence the grant was taken under, so a level
+/// or a release that arrives after the relationship was re-committed or
+/// revoked is refused instead of being applied to whatever incarnation
+/// happens to hold the slot now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelSession {
+    channel: Option<AudioChannel>,
+    fence: Option<AudioBindingFence>,
+}
+
+impl ChannelSession {
+    /// The retained bookkeeping for a pass that observed no admitted
+    /// relationship.
+    ///
+    /// It is deliberately unequal to every admitted session, so a grant
+    /// recorded this way can never be continued by an admitted pass and an
+    /// admitted grant can never be continued by an unadmitted one.
+    pub const UNADMITTED: Self = Self {
+        channel: None,
+        fence: None,
+    };
+
+    /// Record the admitted relationship one channel's grant rides.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a relationship admitted for the other channel
+    /// (`SessionChannelMismatch`) and an imported Service projection
+    /// (`ImportedProjectionNotOwner`).
+    pub fn admit(
+        channel: AudioChannel,
+        session: &AdmittedAudioSession,
+    ) -> Result<Self, AudioAuthorityError> {
+        if session.channel() != channel {
+            return Err(AudioAuthorityError::SessionChannelMismatch);
+        }
+        if session.origin() == AudioSessionOrigin::ImportedProjection {
+            return Err(AudioAuthorityError::ImportedProjectionNotOwner);
+        }
+        Ok(Self {
+            channel: Some(channel),
+            fence: Some(session.fence().clone()),
+        })
+    }
+
+    /// The committed relationship identity the grant was taken under.
+    pub const fn fence(&self) -> Option<&AudioBindingFence> {
+        self.fence.as_ref()
+    }
+
+    /// The channel this relationship was admitted for.
+    pub const fn channel(&self) -> Option<AudioChannel> {
+        self.channel
+    }
+
+    /// Whether this session is an admitted relationship rather than the
+    /// retained unadmitted marker.
+    pub const fn is_admitted(&self) -> bool {
+        self.fence.is_some()
+    }
+
+    /// Whether `other` continues this session's recorded admission.
+    ///
+    /// A different channel is a different relationship, and an admitted
+    /// session never continues an unadmitted one (or the reverse).
+    fn continues(&self, other: &ChannelSession) -> Result<(), AudioAuthorityError> {
+        if self.fence != other.fence {
+            return Err(AudioAuthorityError::SessionNotCurrent);
+        }
+        if self.channel != other.channel {
+            return Err(AudioAuthorityError::SessionChannelMismatch);
+        }
+        Ok(())
+    }
+
+}
+
+/// Refuse a relationship admitted for a channel this table is not.
+///
+/// The retained unadmitted marker passes: it names no channel, so it can
+/// neither claim nor be claimed as one.
+fn require_channel(
+    table: AudioChannel,
+    session: &ChannelSession,
+) -> Result<(), AudioAuthorityError> {
+    match session.channel() {
+        None => Ok(()),
+        Some(channel) if matches!(
+            (table, channel),
+            (AudioChannel::Speaker, AudioChannel::Speaker)
+                | (AudioChannel::Microphone, AudioChannel::Microphone)
+        ) => Ok(()),
+        Some(_) => Err(AudioAuthorityError::SessionChannelMismatch),
+    }
 }
 
 /// Result of a microphone request.
@@ -29,10 +160,16 @@ pub enum MicDecision {
 }
 
 /// Single-owner microphone arbiter.
+///
+/// The table records, per lease, the admitted relationship the capture
+/// grant was taken under, so a promotion, a level, or a release that
+/// arrives after the relationship changed is refused rather than applied to
+/// whatever incarnation now holds the slot.
 #[derive(Debug, Clone)]
 pub struct MicrophoneArbiter {
     active: Option<AudioLeaseId>,
     queue: VecDeque<AudioLeaseId>,
+    sessions: BTreeMap<AudioLeaseId, ChannelSession>,
     max_queue: usize,
 }
 
@@ -55,12 +192,48 @@ impl MicrophoneArbiter {
         Self {
             active: None,
             queue: VecDeque::new(),
+            sessions: BTreeMap::new(),
             max_queue: max_queue.get(),
         }
     }
 
+    /// The admitted relationship one lease's capture grant rides.
+    pub fn session_of(&self, lease: AudioLeaseId) -> Option<&ChannelSession> {
+        self.sessions.get(&lease)
+    }
+
+    /// Whether the lease's recorded relationship is still the one presented.
+    ///
+    /// `None` means the lease was never admitted through a relationship, so
+    /// it cannot be re-admitted by presenting one now.
+    pub fn session_is_current(&self, lease: AudioLeaseId, session: &ChannelSession) -> bool {
+        self.sessions
+            .get(&lease)
+            .is_some_and(|recorded| recorded.continues(session).is_ok())
+    }
+
     /// Request the exclusive capture lease.
-    pub fn request(&mut self, lease: AudioLeaseId) -> MicDecision {
+    ///
+    /// # Errors
+    ///
+    /// Refuses a lease whose recorded relationship is not the relationship
+    /// presented now (`SessionNotCurrent`). The capture grant is the only
+    /// microphone authority there is, so a lease admitted under a different
+    /// incarnation cannot silently take the slot.
+    pub fn request(
+        &mut self,
+        lease: AudioLeaseId,
+        session: &ChannelSession,
+    ) -> Result<MicDecision, AudioAuthorityError> {
+        require_channel(AudioChannel::Microphone, session)?;
+        if let Some(recorded) = self.sessions.get(&lease) {
+            recorded.continues(session)?;
+        }
+        self.sessions.insert(lease, session.clone());
+        Ok(self.arbitrate(lease))
+    }
+
+    fn arbitrate(&mut self, lease: AudioLeaseId) -> MicDecision {
         if self.active == Some(lease) {
             return MicDecision::Granted;
         }
@@ -91,13 +264,18 @@ impl MicrophoneArbiter {
 
     /// Release a lease and mute it before the next lease is selected.
     pub fn release(&mut self, lease: AudioLeaseId) -> bool {
-        if self.active == Some(lease) {
+        let released = if self.active == Some(lease) {
             self.active = None;
-            return true;
+            true
+        } else {
+            let before = self.queue.len();
+            self.queue.retain(|id| *id != lease);
+            before != self.queue.len()
+        };
+        if released {
+            self.sessions.remove(&lease);
         }
-        let before = self.queue.len();
-        self.queue.retain(|id| *id != lease);
-        before != self.queue.len()
+        released
     }
 
     /// Mute-before-handoff and grant the next FIFO lease.
@@ -132,10 +310,16 @@ impl MicrophoneArbiter {
 }
 
 /// Speaker mixing state.
+///
+/// The mixer records, per consumer, the admitted speaker relationship its
+/// grant and level were taken under. The speaker level is a declared method
+/// on that same relationship, so a level presented for a re-committed or
+/// revoked relationship is refused instead of being mixed in.
 #[derive(Debug, Clone, Default)]
 pub struct SpeakerMixer {
     levels: BTreeMap<AudioLeaseId, u8>,
     grants: BTreeSet<AudioLeaseId>,
+    sessions: BTreeMap<AudioLeaseId, ChannelSession>,
     max_consumers: usize,
 }
 
@@ -145,15 +329,35 @@ impl SpeakerMixer {
         Self {
             levels: BTreeMap::new(),
             grants: BTreeSet::new(),
+            sessions: BTreeMap::new(),
             max_consumers: max_consumers.get(),
         }
+    }
+
+    /// The admitted relationship one consumer's speaker grant rides.
+    pub fn session_of(&self, lease: AudioLeaseId) -> Option<&ChannelSession> {
+        self.sessions.get(&lease)
     }
 
     /// Grant one speaker consumer.
     ///
     /// The return value is true when the aggregate speaker grant changed
     /// from no consumers to at least one consumer.
-    pub fn grant(&mut self, lease: AudioLeaseId) -> Result<bool, AudioAuthorityError> {
+    ///
+    /// # Errors
+    ///
+    /// Refuses a consumer beyond the mixer bound (`ConsumerLimit`) and a
+    /// consumer whose recorded speaker relationship is not the relationship
+    /// presented now (`SessionNotCurrent`).
+    pub fn grant(
+        &mut self,
+        lease: AudioLeaseId,
+        session: &ChannelSession,
+    ) -> Result<bool, AudioAuthorityError> {
+        require_channel(AudioChannel::Speaker, session)?;
+        if let Some(recorded) = self.sessions.get(&lease) {
+            recorded.continues(session)?;
+        }
         if !self.grants.contains(&lease)
             && !self.levels.contains_key(&lease)
             && self.consumer_count() >= self.max_consumers
@@ -162,6 +366,7 @@ impl SpeakerMixer {
         }
         let was_empty = self.grants.is_empty();
         self.grants.insert(lease);
+        self.sessions.insert(lease, session.clone());
         Ok(was_empty)
     }
 
@@ -196,20 +401,43 @@ impl SpeakerMixer {
     }
 
     /// Set a bounded consumer level.
-    pub fn set_level(&mut self, lease: AudioLeaseId, level: u8) -> Result<(), AudioAuthorityError> {
-        self.can_set_level(lease, level)?;
+    ///
+    /// # Errors
+    ///
+    /// Every refusal [`Self::can_set_level`] reports, and the level is only
+    /// recorded against the relationship the grant was taken under.
+    pub fn set_level(
+        &mut self,
+        lease: AudioLeaseId,
+        level: u8,
+        session: &ChannelSession,
+    ) -> Result<(), AudioAuthorityError> {
+        self.can_set_level(lease, level, session)?;
         self.levels.insert(lease, level);
+        self.sessions.insert(lease, session.clone());
         Ok(())
     }
 
     /// Check whether a bounded consumer level can be admitted.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an out-of-range level (`LevelOutOfRange`), a consumer beyond
+    /// the mixer bound (`ConsumerLimit`), and a level presented for a
+    /// relationship that is not the one the consumer's grant was taken under
+    /// (`SessionNotCurrent`).
     pub(crate) fn can_set_level(
         &self,
         lease: AudioLeaseId,
         level: u8,
+        session: &ChannelSession,
     ) -> Result<(), AudioAuthorityError> {
         if level > 100 {
             return Err(AudioAuthorityError::LevelOutOfRange);
+        }
+        require_channel(AudioChannel::Speaker, session)?;
+        if let Some(recorded) = self.sessions.get(&lease) {
+            recorded.continues(session)?;
         }
         if !self.levels.contains_key(&lease) && self.consumer_count() >= self.max_consumers {
             return Err(AudioAuthorityError::ConsumerLimit);
@@ -243,12 +471,21 @@ impl SpeakerMixer {
 }
 
 /// Stable authority failures.
+///
+/// Every variant is field-free: a refusal names a class of failure, never the
+/// relationship, the consumer, or the host bytes it was protecting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioAuthorityError {
     /// Level was outside 0..=100.
     LevelOutOfRange,
     /// Consumer bound was exceeded.
     ConsumerLimit,
+    /// The presented relationship was admitted for the other channel.
+    SessionChannelMismatch,
+    /// The presented relationship is not the one the grant was taken under.
+    SessionNotCurrent,
+    /// An imported Service projection cannot own a local backing grant.
+    ImportedProjectionNotOwner,
 }
 
 impl core::fmt::Display for AudioAuthorityError {
@@ -256,6 +493,9 @@ impl core::fmt::Display for AudioAuthorityError {
         formatter.write_str(match self {
             Self::LevelOutOfRange => "audio-level-out-of-range",
             Self::ConsumerLimit => "audio-consumer-limit",
+            Self::SessionChannelMismatch => "audio-session-channel-mismatch",
+            Self::SessionNotCurrent => "audio-session-not-current",
+            Self::ImportedProjectionNotOwner => "audio-imported-projection-not-owner",
         })
     }
 }

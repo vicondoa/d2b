@@ -33,6 +33,7 @@
 
 #![deny(missing_docs)]
 
+mod declaration;
 mod error;
 mod host;
 mod user;
@@ -46,6 +47,10 @@ pub use host::{
     HostCapabilityClass, HostObservationReport, HostProbeEffectPort,
     HostProbeMetadata, HostReconciler, HostStatusReport,
     ISOLATION_POSTURE_MESSAGE, MinijailPlatformGate, NO_ISOLATION_STATUS_FIELDS,
+};
+pub use declaration::{
+    HOST_EFFECTS_SERVICE, SYSTEM_CORE_ARTIFACT_ID, USER_EFFECTS_SERVICE, system_core_bindings,
+    system_core_declaration,
 };
 pub use ownership::{DISOWNED_RESOURCE_TYPES, OWNED_RESOURCE_TYPES};
 pub use user::{

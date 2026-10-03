@@ -28,12 +28,24 @@ d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-boot
 d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
 parking_lot = "0.12"
+serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+tracing = "0.1"
 
 [[test]]
 name = "device_family"
 path = "tests/device_family.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "device_binding"
+path = "tests/device_binding.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "binding_production"
+path = "tests/binding_production.rs"
 required-features = ["test-support"]
 
 [[test]]

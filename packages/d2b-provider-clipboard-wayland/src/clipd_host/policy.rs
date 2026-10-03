@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 pub use d2b_provider_clipboard_wayland::{
-    ALLOWED_MIME_TYPES, SECRET_HINT_MIME_TYPES, normalize_mime,
+    ALLOWED_MIME_TYPES, ClipboardEndpointRefusal, SECRET_HINT_MIME_TYPES, normalize_mime,
 };
+use d2b_contracts_resource::v3::{AdmissionStage, RefusalReason};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +27,15 @@ pub enum ReasonCode {
     MemoryCapExceeded,
     AuditFailure,
     VirtualKeyboardFailed,
+    /// The delivery channel carries no admitted endpoint relationship.
+    ///
+    /// This is the fail-closed answer for a missing endpoint: the host stops
+    /// here instead of reaching for another host channel.
+    EndpointAbsent,
+    /// The delivery channel's endpoint relationship was revoked or draining.
+    EndpointWithdrawn,
+    /// The presented endpoint relationship is not the declared one.
+    EndpointRefused,
 }
 
 impl Serialize for ReasonCode {
@@ -59,6 +69,9 @@ impl ReasonCode {
             Self::MemoryCapExceeded => "memory_cap_exceeded",
             Self::AuditFailure => "audit_failure",
             Self::VirtualKeyboardFailed => "virtual_keyboard_failed",
+            Self::EndpointAbsent => "endpoint_absent",
+            Self::EndpointWithdrawn => "endpoint_withdrawn",
+            Self::EndpointRefused => "endpoint_refused",
         }
     }
 }
@@ -82,6 +95,28 @@ pub fn has_secret_hint<'a>(mime_names: impl IntoIterator<Item = &'a str>) -> boo
         .into_iter()
         .map(normalize_mime)
         .any(|mime| SECRET_HINT_MIME_TYPES.contains(&mime.as_str()))
+}
+
+/// Classify one clipboard endpoint refusal into the host's closed reason
+/// vocabulary.
+///
+/// The mapping is by the graph's own stage, so an absent relationship, a
+/// withdrawn relationship, and a relationship the gate refused for another
+/// reason stay distinguishable in the host's audit trail without the refusal
+/// ever carrying a Zone, a socket, or payload text.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "consumed when the clipd host delivers over an admitted endpoint (U28/U34)"
+    )
+)]
+pub fn endpoint_refusal_reason(refusal: ClipboardEndpointRefusal) -> ReasonCode {
+    match (refusal.stage(), refusal.reason()) {
+        (AdmissionStage::Activate, RefusalReason::StaleAuthority) => ReasonCode::EndpointAbsent,
+        (AdmissionStage::Revoke, _) | (AdmissionStage::Drain, _) => ReasonCode::EndpointWithdrawn,
+        _ => ReasonCode::EndpointRefused,
+    }
 }
 
 #[cfg(test)]
@@ -119,6 +154,32 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ReasonCode::VirtualKeyboardFailed).expect("json"),
             "\"virtual_keyboard_failed\""
+        );
+    }
+
+    #[test]
+    fn endpoint_refusals_classify_by_the_graphs_own_stage() {
+        use ClipboardEndpointRefusal as Refusal;
+
+        assert_eq!(
+            endpoint_refusal_reason(Refusal::relationship_absent()),
+            ReasonCode::EndpointAbsent
+        );
+        assert_eq!(
+            endpoint_refusal_reason(Refusal::relationship_revoked()),
+            ReasonCode::EndpointWithdrawn
+        );
+        assert_eq!(
+            endpoint_refusal_reason(Refusal::relationship_draining()),
+            ReasonCode::EndpointWithdrawn
+        );
+        assert_eq!(
+            endpoint_refusal_reason(Refusal::channel_mismatch()),
+            ReasonCode::EndpointRefused
+        );
+        assert_eq!(
+            endpoint_refusal_reason(Refusal::relationship_superseded()),
+            ReasonCode::EndpointRefused
         );
     }
 }

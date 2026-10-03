@@ -23,6 +23,67 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "BindingRealizationFacet": {
+      "description": "The realization facet a requested presentation depends on.\n\nA presentation the selected backend cannot enforce is refused rather than skipped: an unapplied mount policy, an unclaimed device, or an unproven endpoint is not success.",
+      "oneOf": [
+        {
+          "description": "A private mount tree carrying the exact named view at the destination.",
+          "type": "string",
+          "enum": [
+            "filesystem-presentation"
+          ]
+        },
+        {
+          "description": "A block device in a consumer device slot.",
+          "type": "string",
+          "enum": [
+            "consumer-device-slot"
+          ]
+        },
+        {
+          "description": "A verified device descriptor or mediated attachment.",
+          "type": "string",
+          "enum": [
+            "device-attachment"
+          ]
+        },
+        {
+          "description": "An inherited interface in the consumer's own network namespace.",
+          "type": "string",
+          "enum": [
+            "namespace-interface"
+          ]
+        },
+        {
+          "description": "Membership in the provider-owned shared fabric realization.",
+          "type": "string",
+          "enum": [
+            "shared-fabric"
+          ]
+        },
+        {
+          "description": "A verified connected or listening descriptor for the exact endpoint.",
+          "type": "string",
+          "enum": [
+            "endpoint-descriptor"
+          ]
+        },
+        {
+          "description": "A private binding of the exact socket where the backend needs a name.",
+          "type": "string",
+          "enum": [
+            "endpoint-pathname"
+          ]
+        },
+        {
+          "description": "Credential material delivered inside an admitted delivery session.",
+          "type": "string",
+          "enum": [
+            "credential-delivery"
+          ]
+        }
+      ]
+    },
     "DaemonToUnsafeLocalHelper": {
       "description": "One frame the daemon may send to the helper.",
       "oneOf": [
@@ -112,8 +173,56 @@
           "enum": [
             "invalid-request"
           ]
+        },
+        {
+          "description": "The launch carried no admission the graph made, the admission did not verify, or it depends on a presentation this family cannot enforce.\n\nThe family is default-denied: an unsafe-local workload never starts because a transport asked it to, only because the graph admitted it.",
+          "type": "string",
+          "enum": [
+            "graph-admission-required"
+          ]
+        },
+        {
+          "description": "The admission was made for a different subject than the one presenting it. The transport's own identity is evidence about the transport, never a stand-in for the requester.",
+          "type": "string",
+          "enum": [
+            "requester-mismatch"
+          ]
         }
       ]
+    },
+    "HelperGraphAdmission": {
+      "description": "The graph decision that admitted one unsafe-local launch.\n\nA launch frame is a *request*; this value is the decision that made it admissible, and it is derived from the graph rather than from the transport that carries it. It names the committed consumer row the launch is fenced against (its Zone, store-assigned identity, and generation all move when the row is replaced or revised), the authenticated subject the admission was made for, the one posture this family runs under, and the presentation facets the launch depends on.\n\nThe presentation set is the load-bearing half. This family has no mount namespace, so it realizes no destination and no named view: an admission that depends on any presentation facet cannot be enforced here and is refused before the workload starts rather than launched with the property silently dropped (R20, R27, AE19).",
+      "type": "object",
+      "required": [
+        "admissionDigest",
+        "posture",
+        "presentation",
+        "requesterUid",
+        "workload"
+      ],
+      "properties": {
+        "admissionDigest": {
+          "type": "string"
+        },
+        "posture": {
+          "$ref": "#/definitions/UnsafeLocalPosture"
+        },
+        "presentation": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BindingRealizationFacet"
+          }
+        },
+        "requesterUid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "workload": {
+          "$ref": "#/definitions/ZoneResourceIdentity"
+        }
+      },
+      "additionalProperties": false
     },
     "HelperHeartbeat": {
       "description": "Liveness frame carrying the generation and a monotonic sequence.",
@@ -198,9 +307,10 @@
       "additionalProperties": false
     },
     "HelperLaunchRequest": {
-      "description": "One launch request the daemon commits to the helper.\n\nThe workload target, item id, and argv are redacted in `Debug`.",
+      "description": "One launch request the daemon commits to the helper.\n\nThe launch is admissible only under the [`HelperGraphAdmission`] it carries. The field is required, so a frame written before the admission existed does not decode into a launch at all, and the requester's identity is the one the graph admitted rather than one a transport can assert.\n\nThe workload target, item id, argv, and requester are redacted in `Debug`.",
       "type": "object",
       "required": [
+        "admission",
         "argv",
         "graphical",
         "itemId",
@@ -211,6 +321,9 @@
         "workload"
       ],
       "properties": {
+        "admission": {
+          "$ref": "#/definitions/HelperGraphAdmission"
+        },
         "argv": {
           "type": "array",
           "items": {
@@ -457,9 +570,9 @@
       "oneOf": [
         {
           "type": "string",
-          "maxLength": 80,
+          "maxLength": 81,
           "minLength": 6,
-          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|VolumeBinding|Network|Device|User|Credential|Endpoint|ResourceExport|ResourceImport|Command|Operation|SeccompProfile)/[a-z][a-z0-9-]{0,62}$"
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|VolumeBinding|Network|Device|CredentialBinding|DeviceBinding|User|Credential|Endpoint|ResourceExport|ResourceImport|Operation|SeccompProfile|EndpointBinding|ExecutionPolicy|NetworkBinding)/[a-z][a-z0-9-]{0,62}$"
         },
         {
           "type": "string",
@@ -589,6 +702,18 @@
               ]
             }
           }
+        }
+      ]
+    },
+    "UnsafeLocalPosture": {
+      "description": "The isolation posture one admitted unsafe-local launch runs under.\n\nThe vocabulary is deliberately closed and has exactly one member. An unsafe-local `Host` is an explicit *no-isolation* target: it runs the workload with the admitted requester's own host identity and no namespace, mount, capability, or syscall confinement. Naming that posture here keeps the no-isolation meaning a declared value rather than an absence, and it leaves exactly one place to add a confinement this family would later enforce - it never leaves room for a launch that carries no posture at all.",
+      "oneOf": [
+        {
+          "description": "No isolation: the requester's own identity, no confinement.",
+          "type": "string",
+          "enum": [
+            "explicit-no-isolation"
+          ]
         }
       ]
     },

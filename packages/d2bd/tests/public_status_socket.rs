@@ -107,7 +107,6 @@ mod public_status_socket {
                 "publicManifestPath": public_manifest_path.display().to_string(),
                 "hostPath": host_path.display().to_string(),
                 "processesPath": processes_path.display().to_string(),
-                "privilegesPath": root.join("privileges.json").display().to_string(),
                 "closures": [],
                 "minijailProfiles": [],
                 "managedKeys": {},

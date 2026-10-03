@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "the ApplySysctl op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub(crate) struct ApplySysctlRequest {
     pub intents: Vec<SysctlIntent>,
     /// Override the `/proc/sys` root for tests.
@@ -21,6 +22,7 @@ pub(crate) struct ApplySysctlRequest {
 
 /// One applied sysctl write with its before/after values and drift verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code, reason = "the ApplySysctl op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub struct ApplySysctlOutcome {
     pub key: String,
     pub value_before: String,
@@ -31,6 +33,7 @@ pub struct ApplySysctlOutcome {
 /// A failed sysctl application: an I/O failure or a readback drift
 /// after the write.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code, reason = "the ApplySysctl op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub enum ApplySysctlError {
     Io(String),
     ReadbackDrift {
@@ -67,6 +70,7 @@ impl From<io::Error> for ApplySysctlError {
 /// Converts `net.ipv6.conf.<ifname>.disable_ipv6` to
 /// `<root>/net/ipv6/conf/<ifname>/disable_ipv6` for safe per-link
 /// writes.
+#[allow(dead_code, reason = "the ApplySysctl op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub(crate) fn intent_to_proc_path(root: &Path, intent: &SysctlIntent) -> PathBuf {
     let mut path = root.to_path_buf();
     for component in intent.key.split('.') {
@@ -75,6 +79,7 @@ pub(crate) fn intent_to_proc_path(root: &Path, intent: &SysctlIntent) -> PathBuf
     path
 }
 
+#[allow(dead_code, reason = "the ApplySysctl op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub(crate) async fn apply_sysctl_intents(
     req: &ApplySysctlRequest,
 ) -> Result<Vec<ApplySysctlOutcome>, ApplySysctlError> {
@@ -201,7 +206,6 @@ fn proc_sys_path(key: &str) -> PathBuf {
 /// key, read from `d2b_host::netlink` (the crate that owns the sysctl
 /// tables). A key with no destroy value cannot be destroyed; the broker
 /// fails closed instead of guessing a value.
-#[cfg(not(feature = "layer1-bootstrap"))]
 pub use d2b_host::netlink::destroy_value_for_key;
 
 #[cfg(test)]

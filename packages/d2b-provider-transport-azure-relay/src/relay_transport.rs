@@ -27,7 +27,16 @@ use crate::{
         RelayCredentialBinding, RelayCredentialLease, RelayCredentialRole, ScopedCredentialClient,
         ScopedCredentialRequest,
     },
+    graph_binding::{
+        AdmittedRelayDelivery, TransportAttachEvidence, TransportAttachRefusal,
+        TransportBindingRegistry, TransportBindingRefusal, admit_relay_delivery,
+    },
     transport_settings::RelayTransportSettings,
+};
+
+pub use crate::graph_binding::{
+    CarriageClass, ControlPlaneInjectionRefusal, ControlPlaneRequest, ControlRouteToken,
+    RELAY_CREDENTIAL_AUDIENCE, RelayCarriageHandle, TransportControlOperation, classify_carriage,
 };
 
 /// Maximum number of retained ZoneLink/session generation fences.
@@ -1272,6 +1281,7 @@ pub struct AzureRelayTransportProvider<C, K> {
     connector: Arc<K>,
     session_slots: Arc<Semaphore>,
     generation_fence: Arc<RelayGenerationFence>,
+    bindings: Arc<TransportBindingRegistry>,
 }
 
 impl<C, K> AzureRelayTransportProvider<C, K>
@@ -1299,7 +1309,86 @@ where
             connector,
             session_slots: Arc::new(Semaphore::new(max_concurrent_sessions)),
             generation_fence: Arc::new(RelayGenerationFence::default()),
+            bindings: Arc::new(TransportBindingRegistry::new()),
         })
+    }
+
+    /// Borrow the bounded registry of admitted graph relationships.
+    ///
+    /// This is the only list that can say a carriage may open. It holds
+    /// admitted `CredentialBinding`/`EndpointBinding` relationships keyed by
+    /// their graph identity, never by relay identity, and
+    /// [`Self::open_under_delivery`] resolves every attempt against the
+    /// relationship the registry holds rather than against a caller's copy.
+    pub fn bindings(&self) -> &TransportBindingRegistry {
+        &self.bindings
+    }
+
+    /// Open a carriage under one admitted graph delivery.
+    ///
+    /// The order is the whole point. The attempt is resolved against the
+    /// relationship the Provider's registry holds - not against the copy the
+    /// caller passed, so a revoke committed after the caller built the
+    /// delivery is what refuses - then the credential relationship and, when
+    /// the carriage realizes one, the egress endpoint relationship are
+    /// measured against the presented evidence, then the admitted audience
+    /// and operation class are checked, and only then is the Zone and
+    /// execution identity of the credential request compared against the
+    /// delivery. The credential read, the WebSocket handshake, and the lease
+    /// revocation are the existing scoped path, reached only after every one
+    /// of those checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BindingRefused` when the registry holds no live relationship
+    /// under the delivery's key, `AttachRefused` with the gate's own refusal
+    /// when the evidence or the delivery class does not admit it,
+    /// `ZoneMismatch` or `ExecutionMismatch` when the credential request
+    /// describes a different Zone or a different execution identity than the
+    /// delivery admits, and `Transport` for everything the scoped path
+    /// reports.
+    pub async fn open_under_delivery(
+        &self,
+        delivery: &AdmittedRelayDelivery,
+        evidence: &TransportAttachEvidence,
+        request: ScopedCredentialRequest,
+    ) -> Result<RelayConnection, GraphBoundRelayError> {
+        let admitted = self.live_delivery(delivery)?;
+        admit_relay_delivery(&admitted, evidence).map_err(|refusal| {
+            tracing::warn!(
+                provider = "transport-azure-relay",
+                reason = %refusal,
+                "relay carriage open rejected by the graph-bound attach gate"
+            );
+            GraphBoundRelayError::AttachRefused(refusal)
+        })?;
+        if request.zone() != evidence.zone() {
+            return Err(GraphBoundRelayError::ZoneMismatch);
+        }
+        if request.execution_ref() != admitted.credential_consumer_ref() {
+            return Err(GraphBoundRelayError::ExecutionMismatch);
+        }
+        self.open_inner(request)
+            .await
+            .map_err(GraphBoundRelayError::Transport)
+    }
+
+    /// Resolve a caller-built delivery against the registry's live
+    /// relationships.
+    fn live_delivery(
+        &self,
+        delivery: &AdmittedRelayDelivery,
+    ) -> Result<AdmittedRelayDelivery, GraphBoundRelayError> {
+        let live = |binding: &crate::graph_binding::AdmittedTransportBinding| {
+            self.bindings
+                .binding(binding.key())
+                .ok_or(TransportBindingRefusal::NotAdmitted)
+                .map_err(GraphBoundRelayError::BindingRefused)
+        };
+        Ok(AdmittedRelayDelivery::new(
+            live(delivery.credential())?,
+            delivery.endpoint().map(live).transpose()?,
+        ))
     }
 
     /// Open a connection through the narrow same-Zone Credential boundary.
@@ -1555,6 +1644,61 @@ impl RelayConnection {
             in_flight_credits,
             reconnect_generation: self.reconnect_generation(),
         }
+    }
+}
+
+/// Fail-closed outcomes of one graph-bound relay carriage open.
+///
+/// The two refusal-shaped variants carry the closed
+/// [`TransportAttachRefusal`] and [`TransportBindingRefusal`] the gate and
+/// the registry produced. Neither carries a zone, a path, a peer, or
+/// caller-supplied text, so a refusal can be reported in full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphBoundRelayError {
+    /// The registry held no live relationship under the delivery's key.
+    BindingRefused(TransportBindingRefusal),
+    /// The graph refused the relationship, its delivery class, or the
+    /// presented evidence.
+    AttachRefused(TransportAttachRefusal),
+    /// The credential request's Zone is not the Zone the evidence was
+    /// observed in.
+    ZoneMismatch,
+    /// The credential request names an execution identity the delivery does
+    /// not admit.
+    ExecutionMismatch,
+    /// The credential read, the handshake, or the lease revocation failed.
+    Transport(RelayTransportError),
+}
+
+impl fmt::Display for GraphBoundRelayError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BindingRefused(refusal) => formatter.write_str(refusal.code()),
+            Self::AttachRefused(refusal) => formatter.write_str(refusal.code()),
+            Self::ZoneMismatch => formatter.write_str("relay-delivery-zone-mismatch"),
+            Self::ExecutionMismatch => formatter.write_str("relay-delivery-execution-mismatch"),
+            Self::Transport(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for GraphBoundRelayError {}
+
+impl From<TransportAttachRefusal> for GraphBoundRelayError {
+    fn from(value: TransportAttachRefusal) -> Self {
+        Self::AttachRefused(value)
+    }
+}
+
+impl From<TransportBindingRefusal> for GraphBoundRelayError {
+    fn from(value: TransportBindingRefusal) -> Self {
+        Self::BindingRefused(value)
+    }
+}
+
+impl From<RelayTransportError> for GraphBoundRelayError {
+    fn from(value: RelayTransportError) -> Self {
+        Self::Transport(value)
     }
 }
 

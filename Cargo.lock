@@ -1036,6 +1036,7 @@ name = "d2b-process-conformance"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
  "d2b-core",
  "serde",
  "serde_json",
@@ -1122,6 +1123,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-provider-toolkit",
+ "d2b-resource-types",
  "env_logger",
  "html2text",
  "log",
@@ -1138,18 +1140,6 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-misc",
  "wayland-protocols-wlr",
-]
-
-[[package]]
-name = "d2b-provider-command"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts-resource",
- "d2b-resource-types",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -1184,6 +1174,7 @@ dependencies = [
  "d2b-resource-runtime",
  "d2b-resource-types",
  "parking_lot",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",
@@ -1247,8 +1238,10 @@ dependencies = [
  "d2b-resource-runtime",
  "d2b-resource-types",
  "parking_lot",
+ "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1360,7 +1353,12 @@ dependencies = [
 name = "d2b-provider-emergency-policy"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-resource-runtime",
  "d2b-resource-types",
+ "serde_json",
  "tokio",
 ]
 
@@ -1369,7 +1367,10 @@ name = "d2b-provider-endpoint"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-broker",
+ "d2b-contracts-broker",
  "d2b-contracts-resource",
+ "d2b-core",
  "d2b-provider-device-tpm",
  "d2b-provider-guest-cloud-hypervisor",
  "d2b-provider-toolkit",
@@ -1378,6 +1379,17 @@ dependencies = [
  "parking_lot",
  "schemars",
  "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "d2b-provider-execution-policy"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-resource",
+ "d2b-resource-types",
  "serde_json",
  "tokio",
 ]
@@ -1414,6 +1426,7 @@ dependencies = [
  "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
+ "d2b-provider-toolkit",
  "serde",
  "serde_json",
  "tokio",
@@ -1427,6 +1440,8 @@ dependencies = [
  "async-trait",
  "base64",
  "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
  "d2b-provider-toolkit",
  "serde",
  "serde_json",
@@ -1474,6 +1489,7 @@ name = "d2b-provider-host"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-provider-system-core",
  "d2b-provider-toolkit",
@@ -1514,6 +1530,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
  "d2b-provider-toolkit",
+ "d2b-resource-types",
  "getrandom 0.2.17",
  "serde",
  "serde_json",
@@ -1626,10 +1643,13 @@ dependencies = [
 name = "d2b-provider-quota"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts-resource",
+ "d2b-resource-runtime",
  "d2b-resource-types",
  "schemars",
  "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -1739,6 +1759,7 @@ name = "d2b-provider-system-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-provider-toolkit",
  "serde",
@@ -1843,17 +1864,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-provider-transport-unix"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts-resource",
- "getrandom 0.3.4",
- "rustix 0.38.44",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "d2b-provider-transport-vsock"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1873,6 +1883,7 @@ name = "d2b-provider-user"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-core",
  "d2b-provider-system-core",
@@ -1899,6 +1910,7 @@ dependencies = [
  "d2b-resource-types",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1910,6 +1922,8 @@ dependencies = [
  "d2b-provider-endpoint",
  "d2b-provider-process-minijail",
  "d2b-provider-toolkit",
+ "d2b-provider-volume",
+ "d2b-provider-volume-local",
  "d2b-provider-volume-virtiofs",
  "d2b-resource-runtime",
  "d2b-resource-types",
@@ -1989,8 +2003,10 @@ dependencies = [
 name = "d2b-provider-zone"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-provider-toolkit",
  "d2b-resource-types",
  "tokio",
 ]
@@ -2065,10 +2081,10 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "d2b-contracts-resource",
  "parking_lot",
  "ractor",
  "rusqlite",
- "rusqlite_migration",
  "serde_json",
  "sha2",
  "tempfile",
@@ -2201,8 +2217,10 @@ name = "d2bd"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "base64",
  "clap",
  "d2b-audit",
+ "d2b-broker",
  "d2b-bus",
  "d2b-contracts",
  "d2b-contracts-broker",
@@ -2220,7 +2238,6 @@ dependencies = [
  "d2b-provider-audio-pipewire",
  "d2b-provider-audio-service",
  "d2b-provider-clipboard-wayland",
- "d2b-provider-command",
  "d2b-provider-config-nixos",
  "d2b-provider-credential",
  "d2b-provider-device",
@@ -2231,6 +2248,7 @@ dependencies = [
  "d2b-provider-display-wayland",
  "d2b-provider-emergency-policy",
  "d2b-provider-endpoint",
+ "d2b-provider-execution-policy",
  "d2b-provider-guest",
  "d2b-provider-guest-azure-container-apps",
  "d2b-provider-guest-cloud-hypervisor",
@@ -2268,6 +2286,7 @@ dependencies = [
  "d2b-provider-zone",
  "d2b-provider-zone-link",
  "d2b-resource-api",
+ "d2b-resource-compiler",
  "d2b-resource-runtime",
  "d2b-resource-types",
  "d2b-session",
@@ -2281,6 +2300,7 @@ dependencies = [
  "parking_lot",
  "protobuf",
  "ractor",
+ "ring",
  "rustix 0.38.44",
  "serde",
  "serde_json",
@@ -3963,16 +3983,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rusqlite_migration"
-version = "2.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03451d4dc523c0a96d9e412c574670b3f5f184c3988b77a435876be25477bbd3"
-dependencies = [
- "log",
- "rusqlite",
-]
-
-[[package]]
 name = "rustc-demangle"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5479,7 +5489,6 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core",
- "d2b-provider-command",
  "d2b-provider-endpoint",
  "d2b-provider-guest",
  "d2b-provider-operation",

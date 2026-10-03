@@ -105,10 +105,19 @@ pub const ENDPOINT_EFFECTS_SERVICE: ServiceDecl = ServiceDecl {
 };
 
 /// The one `inspect-endpoint` response payload: the family's committed
-/// purpose vocabulary and realization inventory. The payload is built
-/// through the canonical JSON object path, so a structural character in a
-/// committed purpose yields a correctly escaped report rather than an
-/// unparseable one; the refusal is unreachable and names its own code.
+/// purpose vocabulary, realization inventory, and exact-endpoint delivery
+/// contract. The payload is built through the canonical JSON object path, so
+/// a structural character in a committed purpose yields a correctly escaped
+/// report rather than an unparseable one; the refusal is unreachable and
+/// names its own code.
+///
+/// The `endpointBinding` section is the family's own answer to "how does a
+/// consumer reach one exact endpoint" (U18, R23): the two realization facets
+/// this family declares, the closed set of delivery forms, and - stated
+/// positively, because a report that only lists refusals is not a contract -
+/// that delivery is exact-socket only. Nothing here names a directory, an
+/// environment variable, or a host path, because the endpoint's locator is
+/// resolved privately and stays that way.
 fn inspect_endpoint_response() -> Result<EffectResponse, EffectServiceError> {
     let purpose_entry = |class: &str, producer: Option<(&str, &str)>| {
         let mut entry = serde_json::Map::new();
@@ -135,6 +144,14 @@ fn inspect_endpoint_response() -> Result<EffectResponse, EffectServiceError> {
             "swtpm-control-socket": purpose_entry("control", None),
         },
         "realizations": ["virtiofsd-socket", "guest-control", "device-worker-socket"],
+        "endpointBinding": {
+            "resourceType": "EndpointBinding",
+            "facets": ["endpoint-descriptor", "endpoint-pathname"],
+            "deliveryForms": ["descriptor", "private-socket-presentation"],
+            "scope": "exact-endpoint",
+            "containerDirectoryAuthority": false,
+            "environmentRedirection": "refused",
+        },
     }))
     .map_err(|_| EffectServiceError::Declined {
         service: ENDPOINT_EFFECTS_SERVICE.id.to_owned(),

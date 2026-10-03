@@ -16,6 +16,15 @@
 //! [`VolumeEffectsService`], built from the daemon-supplied declared facets
 //! ([`VolumeEffectFacets`]); the daemon holds no volume effect
 //! implementation and no host state.
+//!
+//! The canonical `VolumeBinding` rows (U14, KTD2/KTD3) are the second
+//! producing half: `reconcile` admits the source's own relationships and
+//! commits one deterministic row per admitted relationship through the
+//! manager-routed child surface. The admission itself needs authorization
+//! evidence and a freshness fence that live in the daemon's authority path,
+//! so they cross the family's declared effect seam
+//! ([`VolumeRuntime::admit_bindings`]) and are never minted here: with none,
+//! the pass commits nothing and says what is missing.
 
 #![deny(missing_docs)]
 
@@ -33,10 +42,14 @@ mod facets;
 pub mod test_support;
 
 pub use driver::{
-    VOLUME_CREATIONS, VOLUME_TYPE_NAME, VolumeDriverArgs, VolumeDriverEffects, volume_descriptor,
-    volume_spec_decoder,
+    BindingDeliverySet, CanonicalBindingChild, VOLUME_CREATIONS, VOLUME_TYPE_NAME, VolumeDriverArgs,
+    VolumeDriverEffects, canonical_binding_children, volume_descriptor, volume_spec_decoder,
 };
 pub use effects_service::{
     VOLUME_EFFECTS_SERVICE, VolumeEffectsService, VolumeEffectsServiceFactory,
 };
-pub use facets::{VolumeEffectFacets, VolumeRuntime};
+pub use facets::{
+    BindingAdmissionEvidence, BindingDelivery, BindingDeliveryReason, BindingEvidenceAbsent,
+    CommittedBinding, VolumeBindingAdmission, VolumeEffectFacets, VolumeRuntime,
+    VolumeServingComposition,
+};

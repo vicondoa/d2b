@@ -30,8 +30,20 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 tracing = "0.1"
 
 [[test]]
+name = "consumer_bindings"
+path = "tests/consumer_bindings.rs"
+
+[[test]]
 name = "registration"
 path = "tests/registration.rs"
 required-features = ["test-support"]
 
+[[test]]
+name = "volume_binding_chain"
+path = "tests/volume_binding_chain.rs"
+required-features = ["test-support"]
+
 [dev-dependencies]
+d2b-provider-volume = { path = "../d2b-provider-volume", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
+

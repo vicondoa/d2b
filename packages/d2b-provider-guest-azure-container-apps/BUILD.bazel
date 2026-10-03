@@ -23,6 +23,7 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, cargo_only = True),
     proc_macro_deps = [
         "@crates//:async-trait",
@@ -37,6 +38,7 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, cargo_only = True),
     proc_macro_deps = [
         "@crates//:async-trait",
@@ -50,6 +52,7 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -79,6 +82,10 @@ filegroup(
             "integration/**/*",
             "nix/**/*",
             "README.md",
+            "operations.json",
+            "registrations.json",
+            "resource-types.json",
+            "service-catalog.json",
             "src/**/*.rs",
             "tests/**/*.rs",
         ],

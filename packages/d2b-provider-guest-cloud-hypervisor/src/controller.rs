@@ -15,7 +15,10 @@ use d2b_core_controller::{ResourceKey, ObservedChild, OwnerIndex, OwnerLimits};
 
 use crate::{
     adoption::ProcessAdoptionStatus,
-    bootstrap_graph::{BootstrapGraph, DependencyReadiness, GuestChildGraphPlan, VmmReadinessSnapshot},
+    bootstrap_graph::{
+        AdmittedGuestGraph, BootstrapGraph, DependencyReadiness, GuestChildGraphPlan,
+        GuestConsumerCompletion, GuestStartGate, VmmReadinessSnapshot,
+    },
     descriptor::{
         GuestSetupDescriptor, GuestSetupDescriptorError, GuestSetupDescriptorVerifier,
         VerifiedGuestSetupDescriptor,
@@ -955,6 +958,16 @@ pub enum GuestCondition {
     UpgradeRequired,
     /// Finalization is blocked by an unresolved lifecycle condition.
     FinalizationBlocked,
+    /// An admitted relationship the Guest consumes has not prepared its
+    /// source yet, so the VMM stays stopped.
+    AdmittedBindingSourceNotPrepared,
+    /// An admitted relationship's consumer side is running but reports the
+    /// relationship did not complete. This is a post-boot regression and
+    /// never retracts the pre-start condition that already permitted boot.
+    AdmittedBindingConsumerIncomplete,
+    /// The Guest still holds admitted use, so its finalizer is retained
+    /// after its descendants are drained.
+    AdmittedBindingUseOutstanding,
 }
 
 /// Public Guest status plus only bounded base conditions.
@@ -1707,6 +1720,14 @@ struct StatusProjectionOptions<'a> {
 /// Cloud Hypervisor Guest controller.
 pub struct CloudHypervisorController<A> {
     graph: BootstrapGraph,
+    /// The admitted relationships this Guest consumes, when the caller
+    /// supplied them.
+    ///
+    /// `None` is the unchanged production posture, where the flattened
+    /// attachment families are still the only inputs. `Some` makes the
+    /// admitted graph the authority for the pre-start decision, which is
+    /// what removes the provider's own attachment list as launch policy.
+    admitted: Option<AdmittedGuestGraph>,
     descriptor: VerifiedGuestSetupDescriptor,
     registration: CloudHypervisorControllerRegistration,
     api: Arc<A>,
@@ -1737,6 +1758,7 @@ where
             CloudHypervisorControllerRegistration::from_verified_descriptor(&descriptor)?;
         Ok(Self {
             graph,
+            admitted: None,
             descriptor,
             registration,
             api,
@@ -1775,6 +1797,23 @@ where
     pub fn with_lifecycle_intent(mut self, intent: Option<DesiredLifecycle>) -> Self {
         self.lifecycle_intent = intent;
         self
+    }
+
+    /// Make the admitted graph the authority for this Guest's pre-start
+    /// decision.
+    ///
+    /// The flattened attachment families still report their own conditions
+    /// so the cutover is observable, but they stop deciding: a support
+    /// ceiling a Guest declared for its children is an admission constraint
+    /// and must never hold its own boot (AE31).
+    pub fn with_admitted_graph(mut self, admitted: AdmittedGuestGraph) -> Self {
+        self.admitted = Some(admitted);
+        self
+    }
+
+    /// Borrow the admitted graph, when one was supplied.
+    pub const fn admitted_graph(&self) -> Option<&AdmittedGuestGraph> {
+        self.admitted.as_ref()
     }
 
     /// Register the controller on its authenticated Resource API session.
@@ -1899,7 +1938,26 @@ where
                     "reconcile could not observe dependency status"
                 );
             })?;
-        let (dependency_readiness, dependency_conditions) = dependencies.readiness(&self.graph);
+        let (legacy_readiness, mut dependency_conditions) = dependencies.readiness(&self.graph);
+        // U21: when the caller supplied the admitted graph, the relationships
+        // the Guest actually consumes decide whether it may start. The
+        // flattened families keep reporting their own conditions so the
+        // cutover stays observable, but they stop deciding: a Device or
+        // Network a Guest declared for its children is a support ceiling, not
+        // something the Guest uses, and waiting for it would gate boot on an
+        // admission constraint (AE31).
+        let dependency_readiness = match self.admitted.as_ref() {
+            Some(admitted) => {
+                self.extend_admitted_conditions(admitted, &mut dependency_conditions);
+                match admitted.start_gate() {
+                    GuestStartGate::Permitted => DependencyReadiness::Ready,
+                    GuestStartGate::SourcePending | GuestStartGate::Refused => {
+                        DependencyReadiness::Pending
+                    }
+                }
+            }
+            None => legacy_readiness,
+        };
 
         if guest.deleting() {
             return self
@@ -2195,6 +2253,26 @@ where
             );
         })?;
         Ok(CloudHypervisorReconcileOutcome::from_status(status, false))
+    }
+
+
+    /// Fold the admitted graph's own verdicts into the projected conditions.
+    ///
+    /// The pre-start condition and the post-boot completion stay separate
+    /// conditions because they are separate facts: source preparation is
+    /// what the Guest's start waits on, and a consumer-side mount that has
+    /// not completed is observed after boot rather than waited on before it.
+    fn extend_admitted_conditions(
+        &self,
+        admitted: &AdmittedGuestGraph,
+        conditions: &mut Vec<GuestCondition>,
+    ) {
+        if admitted.start_gate() != GuestStartGate::Permitted {
+            conditions.push(GuestCondition::AdmittedBindingSourceNotPrepared);
+        }
+        if admitted.consumer_completion() == GuestConsumerCompletion::Incomplete {
+            conditions.push(GuestCondition::AdmittedBindingConsumerIncomplete);
+        }
     }
 
     fn validate_guest(
@@ -2717,6 +2795,38 @@ where
                     self.retire_child(guest, child);
                 }
                 FinalizationStep::ClearGuestFinalizer => {
+                    // R36: the descendants above are gone, but the Guest's
+                    // own admitted use is still outstanding. Retiring the
+                    // Guest now would leave a relationship whose consumer no
+                    // longer exists, so the finalizer is retained until the
+                    // source reports the use released.
+                    if self
+                        .admitted
+                        .as_ref()
+                        .is_some_and(AdmittedGuestGraph::use_outstanding)
+                    {
+                        tracing::debug!(
+                            zone = ?guest.zone,
+                            resource = ?guest.resource_ref,
+                            "admitted Guest binding use is still outstanding; retaining the controller finalizer"
+                        );
+                        let mut outstanding = dependency_conditions.clone();
+                        outstanding.push(GuestCondition::AdmittedBindingUseOutstanding);
+                        return Ok(CloudHypervisorReconcileOutcome::from_status(
+                            self.project_status(
+                                guest,
+                                plan,
+                                children,
+                                dependency_readiness,
+                                outstanding,
+                                StatusProjectionOptions {
+                                    extra_conditions: &[],
+                                    force_degraded: false,
+                                },
+                            ),
+                            false,
+                        ));
+                    }
                     let status = self.project_status(
                         guest,
                         plan,

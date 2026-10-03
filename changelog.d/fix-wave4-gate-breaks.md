@@ -19,3 +19,24 @@
   realized supply-chain lane requires.
 - Refreshed the async-gate inventory so its recorded marker-honored sites match
   the current `d2bd` composition sources.
+- Fixed `check-async-gate` resolving a relative `<paths>` argument against the
+  caller's working directory instead of the repository root, so a subset scan
+  could read whichever tree the process happened to be standing in and report
+  drift that belonged to a different checkout.
+- Fixed the async gate's zero-file-scan check so it builds the empty-scan
+  condition on purpose (a workspace whose control plane resolves but whose
+  crates hold no Rust) instead of depending on the default scan set coming out
+  empty. The gate still fails closed on a scan that matched no `.rs` file.
+- Dropped the stale `cloud_hypervisor` row for
+  `packages/d2b-broker/src/ops/cgroup.rs` from the shared-family-knowledge
+  ratchet. The dead-code scoping pass deleted the module's last carriers of the
+  token (`runner_role_matches`, `resolve_kill_path`, `runner_cgroup_shape`), so
+  the row's signal is gone and the two-way pin failed both
+  `//bazel/checks/policy:provider_crate_layout` and
+  `provider_crate_policy::tests::
+  the_family_knowledge_ratchet_matches_the_committed_tree`. Re-seeding was not
+  an option: the check refuses a row whose signal the tree no longer carries.
+- Rewrote the ratchet's `retires_with` values to name the retirement by what it
+  does (the family's own census step, its rollout into its provider crate, or a
+  permanent carve-out) instead of by plan-unit label, so the diagnostics this
+  table emits no longer carry internal plan identifiers.

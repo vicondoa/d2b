@@ -541,6 +541,7 @@ fn network_input(
         ),
         spec.clone(),
         Vec::new(),
+        Vec::new(),
     )
     .unwrap()
     .proof();
@@ -701,6 +702,11 @@ impl FilesystemTpm {
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+/// The Device uid the TPM boundary fixture and its test share, so the
+/// fixture's state Volume is the relationship the controller derives rather
+/// than a row it would refuse.
+const TPM_DEVICE_UID: &str = "323e4567-e89b-42d3-a456-426614174002";
+
 impl TpmResourceEffectPort for FilesystemTpm {
     async fn ensure_state_volume(
         &self,
@@ -712,7 +718,21 @@ impl TpmResourceEffectPort for FilesystemTpm {
         tokio::fs::create_dir_all(&state_dir)
             .await
             .map_err(|_| TpmResourceEffectError::Transient)?;
-        Ok(ResourceRef::parse("Volume/device-tpm-state").unwrap())
+        // The state Volume is this Device's own derived relationship, so the
+        // port hands back the identity the controller derived rather than a
+        // row the framework would have to discover.
+        Ok(
+            TpmResourceController::new(
+                ZoneId::parse("work").unwrap(),
+                ResourceUid::parse(TPM_DEVICE_UID).unwrap(),
+                ResourceRef::parse("Device/work-tpm").unwrap(),
+                ResourceRef::parse("Host/host-system").unwrap(),
+            )
+            .expect("the fixture controller derives its state identity")
+            .state_identity()
+            .volume_ref()
+            .clone(),
+        )
     }
 
     async fn request_swtpm_process(
@@ -829,10 +849,14 @@ impl Drop for FilesystemTpm {
 async fn device_tpm_zone_activation_ready_and_state_preserving_removal() {
     let directory = tempfile::tempdir().expect("TPM state directory");
     let effects = FilesystemTpm::new(directory.path());
-    let device = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
+    let device = ResourceUid::parse(TPM_DEVICE_UID).unwrap();
     let device_ref = ResourceRef::parse("Device/work-tpm").unwrap();
     let execution = ResourceRef::parse("Host/host-system").unwrap();
-    let mut controller = TpmResourceController::new(device, device_ref, execution).unwrap();
+    // The controller derives this Device's durable state relationships from the
+    // Zone the Device lives in, so name the Zone this file's other fixtures use.
+    let mut controller =
+        TpmResourceController::new(ZoneId::parse("work").unwrap(), device, device_ref, execution)
+            .unwrap();
 
     assert_eq!(
         controller.reconcile(&effects).await.unwrap(),

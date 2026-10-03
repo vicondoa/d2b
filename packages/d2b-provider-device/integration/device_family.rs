@@ -13,11 +13,39 @@ use d2b_provider_device::{
     DEVICE_REGISTRATIONS, DeviceComponent, DeviceDriverArgs, DeviceResourceState,
     device_descriptor,
 };
-use d2b_provider_device::facets::{DeviceEffectFacets, DeviceRuntime};
+use d2b_provider_device::facets::{
+    DeviceBindingAuthoritySource, DeviceEffectFacets, DeviceInventorySource, DeviceRuntime,
+};
 use d2b_provider_toolkit::{
     SharedProviderEffectOutcome, SharedProviderEffectError, SharedProviderEffectPhase,
     SharedProviderEffectRequest, SharedProviderFinalize,
 };
+
+/// A row whose trusted host inventory cannot be resolved admits nothing.
+struct UnavailableInventory;
+
+#[async_trait::async_trait]
+impl DeviceInventorySource for UnavailableInventory {
+    async fn device_inventory(
+        &self,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<d2b_provider_device::binding::DeviceInventory, SharedProviderEffectError> {
+        Err(SharedProviderEffectError::InvalidResource)
+    }
+}
+
+/// A row whose authority journal cannot answer has no evidence to show.
+struct UnavailableAuthority;
+
+#[async_trait::async_trait]
+impl DeviceBindingAuthoritySource for UnavailableAuthority {
+    async fn binding_evidence(
+        &self,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<d2b_provider_device::DeviceBindingEvidence, SharedProviderEffectError> {
+        Err(SharedProviderEffectError::Unavailable)
+    }
+}
 
 struct UnavailableRuntime;
 
@@ -51,6 +79,8 @@ fn the_device_type_registers_one_driver_over_four_provider_rows() {
         controller_generation: ControllerGeneration::new(1).expect("generation"),
         facets: DeviceEffectFacets {
             runtime: Arc::new(UnavailableRuntime),
+            inventory: Arc::new(UnavailableInventory),
+            authority: Arc::new(UnavailableAuthority),
         },
     });
     let registered = descriptor

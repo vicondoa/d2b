@@ -4,6 +4,8 @@ use crate::{
     AudioBindingSpec, AudioChannel, AudioGrant, AudioLeaseId, AudioMediator, AudioMediatorError,
     AudioReadiness, GuestAudioReadiness, HostAudioReadiness, MicDecision, SharedMicrophoneArbiter,
     SpeakerMixer, validate_audio_binding_in_zone,
+    authority::{AudioAuthorityError, ChannelSession},
+    mediator::{AdmittedAudioMediator, AudioSessionPlan},
 };
 use d2b_contracts_provider::v3::semantic_services::{
     SemanticFamily,
@@ -335,289 +337,82 @@ impl<M: AudioMediator> AudioBindingController<M> {
     }
 
     /// Reconcile one binding without opening a host handle itself.
+    ///
+    /// This is the retained pass for callers that have not yet observed an
+    /// admitted endpoint relationship. It records the channel bookkeeping
+    /// against an unadmitted session, and a later admitted pass for the same
+    /// lease is refused rather than being allowed to inherit it.
     pub fn reconcile(
         &mut self,
         binding: &AudioBindingSpec,
         service_zone: &str,
         lease: AudioLeaseId,
     ) -> Result<AudioReconcileResult, AudioControllerError> {
-        validate_audio_binding_in_zone(binding, service_zone).map_err(|error| {
-            debug!(
-                zone = %service_zone,
-                error = %error,
-                "audio binding admission rejected during reconcile"
-            );
-            AudioControllerError::Admission
-        })?;
-        let host_readiness = self.mediator.host_readiness();
-        let guest_readiness = self.mediator.guest_readiness();
-        let mut microphone = None;
-        let mut host_effect_applied = false;
-        let mut guest_effect_applied = false;
-        let mut speaker_live_enforced = false;
-        let mut microphone_live_enforced = false;
+        reconcile_channels(
+            &mut self.mediator,
+            &self.microphone,
+            &mut self.microphone_effect_applied,
+            &mut self.speaker,
+            binding,
+            service_zone,
+            lease,
+            self.handoff,
+            ChannelSessions::UNADMITTED,
+        )
+    }
 
-        if binding.grants.mic == AudioGrant::On {
-            let already_active = self.active_microphone_lease() == Some(lease);
-            let decision = match self.microphone.try_lock() {
-                Ok(mut arbiter) => arbiter.request(lease),
-                // U4 fail-closed: a busy shared arbiter refuses the request
-                // rather than parking the caller's thread. The binding stays
-                // muted and the next reconcile retries arbitration.
-                Err(_) => MicDecision::QueueFull,
-            };
-            microphone = Some(decision);
-            match decision {
-                MicDecision::Queued => debug!(
-                    zone = %service_zone,
-                    lease = ?lease,
-                    "microphone arbitration queued for binding"
-                ),
-                MicDecision::QueueFull => debug!(
-                    zone = %service_zone,
-                    lease = ?lease,
-                    "microphone arbitration queue full for binding"
-                ),
-                MicDecision::Granted => {}
-            }
-            let needs_effect = decision == MicDecision::Granted
-                && (!already_active || !self.microphone_effect_applied);
-            if needs_effect {
-                self.mediator
-                    .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
-                    .map_err(|error| {
-                        warn!(
-                            zone = %service_zone,
-                            channel = "microphone",
-                            lease = ?lease,
-                            error = %error,
-                            "microphone grant mediation failed for binding"
-                        );
-                        if !already_active {
-                            // U4 fail-closed: a busy arbiter skips this
-                            // rollback; the next reconcile re-arbitrates and
-                            // the lease is never granted without an effect.
-                            if let Ok(mut arbiter) = self.microphone.try_lock() {
-                                arbiter.release(lease);
-                            }
-                        } else if let Ok(mut arbiter) = self.microphone.try_lock() {
-                            arbiter.requeue_active(lease);
-                        }
-                        AudioControllerError::Mediator(error)
-                    })?;
-                self.microphone_effect_applied = true;
-                host_effect_applied = true;
-                guest_effect_applied = guest_readiness == GuestAudioReadiness::Ready;
-                microphone_live_enforced = true;
-            } else {
-                microphone_live_enforced = self.microphone_effect_applied;
-            }
-        } else {
-            let was_active = self.active_microphone_lease() == Some(lease);
-            self.release_microphone(lease)?;
-            if was_active {
-                host_effect_applied = true;
-                guest_effect_applied = guest_readiness == GuestAudioReadiness::Ready;
-                microphone_live_enforced = true;
-            }
-        }
-        if binding.grants.speaker == AudioGrant::On {
-            let transition = self
-                .speaker
-                .grant(lease)
-                .map_err(|error| {
-                    debug!(
-                        zone = %service_zone,
-                        lease = ?lease,
-                        error = %error,
-                        "speaker grant bookkeeping rejected for binding"
-                    );
-                    AudioControllerError::Admission
-                })?;
-            if transition {
-                if let Err(error) = self
-                    .mediator
-                    .set_channel_grant(AudioChannel::Speaker, AudioGrant::On)
-                {
-                    warn!(
-                        zone = %service_zone,
-                        channel = "speaker",
-                        lease = ?lease,
-                        error = %error,
-                        "speaker grant mediation failed for binding"
-                    );
-                    if let Err(rollback_error) = self.speaker.revoke(lease) {
-                        warn!(
-                            zone = %service_zone,
-                            lease = ?lease,
-                            error = %rollback_error,
-                            "speaker grant rollback failed after mediation failure"
-                        );
-                    }
-                    return Err(AudioControllerError::Mediator(error));
-                }
-                host_effect_applied = true;
-                guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
-                speaker_live_enforced = true;
-            } else {
-                speaker_live_enforced = true;
-            }
-        } else if self.speaker.has_grant(lease) {
-            let last = self.speaker.is_last_grant(lease);
-            if last {
-                self.mediator
-                    .set_channel_grant(AudioChannel::Speaker, AudioGrant::Off)
-                    .map_err(|error| {
-                        warn!(
-                            zone = %service_zone,
-                            channel = "speaker",
-                            lease = ?lease,
-                            error = %error,
-                            "speaker mute mediation failed for binding"
-                        );
-                        AudioControllerError::Mediator(error)
-                    })?;
-            }
-            self.speaker
-                .revoke(lease)
-                .map_err(|error| {
-                    debug!(
-                        zone = %service_zone,
-                        lease = ?lease,
-                        error = %error,
-                        "speaker revoke bookkeeping rejected for binding"
-                    );
-                    AudioControllerError::Admission
-                })?;
-            if last {
-                host_effect_applied = true;
-                guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
-                speaker_live_enforced = true;
-            }
-        }
-        if let Some(level) = binding.grants.speaker_level {
-            self.speaker
-                .can_set_level(lease, level.get())
-                .map_err(|error| {
-                    debug!(
-                        zone = %service_zone,
-                        lease = ?lease,
-                        error = %error,
-                        "speaker level precondition rejected for binding"
-                    );
-                    AudioControllerError::Admission
-                })?;
-            if self.speaker.level(lease) != Some(level.get()) {
-                self.mediator
-                    .set_channel_level(AudioChannel::Speaker, level)
-                    .map_err(|error| {
-                        warn!(
-                            zone = %service_zone,
-                            channel = "speaker",
-                            lease = ?lease,
-                            error = %error,
-                            "speaker level mediation failed for binding"
-                        );
-                        AudioControllerError::Mediator(error)
-                    })?;
-                host_effect_applied = true;
-                guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
-                speaker_live_enforced = true;
-            }
-            self.speaker
-                .set_level(lease, level.get())
-                .map_err(|error| {
-                    debug!(
-                        zone = %service_zone,
-                        lease = ?lease,
-                        error = %error,
-                        "speaker level bookkeeping rejected for binding"
-                    );
-                    AudioControllerError::Admission
-                })?;
-            if self.speaker.level(lease) == Some(level.get()) {
-                speaker_live_enforced = speaker_live_enforced || self.speaker.has_grant(lease);
-            }
-        }
-        if let Some(gain) = binding.grants.mic_gain
-            && microphone == Some(MicDecision::Granted)
-        {
-            self.mediator
-                .set_channel_level(AudioChannel::Microphone, gain)
-                .map_err(|error| {
-                    warn!(
-                        zone = %service_zone,
-                        channel = "microphone",
-                        lease = ?lease,
-                        error = %error,
-                        "microphone gain mediation failed for binding"
-                    );
-                    AudioControllerError::Mediator(error)
-                })?;
-            host_effect_applied = true;
-            guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
-            microphone_live_enforced = true;
-        }
+    /// Reconcile one binding behind the endpoint relationships the graph
+    /// admitted for its channels.
+    ///
+    /// Every host and guest effect this pass reaches is carried by the exact
+    /// relationship admitted for that channel, and the observed fences are
+    /// what the carrier checks immediately before the effect runs, so a
+    /// relationship that was revoked or re-committed stops serving effects
+    /// even if the pass was already scheduled.
+    pub fn reconcile_admitted(
+        &mut self,
+        binding: &AudioBindingSpec,
+        service_zone: &str,
+        lease: AudioLeaseId,
+        sessions: &AudioSessionPlan,
+        observed: &[crate::mediator::AudioBindingFence],
+    ) -> Result<AudioReconcileResult, AudioControllerError> {
+        let mut carrier = AdmittedAudioMediator::new(
+            &mut self.mediator,
+            sessions.clone(),
+            observed.to_vec(),
+        );
+        reconcile_channels(
+            &mut carrier,
+            &self.microphone,
+            &mut self.microphone_effect_applied,
+            &mut self.speaker,
+            binding,
+            service_zone,
+            lease,
+            self.handoff,
+            &ChannelSessions::from_plan(sessions),
+        )
+    }
 
-        let phase = match microphone {
-            Some(MicDecision::Queued) => AudioBindingPhase::Pending,
-            Some(MicDecision::QueueFull) => AudioBindingPhase::Degraded,
-            _ if self.mediator.readiness() == AudioReadiness::Ready => AudioBindingPhase::Ready,
-            _ => {
-                debug!(
-                    zone = %service_zone,
-                    lease = ?lease,
-                    "audio mediator readiness degraded for binding"
-                );
-                AudioBindingPhase::Degraded
-            }
-        };
-        let arbitration_state = match microphone {
-            Some(MicDecision::Granted) => AudioArbitrationState::Active,
-            Some(MicDecision::Queued) => AudioArbitrationState::Queued,
-            Some(MicDecision::QueueFull) => AudioArbitrationState::Blocked,
-            None => AudioArbitrationState::Inactive,
-        };
-        let enforcement_posture = match (
-            host_effect_applied || speaker_live_enforced || microphone_live_enforced,
-            guest_effect_applied,
-        ) {
-            (true, true) => AudioEnforcementPosture::HostAndGuest,
-            (true, false) => AudioEnforcementPosture::HostOnly,
-            (false, true) => AudioEnforcementPosture::GuestOnly,
-            (false, false) => AudioEnforcementPosture::None,
-        };
-        let last_set_applied = match (host_effect_applied, guest_effect_applied) {
-            (true, true) => AudioLastSetApplied::HostAndGuest,
-            (true, false) => AudioLastSetApplied::HostOnly,
-            (false, true) => AudioLastSetApplied::GuestOnly,
-            (false, false) => AudioLastSetApplied::NotApplied,
-        };
-        Ok(AudioReconcileResult {
-            status: AudioBindingStatus {
-                phase,
-                host_readiness,
-                guest_readiness,
-                microphone,
-                channels: AudioBindingChannels {
-                    speaker: AudioSpeakerStatus {
-                        grant: binding.grants.speaker,
-                        level: binding.grants.speaker_level,
-                        live_enforced: speaker_live_enforced,
-                    },
-                    mic: AudioMicrophoneStatus {
-                        grant: binding.grants.mic,
-                        gain: binding.grants.mic_gain,
-                        live_enforced: microphone_live_enforced,
-                        arbitration_state,
-                    },
-                },
-                enforcement_posture,
-                last_set_applied,
-            },
-            host_effect_applied,
-            guest_effect_applied,
-        })
+    /// Revoke both channels after a restart that cannot adopt in-memory
+    /// state.
+    ///
+    /// The microphone mute is reported before the speaker mute and each
+    /// rides its own admitted relationship, so one channel being revoked
+    /// never stands in for the other and a refusal on one leaves the other's
+    /// revocation to the next pass.
+    pub fn revoke_unmanaged_admitted(
+        &mut self,
+        sessions: &AudioSessionPlan,
+        observed: &[crate::mediator::AudioBindingFence],
+    ) -> Result<(), AudioControllerError> {
+        let mut carrier = AdmittedAudioMediator::new(
+            &mut self.mediator,
+            sessions.clone(),
+            observed.to_vec(),
+        );
+        revoke_unmanaged_on(&mut carrier)
     }
 
     /// Finalize one binding with mute-before-release ordering.
@@ -636,27 +431,7 @@ impl<M: AudioMediator> AudioBindingController<M> {
     /// adopted. The caller must first establish that no surviving Binding
     /// still owns the target's authority.
     pub fn revoke_unmanaged(&mut self) -> Result<(), AudioControllerError> {
-        self.mediator
-            .set_channel_grant(AudioChannel::Microphone, AudioGrant::Off)
-            .map_err(|error| {
-                warn!(
-                    channel = "microphone",
-                    error = %error,
-                    "unmanaged microphone revoke mediation failed after restart"
-                );
-                AudioControllerError::Mediator(error)
-            })?;
-        self.mediator
-            .set_channel_grant(AudioChannel::Speaker, AudioGrant::Off)
-            .map_err(|error| {
-                warn!(
-                    channel = "speaker",
-                    error = %error,
-                    "unmanaged speaker revoke mediation failed after restart"
-                );
-                AudioControllerError::Mediator(error)
-            })?;
-        Ok(())
+        revoke_unmanaged_on(&mut self.mediator)
     }
 
     /// Apply the microphone effect for a lease promoted by another shared
@@ -713,57 +488,457 @@ impl<M: AudioMediator> AudioBindingController<M> {
         &mut self,
         lease: AudioLeaseId,
     ) -> Result<Option<AudioLeaseId>, AudioControllerError> {
-        if self.active_microphone_lease() != Some(lease) {
-            // U4 fail-closed: a busy arbiter defers the queue cleanup; the
-            // next reconcile/finalize for this lease retries the release.
-            if let Ok(mut arbiter) = self.microphone.try_lock() {
-                arbiter.release(lease);
-            }
-            return Ok(None);
+        release_microphone(
+            &mut self.mediator,
+            &self.microphone,
+            &mut self.microphone_effect_applied,
+            self.handoff,
+            lease,
+        )
+    }
+}
+
+/// The admitted relationship each channel's bookkeeping rides in one pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChannelSessions {
+    speaker: ChannelSession,
+    microphone: ChannelSession,
+}
+
+impl ChannelSessions {
+    /// The retained pass that has not observed an admitted relationship.
+    ///
+    /// A channel recorded against this session can never be continued by an
+    /// admitted pass, because the recorded relationship and the admitted one
+    /// are never equal.
+    const UNADMITTED: &'static Self = &Self {
+        speaker: ChannelSession::UNADMITTED,
+        microphone: ChannelSession::UNADMITTED,
+    };
+
+    /// Project the admitted relationships of one plan onto the tables.
+    ///
+    /// A channel the plan does not carry falls back to the unadmitted
+    /// session, which the carrier then refuses: an absent relationship is
+    /// never treated as an admitted one.
+    fn from_plan(sessions: &AudioSessionPlan) -> Self {
+        let channel = |target: AudioChannel| -> ChannelSession {
+            sessions
+                .session(target)
+                .and_then(|session| ChannelSession::admit(target, session).ok())
+                .unwrap_or(ChannelSession::UNADMITTED)
+        };
+        Self {
+            speaker: channel(AudioChannel::Speaker),
+            microphone: channel(AudioChannel::Microphone),
         }
-        self.mediator
-            .set_channel_grant(AudioChannel::Microphone, AudioGrant::Off)
-            .map_err(|error| {
+    }
+}
+
+/// Report one channel-authority refusal as an admission refusal.
+///
+/// The refusing stage is the relationship the grant or level was taken
+/// under, and the typed reason travels in the log line; the returned class
+/// stays the one the family's callers already classify as admission.
+fn authority_refusal(
+    zone: &str,
+    stage: &'static str,
+    error: AudioAuthorityError,
+) -> AudioControllerError {
+    debug!(
+        zone = %zone,
+        stage,
+        error = %error,
+        "audio channel authority refused the requested operation"
+    );
+    AudioControllerError::Admission
+}
+
+/// The active capture lease, without parking on the shared table.
+fn active_microphone_lease(microphone: &SharedMicrophoneArbiter) -> Option<AudioLeaseId> {
+    let Ok(arbiter) = microphone.try_lock() else {
+        return None;
+    };
+    arbiter.active()
+}
+
+/// Revoke both channels through one mediator.
+fn revoke_unmanaged_on<M: AudioMediator>(
+    mediator: &mut M,
+) -> Result<(), AudioControllerError> {
+    mediator
+        .set_channel_grant(AudioChannel::Microphone, AudioGrant::Off)
+        .map_err(|error| {
+            warn!(
+                channel = "microphone",
+                error = %error,
+                "unmanaged microphone revoke mediation failed after restart"
+            );
+            AudioControllerError::Mediator(error)
+        })?;
+    mediator
+        .set_channel_grant(AudioChannel::Speaker, AudioGrant::Off)
+        .map_err(|error| {
+            warn!(
+                channel = "speaker",
+                error = %error,
+                "unmanaged speaker revoke mediation failed after restart"
+            );
+            AudioControllerError::Mediator(error)
+        })?;
+    Ok(())
+}
+
+/// Release the capture lease, muting before the handoff.
+fn release_microphone<M: AudioMediator>(
+    mediator: &mut M,
+    microphone: &SharedMicrophoneArbiter,
+    microphone_effect_applied: &mut bool,
+    handoff: MicrophoneHandoff,
+    lease: AudioLeaseId,
+) -> Result<Option<AudioLeaseId>, AudioControllerError> {
+    if active_microphone_lease(microphone) != Some(lease) {
+        // U4 fail-closed: a busy arbiter defers the queue cleanup; the
+        // next reconcile/finalize for this lease retries the release.
+        if let Ok(mut arbiter) = microphone.try_lock() {
+            arbiter.release(lease);
+        }
+        return Ok(None);
+    }
+    mediator
+        .set_channel_grant(AudioChannel::Microphone, AudioGrant::Off)
+        .map_err(|error| {
+            warn!(
+                lease = ?lease,
+                error = %error,
+                "microphone mute mediation failed during release"
+            );
+            AudioControllerError::Mediator(error)
+        })?;
+    *microphone_effect_applied = false;
+    // U4 fail-closed: a busy arbiter defers the handoff; the caller's
+    // next reconcile/finalize retries the release and promotion.
+    let next = match microphone.try_lock() {
+        Ok(mut arbiter) => {
+            arbiter.release(lease);
+            arbiter.next_lease()
+        }
+        Err(_) => None,
+    };
+    let Some(next) = next else {
+        return Ok(None);
+    };
+    if handoff == MicrophoneHandoff::Enable
+        && let Err(error) =
+            mediator.set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
+    {
+        warn!(
+            lease = ?next,
+            error = %error,
+            "promoted microphone activation mediation failed during release"
+        );
+        // U4 fail-closed: a busy arbiter skips the requeue; the next
+        // reconcile re-arbitrates the still-pending lease.
+        if let Ok(mut arbiter) = microphone.try_lock() {
+            arbiter.requeue_active(next);
+        }
+        return Err(AudioControllerError::Mediator(error));
+    }
+    if handoff == MicrophoneHandoff::Enable {
+        *microphone_effect_applied = true;
+    }
+    Ok(Some(next))
+}
+
+/// Run one binding's channel bookkeeping behind one mediator and one
+/// relationship per channel.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the pass threads one mediator, two channel tables, and the admitted relationships"
+)]
+fn reconcile_channels<M: AudioMediator>(
+    mediator: &mut M,
+    microphone: &SharedMicrophoneArbiter,
+    microphone_effect_applied: &mut bool,
+    speaker: &mut SpeakerMixer,
+    binding: &AudioBindingSpec,
+    service_zone: &str,
+    lease: AudioLeaseId,
+    handoff: MicrophoneHandoff,
+    sessions: &ChannelSessions,
+) -> Result<AudioReconcileResult, AudioControllerError> {
+    validate_audio_binding_in_zone(binding, service_zone).map_err(|error| {
+        debug!(
+            zone = %service_zone,
+            error = %error,
+            "audio binding admission rejected during reconcile"
+        );
+        AudioControllerError::Admission
+    })?;
+    let host_readiness = mediator.host_readiness();
+    let guest_readiness = mediator.guest_readiness();
+    let mut microphone_decision = None;
+    let mut host_effect_applied = false;
+    let mut guest_effect_applied = false;
+    let mut speaker_live_enforced = false;
+    let mut microphone_live_enforced = false;
+
+    if binding.grants.mic == AudioGrant::On {
+        let already_active = active_microphone_lease(microphone) == Some(lease);
+        let session = &sessions.microphone;
+        let decision = match microphone.try_lock() {
+            Ok(mut arbiter) => arbiter
+                .request(lease, session)
+                .map_err(|error| authority_refusal(
+                    service_zone,
+                    "microphone arbitration rejected the presented relationship",
+                    error,
+                ))?,
+            // U4 fail-closed: a busy shared arbiter refuses the request
+            // rather than parking the caller's thread. The binding stays
+            // muted and the next reconcile retries arbitration.
+            Err(_) => MicDecision::QueueFull,
+        };
+        microphone_decision = Some(decision);
+        match decision {
+            MicDecision::Queued => debug!(
+                zone = %service_zone,
+                lease = ?lease,
+                "microphone arbitration queued for binding"
+            ),
+            MicDecision::QueueFull => debug!(
+                zone = %service_zone,
+                lease = ?lease,
+                "microphone arbitration queue full for binding"
+            ),
+            MicDecision::Granted => {}
+        }
+        let needs_effect =
+            decision == MicDecision::Granted && (!already_active || !*microphone_effect_applied);
+        if needs_effect {
+            mediator
+                .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
+                .map_err(|error| {
+                    warn!(
+                        zone = %service_zone,
+                        channel = "microphone",
+                        lease = ?lease,
+                        error = %error,
+                        "microphone grant mediation failed for binding"
+                    );
+                    if !already_active {
+                        // U4 fail-closed: a busy arbiter skips this
+                        // rollback; the next reconcile re-arbitrates and
+                        // the lease is never granted without an effect.
+                        if let Ok(mut arbiter) = microphone.try_lock() {
+                            arbiter.release(lease);
+                        }
+                    } else if let Ok(mut arbiter) = microphone.try_lock() {
+                        arbiter.requeue_active(lease);
+                    }
+                    AudioControllerError::Mediator(error)
+                })?;
+            *microphone_effect_applied = true;
+            host_effect_applied = true;
+            guest_effect_applied = guest_readiness == GuestAudioReadiness::Ready;
+            microphone_live_enforced = true;
+        } else {
+            microphone_live_enforced = *microphone_effect_applied;
+        }
+    } else {
+        let was_active = active_microphone_lease(microphone) == Some(lease);
+        release_microphone(
+            mediator,
+            microphone,
+            microphone_effect_applied,
+            handoff,
+            lease,
+        )?;
+        if was_active {
+            host_effect_applied = true;
+            guest_effect_applied = guest_readiness == GuestAudioReadiness::Ready;
+            microphone_live_enforced = true;
+        }
+    }
+    if binding.grants.speaker == AudioGrant::On {
+        let session = &sessions.speaker;
+        let transition = speaker
+            .grant(lease, session)
+            .map_err(|error| authority_refusal(
+                service_zone,
+                "speaker grant bookkeeping rejected for binding",
+                error,
+            ))?;
+        if transition {
+            if let Err(error) =
+                mediator.set_channel_grant(AudioChannel::Speaker, AudioGrant::On)
+            {
                 warn!(
+                    zone = %service_zone,
+                    channel = "speaker",
                     lease = ?lease,
                     error = %error,
-                    "microphone mute mediation failed during release"
+                    "speaker grant mediation failed for binding"
+                );
+                if let Err(rollback_error) = speaker.revoke(lease) {
+                    warn!(
+                        zone = %service_zone,
+                        lease = ?lease,
+                        error = %rollback_error,
+                        "speaker grant rollback failed after mediation failure"
+                    );
+                }
+                return Err(AudioControllerError::Mediator(error));
+            }
+            host_effect_applied = true;
+            guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
+            speaker_live_enforced = true;
+        } else {
+            speaker_live_enforced = true;
+        }
+    } else if speaker.has_grant(lease) {
+        let last = speaker.is_last_grant(lease);
+        if last {
+            mediator
+                .set_channel_grant(AudioChannel::Speaker, AudioGrant::Off)
+                .map_err(|error| {
+                    warn!(
+                        zone = %service_zone,
+                        channel = "speaker",
+                        lease = ?lease,
+                        error = %error,
+                        "speaker mute mediation failed for binding"
+                    );
+                    AudioControllerError::Mediator(error)
+                })?;
+        }
+        speaker
+            .revoke(lease)
+            .map_err(|error| authority_refusal(
+                service_zone,
+                "speaker revoke bookkeeping rejected for binding",
+                error,
+            ))?;
+        if last {
+            host_effect_applied = true;
+            guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
+            speaker_live_enforced = true;
+        }
+    }
+    if let Some(level) = binding.grants.speaker_level {
+        let session = &sessions.speaker;
+        speaker
+            .can_set_level(lease, level.get(), session)
+            .map_err(|error| authority_refusal(
+                service_zone,
+                "speaker level precondition rejected for binding",
+                error,
+            ))?;
+        if speaker.level(lease) != Some(level.get()) {
+            mediator
+                .set_channel_level(AudioChannel::Speaker, level)
+                .map_err(|error| {
+                    warn!(
+                        zone = %service_zone,
+                        channel = "speaker",
+                        lease = ?lease,
+                        error = %error,
+                        "speaker level mediation failed for binding"
+                    );
+                    AudioControllerError::Mediator(error)
+                })?;
+            host_effect_applied = true;
+            guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
+            speaker_live_enforced = true;
+        }
+        speaker
+            .set_level(lease, level.get(), session)
+            .map_err(|error| authority_refusal(
+                service_zone,
+                "speaker level bookkeeping rejected for binding",
+                error,
+            ))?;
+        if speaker.level(lease) == Some(level.get()) {
+            speaker_live_enforced = speaker_live_enforced || speaker.has_grant(lease);
+        }
+    }
+    if let Some(gain) = binding.grants.mic_gain
+        && microphone_decision == Some(MicDecision::Granted)
+    {
+        mediator
+            .set_channel_level(AudioChannel::Microphone, gain)
+            .map_err(|error| {
+                warn!(
+                    zone = %service_zone,
+                    channel = "microphone",
+                    lease = ?lease,
+                    error = %error,
+                    "microphone gain mediation failed for binding"
                 );
                 AudioControllerError::Mediator(error)
             })?;
-        self.microphone_effect_applied = false;
-        // U4 fail-closed: a busy arbiter defers the handoff; the caller's
-        // next reconcile/finalize retries the release and promotion.
-        let next = match self.microphone.try_lock() {
-            Ok(mut arbiter) => {
-                arbiter.release(lease);
-                arbiter.next_lease()
-            }
-            Err(_) => None,
-        };
-        let Some(next) = next else {
-            return Ok(None);
-        };
-        if self.handoff == MicrophoneHandoff::Enable
-            && let Err(error) = self
-                .mediator
-                .set_channel_grant(AudioChannel::Microphone, AudioGrant::On)
-        {
-            warn!(
-                lease = ?next,
-                error = %error,
-                "promoted microphone activation mediation failed during release"
-            );
-            // U4 fail-closed: a busy arbiter skips the requeue; the next
-            // reconcile re-arbitrates the still-pending lease.
-            if let Ok(mut arbiter) = self.microphone.try_lock() {
-                arbiter.requeue_active(next);
-            }
-            return Err(AudioControllerError::Mediator(error));
-        }
-        if self.handoff == MicrophoneHandoff::Enable {
-            self.microphone_effect_applied = true;
-        }
-        Ok(Some(next))
+        host_effect_applied = true;
+        guest_effect_applied |= guest_readiness == GuestAudioReadiness::Ready;
+        microphone_live_enforced = true;
     }
+
+    let phase = match microphone_decision {
+        Some(MicDecision::Queued) => AudioBindingPhase::Pending,
+        Some(MicDecision::QueueFull) => AudioBindingPhase::Degraded,
+        _ if mediator.readiness() == AudioReadiness::Ready => AudioBindingPhase::Ready,
+        _ => {
+            debug!(
+                zone = %service_zone,
+                lease = ?lease,
+                "audio mediator readiness degraded for binding"
+            );
+            AudioBindingPhase::Degraded
+        }
+    };
+    let arbitration_state = match microphone_decision {
+        Some(MicDecision::Granted) => AudioArbitrationState::Active,
+        Some(MicDecision::Queued) => AudioArbitrationState::Queued,
+        Some(MicDecision::QueueFull) => AudioArbitrationState::Blocked,
+        None => AudioArbitrationState::Inactive,
+    };
+    let enforcement_posture = match (
+        host_effect_applied || speaker_live_enforced || microphone_live_enforced,
+        guest_effect_applied,
+    ) {
+        (true, true) => AudioEnforcementPosture::HostAndGuest,
+        (true, false) => AudioEnforcementPosture::HostOnly,
+        (false, true) => AudioEnforcementPosture::GuestOnly,
+        (false, false) => AudioEnforcementPosture::None,
+    };
+    let last_set_applied = match (host_effect_applied, guest_effect_applied) {
+        (true, true) => AudioLastSetApplied::HostAndGuest,
+        (true, false) => AudioLastSetApplied::HostOnly,
+        (false, true) => AudioLastSetApplied::GuestOnly,
+        (false, false) => AudioLastSetApplied::NotApplied,
+    };
+    Ok(AudioReconcileResult {
+        status: AudioBindingStatus {
+            phase,
+            host_readiness,
+            guest_readiness,
+            microphone: microphone_decision,
+            channels: AudioBindingChannels {
+                speaker: AudioSpeakerStatus {
+                    grant: binding.grants.speaker,
+                    level: binding.grants.speaker_level,
+                    live_enforced: speaker_live_enforced,
+                },
+                mic: AudioMicrophoneStatus {
+                    grant: binding.grants.mic,
+                    gain: binding.grants.mic_gain,
+                    live_enforced: microphone_live_enforced,
+                    arbitration_state,
+                },
+            },
+            enforcement_posture,
+            last_set_applied,
+        },
+        host_effect_applied,
+        guest_effect_applied,
+    })
 }

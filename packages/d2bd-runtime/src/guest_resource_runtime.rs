@@ -6,7 +6,10 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use tokio::sync::Mutex;
 
@@ -42,6 +45,7 @@ use ttrpc::{
 };
 
 use crate::guest_mode::GuestIdentity;
+use crate::target_runtime::TargetAuthority;
 
 const ROLE_REF: &str = "Role/guest-component-session";
 const SCHEMA_BYTES: &[u8] = br#"{"apiVersion":"d2b-cjson/v1","resourceType":"target-local"}"#;
@@ -64,6 +68,16 @@ pub struct GuestResourceRuntime {
     authorizer: Arc<NativeAuthorizer>,
     authorization_state: AuthorizationState,
     active_generation: Arc<tokio::sync::Mutex<Option<u64>>>,
+    /// The newest generation whose session re-adopted the retained rows.
+    /// Zero until the first re-adoption; a session below it can never take
+    /// them back.
+    adopted_generation: Arc<AtomicU64>,
+    /// The verified target-local authority this store serves under.
+    ///
+    /// The authority names the Zone and store incarnation the target-local
+    /// rows were published for, so a target whose deployment identity
+    /// changes cannot keep serving rows admitted under the previous one.
+    authority: Arc<tokio::sync::Mutex<Option<TargetAuthority>>>,
 }
 
 impl core::fmt::Debug for GuestResourceRuntime {
@@ -182,6 +196,7 @@ impl GuestResourceRuntime {
         let backend = Arc::new(GuestResourceStore::new(
             zone,
             identity.guest_ref().clone(),
+            identity.guest_uid().clone(),
             acceptor,
         ));
         let active_generation = Arc::new(tokio::sync::Mutex::new(None));
@@ -191,7 +206,36 @@ impl GuestResourceRuntime {
             authorizer,
             authorization_state,
             active_generation,
+            adopted_generation: Arc::new(AtomicU64::new(0)),
+            authority: Arc::new(tokio::sync::Mutex::new(None)),
         })
+    }
+
+    /// Record the verified target-local authority this store serves under.
+    ///
+    /// A second publication is refused rather than replacing the first: a
+    /// target-local store admitted rows under one deployment identity, and
+    /// silently re-pointing it at another would leave those rows admitted by
+    /// an identity the store no longer serves. The deployment-identity
+    /// switch is a fresh target-local runtime, not a rebind.
+    pub async fn publish_target_authority(
+        &self,
+        authority: TargetAuthority,
+    ) -> Result<(), GuestResourceRuntimeError> {
+        let mut published = self.authority.lock().await;
+        if published.is_some() {
+            return Err(GuestResourceRuntimeError::AuthorityAlreadyPublished);
+        }
+        *published = Some(authority);
+        Ok(())
+    }
+
+    /// The verified target-local authority this store serves under, when it
+    /// published one.
+    pub async fn published_authority(
+        &self,
+    ) -> Result<Option<TargetAuthority>, GuestResourceRuntimeError> {
+        Ok(self.authority.lock().await.clone())
     }
 
     /// This runtime is intentionally not backed by a local Zone store.
@@ -280,6 +324,40 @@ impl GuestResourceRuntime {
         let adapter = ResourceBusAdapter::bind_component_session(service, subject)
             .map_err(|_| GuestResourceRuntimeError::Authorization)?;
         Ok((session_store, Arc::new(adapter)))
+    }
+
+    /// Re-adopt the target-local rows this Guest still owns after a reconnect.
+    ///
+    /// A lost session retained the rows but withheld new authority
+    /// ([`GuestResourceStore::quarantine`]). A newer authenticated session for
+    /// the same enrolled Guest re-adopts them here, and the answer is how many
+    /// rows it inherited. A different Guest never adopts them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestResourceRuntimeError::SessionBinding`] when the
+    /// connecting route is not the enrolled Guest or is not newer than the
+    /// generation this store already adopted, and
+    /// [`GuestResourceRuntimeError::StoreQuarantined`] when the store refuses
+    /// to hand its rows to that identity.
+    pub async fn adopt_after_reconnect(
+        &self,
+        route: &d2b_session::AuthenticatedSessionRouteBinding,
+    ) -> Result<usize, GuestResourceRuntimeError> {
+        self.identity
+            .validate_route(route)
+            .map_err(|_| GuestResourceRuntimeError::SessionBinding)?;
+        let generation = route.reconnect_generation().get();
+        if generation < self.adopted_generation.load(Ordering::Acquire) {
+            return Err(GuestResourceRuntimeError::SessionBinding);
+        }
+        let adopted = self
+            .store
+            .readopt(self.identity.guest_uid())
+            .await
+            .map_err(|_| GuestResourceRuntimeError::StoreQuarantined)?;
+        self.adopted_generation.store(generation, Ordering::Release);
+        Ok(adopted)
     }
 }
 
@@ -430,6 +508,8 @@ pub enum GuestResourceRuntimeError {
     Authorization,
     SeedPolicy,
     SeedInvalid,
+    /// A second target-local authority was published over the first.
+    AuthorityAlreadyPublished,
 }
 
 impl core::fmt::Display for GuestResourceRuntimeError {
@@ -442,6 +522,7 @@ impl core::fmt::Display for GuestResourceRuntimeError {
             Self::Authorization => "guest-resource-authorization-denied",
             Self::SeedPolicy => "guest-resource-seed-policy-invalid",
             Self::SeedInvalid => "guest-resource-seed-request-invalid",
+            Self::AuthorityAlreadyPublished => "guest-resource-authority-already-published",
         })
     }
 }
@@ -458,12 +539,18 @@ fn is_zero_fingerprint(value: &SchemaFingerprint) -> bool {
 struct GuestStoreState {
     revision: u64,
     resources: BTreeMap<ResourceRef, StoredResource>,
+    /// Whether the last parent session was lost before any newer one proved
+    /// the same identity. The rows are kept - the Guest still owns them - but
+    /// nothing may be minted or changed until a reconnect re-adopts them.
+    quarantined: bool,
 }
-
-/// Target-local store owned by one Guest.
 pub struct GuestResourceStore {
     zone: ZoneId,
     target: ResourceRef,
+    /// The identity whose rows this store may hold. Fixed for the store's
+    /// lifetime: a Guest's target-local rows belong to this enrolled Guest on
+    /// this Zone, and no other identity may ever claim them.
+    owner: ResourceUid,
     acceptor: MutationSealAcceptor,
     state: Mutex<GuestStoreState>,
 }
@@ -478,14 +565,21 @@ impl core::fmt::Debug for GuestResourceStore {
 }
 
 impl GuestResourceStore {
-    fn new(zone: ZoneId, target: ResourceRef, acceptor: MutationSealAcceptor) -> Self {
+    fn new(
+        zone: ZoneId,
+        target: ResourceRef,
+        owner: ResourceUid,
+        acceptor: MutationSealAcceptor,
+    ) -> Self {
         Self {
             zone,
             target,
+            owner,
             acceptor,
             state: Mutex::new(GuestStoreState {
                 revision: 0,
                 resources: BTreeMap::new(),
+                quarantined: false,
             }),
         }
     }
@@ -497,6 +591,43 @@ impl GuestResourceStore {
             .try_lock()
             .map(|state| state.resources.len())
             .unwrap_or(0)
+    }
+
+    /// The enrolled Guest uid whose target-local rows this store holds.
+    pub const fn owner(&self) -> &ResourceUid {
+        &self.owner
+    }
+
+    /// Whether a lost parent session has left the retained rows unproven.
+    pub async fn is_quarantined(&self) -> bool {
+        self.state.lock().await.quarantined
+    }
+
+    /// Mark the retained rows unproven after a lost parent session.
+    ///
+    /// Conservative by construction: the rows stay exactly as they are, so a
+    /// reconnecting session still owns the same resources for the same uids.
+    /// Only new authority is withheld - while the store is quarantined a
+    /// session-bound commit is refused, so a lost session cannot mint or
+    /// change Host-authorized target-local state.
+    pub async fn quarantine(&self) {
+        self.state.lock().await.quarantined = true;
+    }
+
+    /// Re-adopt the retained rows for a reconnecting parent session.
+    ///
+    /// # Errors
+    ///
+    /// Returns `guest-target-store-owner-mismatch` when the connecting
+    /// identity is not the enrolled one: a different Guest never adopts
+    /// another Guest's target-local rows.
+    pub async fn readopt(&self, owner: &ResourceUid) -> Result<usize, StoreError> {
+        if owner != &self.owner {
+            return Err(Self::unavailable("guest-target-store-owner-mismatch"));
+        }
+        let mut state = self.state.lock().await;
+        state.quarantined = false;
+        Ok(state.resources.len())
     }
 
     fn is_target_local_type(resource_type: &ResourceTypeName) -> bool {
@@ -654,9 +785,13 @@ impl GuestResourceStore {
                 let opened = acceptor.open(sealed)?;
                 self.validate_mutation_body(opened.body())?;
                 let body = opened.into_body();
-                let mut state = state
-                    .lock()
-                    .await;
+                let mut state = state.lock().await;
+                if state.quarantined {
+                    // The rows are retained and still owned, but a lost
+                    // session may not mint or change them: a reconnecting
+                    // session re-adopts them first.
+                    return Err(Self::unavailable("guest-target-store-session-lost"));
+                }
                 let mut resources = state.resources.clone();
                 let next_revision = state
                     .revision
@@ -1314,6 +1449,17 @@ impl SessionBoundStore {
     pub fn ensure_session_current(&self) -> Result<(), StoreError> {
         self.ensure_current()
     }
+
+    /// Record that the parent session this store was bound to is gone.
+    ///
+    /// The rows are retained - this Guest still owns the same resources for
+    /// the same uids - and only new authority is withheld, so a reconnecting
+    /// session must re-adopt them
+    /// ([`GuestResourceRuntime::adopt_after_reconnect`]) before it can mint or
+    /// change anything.
+    pub async fn record_session_loss(&self) {
+        self.store.quarantine().await;
+    }
 }
 
 impl ResourceStoreBackend for SessionBoundStore {
@@ -1378,6 +1524,11 @@ mod tests {
     use super::*;
     use protobuf::{EnumOrUnknown, MessageField};
 
+    /// The enrolled Guest uid the target-local store rows belong to.
+    fn owner() -> ResourceUid {
+        ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("store owner UID")
+    }
+
     #[test]
     fn session_bound_store_rejects_an_old_session_generation() {
         let zone = ZoneId::parse("work").expect("zone");
@@ -1389,7 +1540,7 @@ mod tests {
         );
         let (_, acceptor) = d2b_contracts_resource::v3::operations::seal::mutation_seal_pair(store_identity);
         let target = ResourceRef::parse("Guest/work").expect("guest ref");
-        let store = Arc::new(GuestResourceStore::new(zone, target, acceptor));
+        let store = Arc::new(GuestResourceStore::new(zone, target, owner(), acceptor));
         let active_generation = Arc::new(tokio::sync::Mutex::new(Some(2)));
         let bound = SessionBoundStore {
             store,
@@ -1404,6 +1555,59 @@ mod tests {
             error.kind(),
             StoreErrorKind::Resource(ResourceErrorKind::ResourcePlaneUnavailable)
         );
+    }
+
+    fn store_for(zone: ZoneId, acceptor: MutationSealAcceptor) -> Arc<GuestResourceStore> {
+        Arc::new(GuestResourceStore::new(
+            zone,
+            ResourceRef::parse("Guest/work").expect("guest ref"),
+            owner(),
+            acceptor,
+        ))
+    }
+
+    fn seal_pair(zone: &ZoneId) -> MutationSealAcceptor {
+        let store_identity = StoreSealIdentity::new(
+            d2b_contracts_resource::v3::StoreSlot::new(0).expect("store slot"),
+            zone.clone(),
+            owner(),
+        );
+        let (_, acceptor) = d2b_contracts_resource::v3::operations::seal::mutation_seal_pair(
+            store_identity,
+        );
+        acceptor
+    }
+
+    /// A lost parent session keeps the target-local rows and their owner, and
+    /// withholds only new authority: a different Guest never adopts them, and
+    /// the enrolled Guest re-adopts exactly what was retained.
+    #[tokio::test]
+    async fn a_lost_session_retains_ownership_and_only_the_enrolled_guest_readopts() {
+        let zone = ZoneId::parse("work").expect("zone");
+        let store = store_for(zone.clone(), seal_pair(&zone));
+        let foreign = ResourceUid::parse("00000000-0000-4000-8000-0000000000ff").expect("UID");
+
+        assert!(!store.is_quarantined().await, "a fresh store owes no re-adoption");
+        store.quarantine().await;
+        assert!(store.is_quarantined().await);
+        assert_eq!(store.owner(), &owner(), "the retained rows keep their owner");
+
+        let error = store
+            .readopt(&foreign)
+            .await
+            .expect_err("a different Guest never adopts another Guest's rows");
+        assert_eq!(
+            error.reason_code(),
+            "guest-target-store-owner-mismatch",
+            "the refusal names the ownership mismatch"
+        );
+        assert!(
+            store.is_quarantined().await,
+            "a refused re-adoption leaves the rows unproven"
+        );
+
+        assert_eq!(store.readopt(&owner()).await.expect("the enrolled Guest re-adopts"), 0);
+        assert!(!store.is_quarantined().await, "the re-adopted store serves again");
     }
 
     #[test]
@@ -1441,7 +1645,7 @@ mod tests {
         );
         let (_, acceptor) = d2b_contracts_resource::v3::operations::seal::mutation_seal_pair(store_identity);
         let target = ResourceRef::parse("Guest/work").expect("guest ref");
-        let store = GuestResourceStore::new(zone.clone(), target, acceptor);
+        let store = GuestResourceStore::new(zone.clone(), target, owner(), acceptor);
         let error = store
             .inspect_schema(StoreInspectSchemaRequest {
                 operation: d2b_contracts_resource::v3::StoreOperationContext {
@@ -1474,7 +1678,7 @@ mod tests {
         );
         let (_, acceptor) = d2b_contracts_resource::v3::operations::seal::mutation_seal_pair(store_identity);
         let target = ResourceRef::parse("Guest/work").expect("guest ref");
-        let store = GuestResourceStore::new(zone.clone(), target, acceptor);
+        let store = GuestResourceStore::new(zone.clone(), target, owner(), acceptor);
         let error = store
             .watch(StoreWatchRequest {
                 operation: d2b_contracts_resource::v3::StoreOperationContext {
@@ -1513,7 +1717,7 @@ mod tests {
         let (_, acceptor) =
             d2b_contracts_resource::v3::operations::seal::mutation_seal_pair(store_identity);
         let target = ResourceRef::parse("Guest/work").expect("guest ref");
-        let store = GuestResourceStore::new(zone.clone(), target, acceptor);
+        let store = GuestResourceStore::new(zone.clone(), target, owner(), acceptor);
         let error = store
             .watch(StoreWatchRequest {
                 operation: d2b_contracts_resource::v3::StoreOperationContext {

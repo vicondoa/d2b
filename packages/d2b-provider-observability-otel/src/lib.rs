@@ -10,6 +10,9 @@ pub mod ingress_policy;
 pub mod metric_policy;
 pub mod metrics;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod route_fixtures;
+
 /// The stable Provider name this crate implements.
 pub const PROVIDER_NAME: &str = "observability-otel";
 /// The canonical Provider reference this crate's rows select.
@@ -36,7 +39,8 @@ pub use controller::{
 };
 pub use emitter_socket::{EmitterSocket, ReceiverReadiness};
 pub use ingress_policy::{
-    Ingress, IngressErrorClass, IngressOutcome, IngressPolicyGate, MetricFrame, MetricPoint,
+    DeliveryAuthorization, DeliveryRefusal, DeliveryRoute, DeliverySource, DeliveryStatus, Ingress,
+    IngressErrorClass, IngressOutcome, IngressPolicyGate, MetricFrame, MetricPoint,
 };
 pub use metric_policy::{
     IdentityCanaries, LabelDescriptor, MetricDescriptor, MetricPolicyError, ResourceAttributeError,

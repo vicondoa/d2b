@@ -9,7 +9,9 @@ pub use controller::{
 pub use supervisor::{
     AttachReceipt, AttachRequest, Attachment, InMemoryShellAuthority, SessionCapability,
     SessionGrant, SessionSupervisor, ShellAuthorityLedger, ShellAuthorityPort,
-    SupervisorProcessResource,
+    SUPERVISOR_PROCESS_PROVIDER_REF, SUPERVISOR_PROCESS_TEMPLATE, SupervisorProcessResource,
+    TerminalAttachEvidence, TerminalStreamBinding, UserDomainProcess, WorkloadIdentity,
+    supervisor_execution_spec,
 };
 
 /// Public controller ComponentSession service name.

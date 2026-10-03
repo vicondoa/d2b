@@ -405,7 +405,6 @@ fn fixture_bundle() -> BundleResolver {
         Bundle {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
             realm_workloads_launcher_v2_path: None,
             generation: BundleGeneration {

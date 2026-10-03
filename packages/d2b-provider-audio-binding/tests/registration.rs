@@ -5,10 +5,10 @@
 use std::sync::Arc;
 
 use d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildIntent;
-use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{ControllerGeneration, EndpointAttachmentKind, ResourceRef, ZoneId};
 use d2b_provider_audio_binding::{
     AudioBinding, AudioBindingChildRequest, AudioBindingChildSource,
-    audio_binding_descriptor, audio_binding_spec_decoder,
+    audio_binding_descriptor, audio_binding_spec_decoder, requested_endpoint_bindings,
 };
 use d2b_provider_audio_pipewire::{
     AudioBindingController, AudioBindingSpec, FakeAudioMediator,
@@ -201,4 +201,103 @@ fn a_foreign_row_is_refused() {
         behavior.validate(&envelope),
         Err(InteractionEffectError::InvalidSpec(_))
     ));
+}
+
+// ── admitted endpoint relationships ──────────────────────────────────────────
+
+/// The exact endpoint relationships one binding requests of the graph.
+///
+/// Each stream direction asks for its own relationship on the Service's own
+/// backing `Endpoint`, so the two are admitted, observed, and revoked
+/// independently, and nothing in a request names a socket or a runtime
+/// directory a caller could substitute.
+#[test]
+fn the_binding_requests_one_exact_relationship_per_channel() {
+    let spec = binding_spec();
+    let service = d2b_provider_audio_pipewire::AudioServiceSpec::owner(
+        ResourceRef::parse("Endpoint/audio-host").expect("endpoint"),
+        "work",
+    );
+    let requested =
+        requested_endpoint_bindings(&spec, &service).expect("the owner Service admits both channels");
+    assert_eq!(
+        requested
+            .iter()
+            .map(|entry| entry.channel())
+            .collect::<Vec<_>>(),
+        vec![
+            d2b_provider_audio_pipewire::AudioChannel::Speaker,
+            d2b_provider_audio_pipewire::AudioChannel::Microphone,
+        ],
+    );
+    for entry in &requested {
+        let request = entry.request();
+        assert_eq!(
+            request.source_ref().to_canonical_string(),
+            "Endpoint/audio-host",
+            "the relationship names the Service's committed backing endpoint"
+        );
+        assert_eq!(
+            request.consumer_ref().to_canonical_string(),
+            "Guest/workstation",
+            "the relationship delivers to the binding's own Guest"
+        );
+        assert_eq!(
+            request.attachment(),
+            EndpointAttachmentKind::Connect,
+            "an audio consumer connects to the exact endpoint"
+        );
+        assert_eq!(
+            request.purpose().as_str(),
+            entry.channel().declared_purpose(),
+            "the declared purpose is what keeps the two channels separate"
+        );
+        assert_eq!(request.slot().as_str(), entry.channel().binding_slot());
+    }
+    assert_ne!(
+        requested[0].request(),
+        requested[1].request(),
+        "the two channels are two relationships, not one shared grant"
+    );
+}
+
+/// A Service that declared only playback cannot back a capture request.
+#[test]
+fn a_service_that_declares_one_channel_backs_only_that_channel() {
+    let spec = binding_spec();
+    let mut playback_only = d2b_provider_audio_pipewire::AudioServiceSpec::owner(
+        ResourceRef::parse("Endpoint/audio-host").expect("endpoint"),
+        "work",
+    );
+    playback_only.operations = vec!["playback".to_owned()];
+    assert!(
+        requested_endpoint_bindings(&spec, &playback_only).is_err(),
+        "declaring playback cannot reach the capture relationship"
+    );
+}
+
+/// An imported Service projection has no local backing endpoint, so a local
+/// binding cannot reach through it to mint a host grant.
+#[test]
+fn an_imported_projection_backs_no_local_relationship() {
+    let spec = binding_spec();
+    let projection =
+        d2b_provider_audio_pipewire::AudioServiceSpec::projection("work").expect("projection row");
+    assert!(
+        requested_endpoint_bindings(&spec, &projection).is_err(),
+        "an imported Service projection declares no local endpoint a binding could request"
+    );
+}
+
+/// A binding row the Service cannot realize is refused before any request is
+/// derived.
+#[test]
+fn a_foreign_binding_row_requests_nothing() {
+    let service = d2b_provider_audio_pipewire::AudioServiceSpec::owner(
+        ResourceRef::parse("Endpoint/audio-host").expect("endpoint"),
+        "work",
+    );
+    let mut foreign = binding_spec();
+    foreign.target_ref = ResourceRef::parse("Host/host-system").expect("host");
+    assert!(requested_endpoint_bindings(&foreign, &service).is_err());
 }

@@ -25,10 +25,13 @@ use d2b_contracts_resource::v3::NetworkIfRole;
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedMacvtapIntent};
 use d2b_core::host_w3::TapRoleW3;
 use d2b_host::bridge_port::BridgePortFlagSet;
+#[cfg(test)]
 use d2b_host::ifname::IfName;
 #[cfg(test)]
-use d2b_host::netlink::{LinkKind, LinkSpec, TapOwner, fake::FakeBackend, ipv6_off_sequence};
-use d2b_host::netlink::{NetlinkBackend, NetlinkError, readback_bridge_port_flags};
+use d2b_host::netlink::{
+    LinkKind, LinkSpec, NetlinkBackend, NetlinkError, TapOwner, fake::FakeBackend,
+    ipv6_off_sequence, readback_bridge_port_flags,
+};
 use std::io::ErrorKind;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -153,12 +156,17 @@ pub fn create_tap<B: NetlinkBackend>(
     })
 }
 
+/// The netlink bridge-port write + readback path exists only for the
+/// in-file `SetBridgePortFlags` tests; the live op drives
+/// [`live_set_bridge_port_flags`] instead.
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct SetBridgePortFlagsRequest {
     pub ifname: IfName,
     pub role: TapRoleW3,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetBridgePortFlagsAudit {
     pub ifname: String,
@@ -166,6 +174,7 @@ pub struct SetBridgePortFlagsAudit {
     pub flags_after: BridgePortFlagSet,
 }
 
+#[cfg(test)]
 pub fn set_bridge_port_flags<B: NetlinkBackend>(
     backend: &mut B,
     req: &SetBridgePortFlagsRequest,
@@ -612,6 +621,10 @@ async fn set_tap_ownership_marker(
     .await
 }
 
+#[allow(
+    dead_code,
+    reason = "only caller is runtime::prepare_runner_preopened_fds, which no live dispatcher invokes"
+)]
 pub async fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd, super::OpError> {
     let ip = ip_binary_path();
     let create_args = build_macvtap_link_add_args(intent);
@@ -662,6 +675,10 @@ pub async fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<Ow
     Ok(file.into())
 }
 
+#[allow(
+    dead_code,
+    reason = "only caller is live_create_macvtap_fd, itself reachable only from the uncalled runtime::prepare_runner_preopened_fds"
+)]
 async fn open_macvtap_device_with_udev_wait(tap_path: &Path) -> Result<tokio::fs::File, super::OpError> {
     let mut last_error = None;
     for _ in 0..100 {
@@ -692,6 +709,10 @@ async fn open_macvtap_device_with_udev_wait(tap_path: &Path) -> Result<tokio::fs
     })
 }
 
+#[allow(
+    dead_code,
+    reason = "pinned by the in-file macvtap link-add test; production caller is the uncalled runtime::prepare_runner_preopened_fds"
+)]
 fn build_macvtap_link_add_args(intent: &ResolvedMacvtapIntent) -> Vec<String> {
     vec![
         "link".to_owned(),
@@ -707,10 +728,18 @@ fn build_macvtap_link_add_args(intent: &ResolvedMacvtapIntent) -> Vec<String> {
     ]
 }
 
+#[allow(
+    dead_code,
+    reason = "pinned by the in-file /dev/tap path test; production caller is the uncalled runtime::prepare_runner_preopened_fds"
+)]
 fn macvtap_device_path(ifindex: u32) -> PathBuf {
     PathBuf::from(format!("/dev/tap{ifindex}"))
 }
 
+#[allow(
+    dead_code,
+    reason = "only caller is live_create_macvtap_fd, itself reachable only from the uncalled runtime::prepare_runner_preopened_fds"
+)]
 async fn validate_existing_macvtap(
     ip: &Path,
     intent: &ResolvedMacvtapIntent,
@@ -734,6 +763,10 @@ async fn validate_existing_macvtap(
     validate_existing_macvtap_json(&String::from_utf8_lossy(&output.stdout), intent)
 }
 
+#[allow(
+    dead_code,
+    reason = "pinned by the in-file existing-macvtap readback tests; production caller is the uncalled runtime::prepare_runner_preopened_fds"
+)]
 fn validate_existing_macvtap_json(
     json: &str,
     intent: &ResolvedMacvtapIntent,
@@ -1304,11 +1337,11 @@ mod tests {
         }
     }
 
+    #[allow(dead_code, reason = "bridge-flag resolver seam; the live bridge-port path resolves through SystemLiveExec instead")]
     fn live_bridge_flag_resolver() -> BundleResolver {
         let bundle = Bundle {
             bundle_version: 4,
             schema_version: "v2".to_owned(),
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
             realm_workloads_launcher_v2_path: None,
             generation: BundleGeneration {

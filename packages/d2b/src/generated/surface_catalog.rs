@@ -13,6 +13,7 @@ pub const RESOURCE_TYPES: &[&str] = &[
     "Volume",
     "VolumeBinding",
     "Endpoint",
+    "EndpointBinding",
     "Host",
     "User",
     "activation-nixos.d2bus.org.NixosGeneration",
@@ -40,9 +41,12 @@ pub const RESOURCE_TYPES: &[&str] = &[
     "EmergencyPolicy",
     "ResourceExport",
     "ResourceImport",
-    "Command",
     "Operation",
     "SeccompProfile",
+    "CredentialBinding",
+    "DeviceBinding",
+    "ExecutionPolicy",
+    "NetworkBinding",
 ];
 /// The typed nouns and the resource type each addresses.
 pub const TYPED_NOUNS: &[(&str, &str)] = &[

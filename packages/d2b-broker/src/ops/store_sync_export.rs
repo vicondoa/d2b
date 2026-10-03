@@ -48,6 +48,8 @@ pub const DEFAULT_STORE_SYNC_EXPORT_DIR: &str = "/var/lib/d2b/observability/stor
 /// (`caller_principal`, `retained_generations`, `bundle_closure_ref`,
 /// `hardlink_farm_path`, the nested `timings` object, and the raw
 /// `vm`/`env` keys) are intentionally absent.
+// Test-only contract pin: see the sibling `REDACTED_KEYS` note below.
+#[cfg(test)]
 pub const EXPORTED_KEYS: &[&str] = &[
     "schema_version",
     "target_vm",
@@ -79,6 +81,9 @@ pub const EXPORTED_KEYS: &[&str] = &[
 /// Host-audit fields that MUST NOT appear on the export surface. Pinned
 /// here so the redaction test fails closed if a future field is added to
 /// the projection by mistake.
+// Test-only contract pin: the production projection is a closed struct
+// with `deny_unknown_fields`, so it never consults this list either.
+#[cfg(test)]
 pub const REDACTED_KEYS: &[&str] = &[
     "caller_principal",
     "retained_generations",

@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn the_provider_matrix_and_artifact_layout_are_closed() {
-        assert_eq!(PROVIDER_MATRIX.len(), 27);
+        assert_eq!(PROVIDER_MATRIX.len(), 26);
         assert_eq!(
             PROVIDER_ARTIFACT_REQUIRED_FILES,
             &[

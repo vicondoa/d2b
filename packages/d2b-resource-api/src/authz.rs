@@ -12,14 +12,14 @@ use d2b_contracts_resource::v3::execution_policy::{
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts_resource::v3::identity::{AuthenticatedSubjectContext, EvidenceClass, Locality};
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, MAX_ROLE_BINDING_SUBJECTS, MAX_ROLE_RULE_EXECUTION_REFS,
+    AuthoritySubject, ControllerGeneration, MAX_ROLE_BINDING_SUBJECTS, MAX_ROLE_RULE_EXECUTION_REFS,
     MAX_ROLE_RULE_RESOURCE_NAMES, MAX_ROLE_RULE_RESOURCE_TYPES, MAX_ROLE_RULE_VERBS,
     MAX_ROLE_RULES, ResourceErrorKind, ResourceGeneration, ResourceName, ResourceRef,
     ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_contracts_zone_session::v3::{
-    RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec,
-    role_binding::MAX_ROLE_BINDING_RESOURCE_REFS,
+    RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb,
+    role::AuthorizedRole, role_binding::MAX_ROLE_BINDING_RESOURCE_REFS,
 };
 use d2b_core_controller::controller_assignment::{
     AssignmentError, AssignmentIdentity, AssignmentTarget, ScopedResourceMutation,
@@ -378,7 +378,7 @@ pub fn published_policy_revision(bundle_generation: u64, durable_policy_rows: us
 }
 
 /// Parse one durable Role row's evaluator input from its canonical envelope.
-fn durable_role_spec(row: &DurablePolicyRow) -> Result<RoleSpec, AuthorizationPolicyError> {
+fn durable_role(row: &DurablePolicyRow) -> Result<AuthorizedRole, AuthorizationPolicyError> {
     let value = d2b_contracts_resource::v3::CanonicalJsonValue::parse(&row.canonical_json)
         .map_err(|_| AuthorizationPolicyError::RoleSchema)?;
     let spec = value
@@ -440,7 +440,7 @@ pub fn compile_authorization_facts(
     for row in rows {
         match row.resource_ref.resource_type().as_str() {
             "Role" => {
-                let spec = durable_role_spec(row)?;
+                let spec = durable_role(row)?;
                 roles.push(CompiledRole::from_spec(
                     row.resource_ref.clone(),
                     &spec,
@@ -816,7 +816,7 @@ impl CompiledRole {
     /// Compile a public Role resource.
     pub fn from_spec(
         role_ref: ResourceRef,
-        spec: &RoleSpec,
+        spec: &AuthorizedRole,
         catalog: &ApiCatalog,
         core_controller_generated: bool,
     ) -> Result<Self, AuthorizationPolicyError> {
@@ -1480,6 +1480,24 @@ impl NativeAuthorizer {
             std::sync::Arc::new(context),
             state,
         ))
+    }
+
+    /// The typed authority subject one admitted authorization carries
+    /// (U6, KTD4).
+    ///
+    /// The session layer established the caller's exact reference and the
+    /// store identity committed rows carry for it, so the new-graph mutation
+    /// entry point can be given a typed subject instead of a rendered name.
+    /// Classification lives here because this is the surface that owns
+    /// authorization: a reference outside the six admitted authority classes
+    /// yields `None`, so the caller refuses rather than downgrading an
+    /// unevaluable subject to a string the evaluator cannot check.
+    pub fn authority_subject(
+        &self,
+        authorization: &AdmittedAuthorization,
+    ) -> Option<AuthoritySubject> {
+        let kind = d2b_resource_runtime::manager::authority_subject_kind(&authorization.subject_ref)?;
+        Some(AuthoritySubject::named(kind, authorization.subject_ref.clone()))
     }
 
     /// Authorize one request against the current policy and return the

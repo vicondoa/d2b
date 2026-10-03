@@ -25,11 +25,31 @@ pub const MAX_ROLE_BINDING_ZONE_REFS: usize = 8;
 pub const MAX_ROLE_BINDING_EXECUTION_REFS: usize = 32;
 /// The closed subject vocabulary a RoleBinding may name.
 ///
-/// This is the one declaration of the set: the Nix authoring surface and the
-/// generator that projects these rows into it both read this list instead of
-/// restating the six types.
-pub const BINDABLE_SUBJECT_TYPES: [&str; 6] =
-    ["Zone", "User", "Provider", "Host", "Guest", "Process"];
+/// This is the one declaration of the set: the Nix authoring surface, the
+/// generator that projects these rows into it, and the daemon's foundation
+/// seed all read this list instead of restating it.
+///
+/// `EphemeralProcess` is admitted alongside `Process` because both lifetimes
+/// are the same converted resource type and already share one preparation and
+/// one policy path. Naming only the long-running one would leave the binding
+/// vocabulary as a second authority that distinguishes them, which is the
+/// differential authority route this model forbids.
+///
+/// `Group` is admitted because a Group is a real principal the volume
+/// principal projection resolves. The foundation seed previously carried this
+/// entry on its own copy of the list while this contract omitted it, so the
+/// seed could commit a row this contract would then refuse; declaring it here
+/// removes that divergence instead of leaving two vocabularies.
+pub const BINDABLE_SUBJECT_TYPES: [&str; 8] = [
+    "Zone",
+    "User",
+    "Provider",
+    "Host",
+    "Guest",
+    "Process",
+    "EphemeralProcess",
+    "Group",
+];
 
 /// RoleBinding schema failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,7 +152,7 @@ impl ScopeNarrowing {
     }
 
     /// Validate that this narrowing does not grant outside a Role.
-    pub fn is_subset_of(&self, role: &super::role::RoleSpec) -> bool {
+    pub fn is_subset_of(&self, role: &super::role::AuthorizedRole) -> bool {
         self.rules.iter().all(|narrowed| {
             role.rules().iter().any(|allowed| {
                 narrowed
@@ -364,7 +384,7 @@ impl RoleBindingSpec {
     /// Validate the optional narrowing against the referenced Role's rules.
     pub fn validate_scope_against_role(
         &self,
-        role: &super::role::RoleSpec,
+        role: &super::role::AuthorizedRole,
     ) -> Result<(), RoleBindingContractError> {
         if self
             .scope_narrowing
@@ -443,7 +463,7 @@ pub enum RoleBindingConditionType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::role::{RoleResourceVerb, RoleRule, RoleSpec};
+    use crate::v3::role::{AuthorizedRole, RoleResourceVerb, RoleRule};
     use d2b_contracts_resource::v3::{ResourceRef, ResourceTypeName};
 
     #[test]
@@ -475,7 +495,7 @@ mod tests {
 
     #[test]
     fn scope_narrowing_is_a_subset_operation() {
-        let allowed = RoleSpec::new(vec![
+        let allowed = AuthorizedRole::new(vec![
             RoleRule::new(
                 vec![ResourceTypeName::parse("Process").unwrap()],
                 vec![RoleResourceVerb::Get],
@@ -486,7 +506,7 @@ mod tests {
                 vec![],
             )
             .unwrap(),
-        ])
+        ], Vec::new())
         .unwrap();
         let narrower = ScopeNarrowing::new(vec![
             RoleRule::new(

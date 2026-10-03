@@ -15,7 +15,7 @@
 //! only what its driver and its declarations must agree on.
 
 use async_trait::async_trait;
-use d2b_contracts_provider::v3::credential::CredentialMethod;
+use d2b_contracts_provider::v3::credential::{CredentialLeaseState, CredentialMethod};
 use d2b_contracts_provider::v3::credential_controller::{
     CredentialIdempotencyKey, CredentialProviderKind,
 };
@@ -223,6 +223,62 @@ pub enum CredentialRevocationOutcome {
     Uncertain,
 }
 
+impl CredentialRevocationOutcome {
+    /// Whether the Provider confirmed the revocation.
+    ///
+    /// Only a confirmed outcome may release a relationship; an unconfirmed
+    /// attempt leaves the lease exactly as it was.
+    pub const fn is_confirmed(self) -> bool {
+        matches!(self, Self::Revoked | Self::AlreadyRevoked)
+    }
+}
+
+/// The conservative effect of one revocation attempt on the lease.
+///
+/// This is the only thing the generic binding lifecycle is allowed to learn
+/// from a remote revoke, and it is deliberately pessimistic: a release needs
+/// both a confirmed revocation *and* a post-revocation read that no longer
+/// shows a live or unknown lease. Everything else stays outstanding, so
+/// cleanup remains withheld rather than being reported as released (R36).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialRevocationReport {
+    /// Revocation confirmed and no live lease remains.
+    Released,
+    /// The Provider confirmed the revocation, but a lease is still active or
+    /// unknown, so use remains outstanding.
+    Retained,
+    /// The revocation was not confirmed. The lease state is unchanged and
+    /// must be treated as still outstanding.
+    Unconfirmed,
+}
+
+impl CredentialRevocationReport {
+    /// Report one attempt from the Provider outcome and the lease state read
+    /// after it.
+    ///
+    /// A missing post-revocation read is `Retained`, never `Released`:
+    /// absence of evidence is not evidence the lease is gone.
+    pub const fn of(
+        outcome: CredentialRevocationOutcome,
+        observed: Option<CredentialLeaseState>,
+    ) -> Self {
+        if !outcome.is_confirmed() {
+            return Self::Unconfirmed;
+        }
+        match observed {
+            Some(CredentialLeaseState::Revoked | CredentialLeaseState::Expired) => Self::Released,
+            Some(CredentialLeaseState::Active | CredentialLeaseState::Unknown) | None => {
+                Self::Retained
+            }
+        }
+    }
+
+    /// Whether this report proves the lease is gone.
+    pub const fn releases(self) -> bool {
+        matches!(self, Self::Released)
+    }
+}
+
 /// Confirmed-or-uncertain revocation evidence for one request.
 #[derive(Clone, PartialEq, Eq)]
 pub struct CredentialRevocationEvidence {
@@ -261,6 +317,11 @@ impl CredentialRevocationEvidence {
             CredentialRevocationOutcome::AlreadyRevoked => "already-revoked",
             CredentialRevocationOutcome::Uncertain => "uncertain",
         }
+    }
+
+    /// Whether this evidence confirms the revocation it was produced for.
+    pub const fn is_confirmed(&self) -> bool {
+        self.outcome.is_confirmed()
     }
 }
 
@@ -326,14 +387,15 @@ pub fn is_credential_provider_ref(provider_ref: &ResourceRef) -> bool {
 mod tests {
     use std::sync::Arc;
 
+    use d2b_contracts_provider::v3::credential::CredentialLeaseState;
     use d2b_contracts_resource::v3::identity::ReconnectGeneration;
     use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
     use parking_lot::Mutex;
 
     use super::{
         CredentialResourceRuntimeError, CredentialRevocationEvidence, CredentialRevocationInputs,
-        CredentialRevocationOutcome, CredentialRevocationRequest, CredentialSession,
-        credential_provider_kind, is_credential_provider_ref,
+        CredentialRevocationOutcome, CredentialRevocationReport, CredentialRevocationRequest,
+        CredentialSession, credential_provider_kind, is_credential_provider_ref,
     };
 
     const MI_PROVIDER: &str = "Provider/credential-managed-identity";
@@ -438,6 +500,64 @@ mod tests {
         assert!(debug.contains("session_generation"));
         assert!(!debug.contains("credential-revoke-"));
         assert!(!debug.contains("123e4567-e89b-42d3-a456-426614174000"));
+    }
+
+    #[test]
+    fn a_revocation_reports_release_only_on_confirmation_and_a_dead_lease() {
+        for confirmed in [
+            CredentialRevocationOutcome::Revoked,
+            CredentialRevocationOutcome::AlreadyRevoked,
+        ] {
+            assert!(confirmed.is_confirmed());
+            for observed in [
+                Some(CredentialLeaseState::Revoked),
+                Some(CredentialLeaseState::Expired),
+            ] {
+                let report = CredentialRevocationReport::of(confirmed, observed);
+                assert_eq!(report, CredentialRevocationReport::Released);
+                assert!(report.releases());
+            }
+            for observed in [
+                Some(CredentialLeaseState::Active),
+                Some(CredentialLeaseState::Unknown),
+                None,
+            ] {
+                let report = CredentialRevocationReport::of(confirmed, observed);
+                assert_eq!(report, CredentialRevocationReport::Retained);
+                assert!(
+                    !report.releases(),
+                    "a confirmed revoke with no dead-lease proof must not release"
+                );
+            }
+        }
+
+        for observed in [
+            Some(CredentialLeaseState::Revoked),
+            Some(CredentialLeaseState::Expired),
+            Some(CredentialLeaseState::Active),
+            Some(CredentialLeaseState::Unknown),
+            None,
+        ] {
+            assert!(!CredentialRevocationOutcome::Uncertain.is_confirmed());
+            let report = CredentialRevocationReport::of(CredentialRevocationOutcome::Uncertain, observed);
+            assert_eq!(report, CredentialRevocationReport::Unconfirmed);
+            assert!(
+                !report.releases(),
+                "an unconfirmed revoke never releases, whatever the lease read says"
+            );
+        }
+
+        let request = revocation_request(7);
+        let unconfirmed = CredentialRevocationEvidence::confirmed(
+            &request,
+            CredentialRevocationOutcome::Uncertain,
+        );
+        assert!(!unconfirmed.is_confirmed());
+        let confirmed = CredentialRevocationEvidence::confirmed(
+            &request,
+            CredentialRevocationOutcome::AlreadyRevoked,
+        );
+        assert!(confirmed.is_confirmed());
     }
 
     #[derive(Clone, Default)]

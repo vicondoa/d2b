@@ -113,7 +113,8 @@ exposed.
 ## Generated contracts
 
 **Where:** `docs/reference/schemas/`, `docs/reference/cli-output/`,
-`nixos-modules/generated/`, Provider manifests, and `packages/xtask/`.
+`nixos-modules/generated/`, `generated/new-graph/`, Provider manifests, and
+`packages/xtask/`.
 
 Generate artifacts from owner-local Rust/Nix sources:
 
@@ -123,6 +124,19 @@ bazel run //packages/xtask:xtask -- gen-cli-schemas
 bazel run //packages/xtask:xtask -- gen-zone-schemas
 bazel run //packages/xtask:xtask -- gen-resource-schemas
 ```
+
+`generated/new-graph/` is the one exception worth knowing before editing it:
+`gen-new-graph` renders the unified resource graph's projections from the
+per-crate provider declarations alone, and `build_closure.json` records the
+production file that compiles each staged artifact. Every member of the
+closure is `include!`d by a production entry point - the daemon composition
+root, the zone-session contract and the resource contracts - so nothing no
+production file compiles is staged. Before writing, `gen-new-graph` also
+cross-checks the declarations against the provider crates' own compiled
+sources and refuses a handler a crate compiles with no declared method, a
+declared method nothing compiles, a Provider identity two crates declare, and
+a service package a crate declares but never spells. A hand edit there is
+refused by the same drift gate that covers every other generated artifact.
 
 Update schemas, emitters, manifests, signatures, fixtures, policy closures,
 prose, and changelog together. Do not add a second inventory or drift gate.

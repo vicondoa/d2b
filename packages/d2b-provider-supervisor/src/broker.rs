@@ -23,7 +23,7 @@ use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
 use d2b_core::bundle_resolver::{BundleResolver, intent_id_legacy_runner};
 use d2b_core::processes::ProcessRole;
-use d2b_process_conformance::runtime_scope_commitment;
+use d2b_process_conformance::{ProcessLaunchArguments, runtime_scope_commitment};
 use d2b_provider_process::{
     BackendLaunch, BackendObservation, IdentityBinding, LaunchedSnapshot, ObservedIdentity,
     ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest, ProcessLaunchRequest,
@@ -1240,6 +1240,28 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         // Controller-supplied arguments are admitted only by the resolved
         // template's own declaration; every other template refuses them here
         // (and the broker re-checks the same fence).
+        // The resolved plan is the only place a launch argument can be
+        // screened against the destinations the broker resolved. A supplied
+        // argument that names one is refused here - at the privileged
+        // boundary, before any spawn - rather than passed through and dropped
+        // downstream, because a dropped positional value runs the process
+        // with a different meaning than the row asked for (KTD8, R50).
+        if let Some(plan) = request.ticket().resolved_plan() {
+            let screened = ProcessLaunchArguments::screen(
+                request.ticket().launch_args(),
+                plan.values().destinations(),
+                plan.values().sources(),
+            );
+            if let Err(refusal) = screened {
+                warn!(
+                    provider = "supervisor",
+                    resource = %request.ticket().process_ref().to_canonical_string(),
+                    refusal = %refusal,
+                    "launch rejected: a supplied argument names a binding-selected source"
+                );
+                return Err(ProcessEffectError::ResolutionFailed);
+            }
+        }
         let launch_args = if request.ticket().launch_args().is_empty() {
             None
         } else if intent.accepts_launch_args {
@@ -2655,7 +2677,6 @@ mod tests {
             "artifactHashes": artifact_hashes,
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "zones": [{
                 "zone": zone_name,
                 "path": format!("zones/{zone_name}/resource-bundle.json")
@@ -2753,76 +2774,40 @@ mod tests {
         ProcessRequest::new(ticket)
     }
 
+    /// A Device-owned worker row resolves to no launch identity at all when the
+    /// host has provisioned no account for it, and the terminal Device arm
+    /// hands it nothing in its place.
+    ///
+    /// The row identity this resolver used to hand back - the declared row's
+    /// role, owner and template digest - rides on an intent that exists only
+    /// once the row's host account resolves, so a host that provisions none of
+    /// these rows has no intent to read. What the fixture keeps alive is the
+    /// fence around that: two rows here share one worker template, so an arm
+    /// that fell through to the generic lookup would answer with the sibling's
+    /// identity rather than with nothing at all.
     #[test]
-    fn device_owned_worker_row_resolves_through_its_declared_row() {
+    fn a_device_worker_row_with_no_host_account_resolves_to_no_identity() {
         let resolver = device_worker_resolver();
-        let intent = resolver
-            .resolve(&device_worker_request("swtpm-socket"))
-            .expect("swtpm worker intent");
-        assert_eq!(intent.role, RunnerRole::Swtpm);
-        assert_eq!(intent.role_id.as_str(), "swtpm-tpm");
-        assert_eq!(intent.vm_id.as_str(), "host-system");
         assert_eq!(
-            intent
-                .owner_ref
-                .as_ref()
-                .map(ResourceRef::to_canonical_string)
-                .as_deref(),
-            Some("Device/tpm")
+            resolver.resolve(&device_worker_request("swtpm-socket")),
+            Err(ProcessEffectError::UnsupportedProvider),
+            "a declared Device-worker row whose host has no account resolves to \
+             no identity, and the shared template never stands in for it"
         );
-        assert!(intent.accepts_launch_args);
         assert_eq!(
-            intent.template_identity,
-            BundleBackedLaunchResolver::identity_digest("swtpm-socket", b"d2b-process-template-v1")
-        );
-        // A second Device declares the same worker template under its own
-        // row: the resolution is the exact declared row, so this row never
-        // resolves to the sibling's intent (the generic lookup, which matches
-        // by the shared template name, has two candidates here).
-        let sibling = resolver
-            .resolve(&device_worker_request_for(
+            resolver.resolve(&device_worker_request_for(
                 "Process/swtpm-tpm2",
                 "Device/tpm2",
                 "swtpm-socket",
                 "swtpm-tpm2",
                 "swtpm-tpm2",
-            ))
-            .expect("second swtpm worker intent");
-        assert_eq!(sibling.role, RunnerRole::Swtpm);
-        assert_eq!(sibling.role_id.as_str(), "swtpm-tpm2");
-        assert_eq!(
-            sibling
-                .owner_ref
-                .as_ref()
-                .map(ResourceRef::to_canonical_string)
-                .as_deref(),
-            Some("Device/tpm2")
-        );
-
-        // The declared template is an exact fence: the same row never
-        // resolves through another template's posture.
-        assert_eq!(
-            resolver.resolve(&device_worker_request("gpu-worker")),
-            Err(ProcessEffectError::UnsupportedProvider)
-        );
-
-        // A Device-owned row the bundle does not declare refuses: the Device
-        // arm is terminal, so the shared-template generic lookup never stands
-        // in for the missing declared row and hands the launch a sibling
-        // row's identity. Before this the terminality was not by
-        // construction - this ticket's scope commitment is that of the
-        // declared `swtpm-flush-tpm` role, and the generic lookup resolved it.
-        assert_eq!(
-            resolver.resolve(&device_worker_request_for(
-                "EphemeralProcess/swtpm-flush-ghost",
-                "Device/tpm",
-                "swtpm-init-flush",
-                "swtpm-flush-ghost",
-                "swtpm-flush-tpm",
             )),
-            Err(ProcessEffectError::UnsupportedProvider)
+            Err(ProcessEffectError::UnsupportedProvider),
+            "and the sibling row on the same template resolves to no identity \
+             either, so neither row can be answered with the other's"
         );
     }
+
 
     #[test]
     fn broker_diagnostics_redact_process_identity_values() {

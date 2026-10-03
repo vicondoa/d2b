@@ -4,10 +4,16 @@
 //! consumers never pull this in.
 
 use crate::bundle_resolver::{ResolvedRunnerIntent, UserNamespaceSpec};
+use crate::resource_authority::{AcceptedGraph, AcceptedSource};
 use crate::sandbox_profile::{
     BindMount, CgroupPlacement, MountPolicy, NamespaceSet, WritablePath,
 };
 use crate::processes::{ProcessRole, RoleProfile, RoleUserNamespace};
+use d2b_contracts_resource::v3::authority::{AuthoritySubject, AuthoritySubjectKind};
+use d2b_contracts_resource::v3::binding::{BindingRealizationSupport, SourceAdmission};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceTypeName, StoreIncarnation, ZoneId};
+use d2b_contracts_zone_session::v3::role::{AuthorizedRole, RoleResourceVerb, RoleRule};
+use d2b_contracts_zone_session::v3::RoleBindingSpec;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::pin;
@@ -512,6 +518,106 @@ pub fn sample_zone_native_host_json() -> serde_json::Value {
         "fdOwnership": [],
         "cloudHypervisorCapabilities": []
     })
+}
+
+// ── accepted_source_graph ───────────────────────────────────────────────────
+
+/// One admitted-relationship fact a downstream fixture is building.
+///
+/// A fixture that wants a resolving plan needs a prior accepted graph, and
+/// that graph needs a `Role`, a `RoleBinding`, and a source decision. This
+/// struct is those three facts in one value so a downstream crate can name
+/// the relationship it is about without repeating the role vocabulary - the
+/// reason this builder lives here rather than in each consumer.
+pub struct AcceptedRelationship {
+    zone: ZoneId,
+    store: StoreIncarnation,
+    root: AuthoritySubject,
+    role_ref: ResourceRef,
+    role_binding_ref: ResourceRef,
+    binding_row: ResourceTypeName,
+    consumer: ResourceRef,
+    source: SourceAdmission,
+    support: BindingRealizationSupport,
+}
+
+impl AcceptedRelationship {
+    /// Start a relationship whose consumer is authorized to create its
+    /// binding row.
+    #[allow(clippy::too_many_arguments, reason = "one fixture fact per argument")]
+    pub fn new(
+        zone: ZoneId,
+        store: StoreIncarnation,
+        binding_row: ResourceTypeName,
+        consumer: ResourceRef,
+        source: SourceAdmission,
+        support: BindingRealizationSupport,
+    ) -> Self {
+        Self {
+            zone,
+            store,
+            root: AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+            role_ref: ResourceRef::parse("Role/reader").expect("a canonical fixture Role reference"),
+            role_binding_ref: ResourceRef::parse("RoleBinding/reader")
+                .expect("a canonical fixture RoleBinding reference"),
+            binding_row,
+            consumer,
+            source,
+            support,
+        }
+    }
+
+    /// The prior accepted graph this relationship was admitted in.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the role rule, role, or role binding is not well formed.
+    /// A fixture that cannot build its own authorization facts is a fixture
+    /// bug, and a silently empty graph would resolve nothing and read as a
+    /// passing "refused" case.
+    #[must_use]
+    pub fn accepted_graph(&self) -> AcceptedGraph {
+        let rule = RoleRule::new(
+            vec![self.binding_row.clone()],
+            vec![RoleResourceVerb::Create],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("the fixture role rule is bounded and non-empty");
+        let role = AuthorizedRole::new(vec![rule], Vec::new())
+            .expect("the fixture role is bounded");
+        let binding = RoleBindingSpec::with_facets(
+            self.role_ref.clone(),
+            vec![self.consumer.clone()],
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+        )
+        .expect("the fixture role binding is bounded");
+        AcceptedGraph::new(self.zone.clone(), self.store.clone(), self.root.clone())
+            .with_role(self.role_ref.clone(), role)
+            .with_role_binding(self.role_binding_ref.clone(), binding)
+            .with_source(AcceptedSource::new(
+                self.source.clone(),
+                self.support.clone(),
+            ))
+    }
+
+    /// The zone this relationship was admitted in.
+    pub const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    /// The store generation this relationship was admitted in.
+    pub const fn store(&self) -> &StoreIncarnation {
+        &self.store
+    }
 }
 
 #[cfg(test)]

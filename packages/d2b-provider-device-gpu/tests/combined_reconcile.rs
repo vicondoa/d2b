@@ -1,12 +1,34 @@
 use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid, device::DeviceArbitration,
 };
+use d2b_contracts_resource::v3::DeviceFunction;
 use d2b_provider_device_gpu::{
     GpuAuthorityAdmission, GpuAuthorityLease, GpuBackingToken, GpuClosureProof, GpuController,
-    GpuEffectError, GpuEffectToken, GpuEffectTokenSet, GpuLaunchTicket, GpuLifecycleEffectPort,
-    GpuOwnerProof, GpuPlatformToken, GpuPrincipalToken, GpuProcessIdentity, GpuProcessObservation,
-    GpuProcessRole, GpuReconcileOutcome, GpuSettings, GpuWorkerSpec, VideoWorkerSpec,
+    GpuDeviceGrants, GpuEffectError, GpuEffectToken, GpuEffectTokenSet, GpuLaunchTicket,
+    GpuLifecycleEffectPort, GpuOwnerProof, GpuPlatformToken, GpuPrincipalToken, GpuProcessIdentity,
+    GpuProcessObservation, GpuProcessRole, GpuReconcileOutcome, GpuSettings, GpuWorkerSpec,
+    VideoWorkerSpec,
 };
+
+/// The capabilities a fully admitted Device reaches.
+///
+/// These fixtures are about worker lifecycle, not capability admission, so the
+/// Device here holds every declared shape's capabilities.
+fn full_grants() -> GpuDeviceGrants {
+    let mut names: Vec<DeviceFunction> = [
+        "render-node",
+        "dri",
+        "udmabuf",
+        "nvidia-ctl",
+        "nvidia-uvm",
+        "nvidia-device",
+    ]
+    .iter()
+    .filter_map(|name| DeviceFunction::parse(*name).ok())
+    .collect();
+    names.dedup();
+    GpuDeviceGrants::new(names).expect("distinct capability names")
+}
 
 #[derive(Default)]
 struct FakePort {
@@ -144,7 +166,7 @@ fn video_starts_only_after_gpu_worker_is_ready() {
         ..GpuSettings::default()
     };
     let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([2; 32])]).unwrap();
-    let mut controller = GpuController::new_authorized(admission, settings, tokens).unwrap();
+    let mut controller = GpuController::new_authorized(admission, settings, full_grants(), tokens).unwrap();
     let mut port = FakePort::default();
     assert_eq!(
         controller.reconcile_lifecycle(&mut port).unwrap(),
@@ -168,7 +190,7 @@ fn partial_restart_adoption_restarts_only_the_missing_video_worker() {
     };
     let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([2; 32])]).unwrap();
     let mut controller =
-        GpuController::new_authorized(admission, settings, tokens).unwrap();
+        GpuController::new_authorized(admission, settings, full_grants(), tokens).unwrap();
     let gpu = GpuProcessIdentity::from_core(
         [3; 16],
         GpuProcessRole::FullGpu,
@@ -216,7 +238,7 @@ fn stale_identity_adoption_is_terminal_and_does_not_respawn() {
     let admission = owned_admission();
     let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([2; 32])]).unwrap();
     let mut controller =
-        GpuController::new_authorized(admission, GpuSettings::default(), tokens).unwrap();
+        GpuController::new_authorized(admission, GpuSettings::default(), full_grants(), tokens).unwrap();
     let expected = GpuProcessIdentity::from_core(
         [3; 16],
         GpuProcessRole::FullGpu,
@@ -269,7 +291,7 @@ fn mismatched_matching_observation_is_quarantined() {
     let admission = owned_admission();
     let tokens = GpuEffectTokenSet::from_core(vec![GpuEffectToken::from_core([2; 32])]).unwrap();
     let mut controller =
-        GpuController::new_authorized(admission, GpuSettings::default(), tokens).unwrap();
+        GpuController::new_authorized(admission, GpuSettings::default(), full_grants(), tokens).unwrap();
     let expected = GpuProcessIdentity::from_core(
         [3; 16],
         GpuProcessRole::FullGpu,

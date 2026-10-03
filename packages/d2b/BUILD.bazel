@@ -32,6 +32,13 @@ _daemon_data = [
     "//packages/d2bd:d2bd",
 ]
 
+# The one-shot broker ownership runner `d2b host reset` spawns. The verb is
+# offline by construction - no daemon, no socket - so this binary is the
+# only other process the oracle needs.
+_reset_runner_data = [
+    "//packages/d2b-broker-composition:d2b-broker",
+]
+
 d2b_rust_library(
     name = "d2b_lib",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
@@ -172,6 +179,26 @@ d2b_rust_test(
         "D2B_FIXTURES": "$(rootpath //bazel/checks/fixtures:fixture_smoke)",
     },
     rustc_env = {"CARGO_BIN_EXE_d2b": "$(rootpath :d2b)"},
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "host_reset",
+    srcs = ["tests/host_reset.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":d2b"] + _daemon_data + _reset_runner_data,
+    env = {
+        "CARGO_BIN_EXE_d2b": "$(rootpath :d2b)",
+        "D2B_BROKER_BIN": "$(rootpath //packages/d2b-broker-composition:d2b-broker)",
+    },
+    rustc_env = {
+        "CARGO_BIN_EXE_d2b": "$(rootpath :d2b)",
+        "D2B_BROKER_BIN": "$(rootpath //packages/d2b-broker-composition:d2b-broker)",
+    },
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",

@@ -152,6 +152,22 @@ let
   artifactForPackage = name: package:
     (artifactFor name) // { inherit package; };
 
+  # A Provider package that publishes the declaration projection behind the
+  # catalog row selecting it. The catalog/declaration agreement is closed in
+  # both directions, so a configuration that selects a row states the
+  # declaration that produces it rather than relying on the check being
+  # absent.
+  declaredArtifactFor = name:
+    (artifactFor name) // {
+      package = (artifactFor name).package // {
+        passthru.providerArtifact.declaration = {
+          artifactId = name;
+          providerRef = "Provider/${name}";
+          components = [ ];
+        };
+      };
+    };
+
   signedPlacementContract = name: {
     instanceScope = "per-resource-target";
     supportedTargetKinds = [ "guest" "host" ];
@@ -244,6 +260,17 @@ let
       failures = lib.filter (assertion: !assertion.assertion)
         evaluated.assertions;
     in (lib.head failures).message;
+
+  # The catalog/declaration agreement refusals for one configuration, in their
+  # rendered form. Isolated from whatever else a deliberately minimal fixture
+  # trips, and returning the message rather than a count so the expectation
+  # each refusal states is part of what is asserted.
+  agreementFailures = modules:
+    lib.filter
+      (message: lib.hasInfix "disagree" message)
+      (map (assertion: assertion.message) (lib.filter
+        (assertion: !assertion.assertion)
+        (mkEvalCatalog modules).config.assertions));
 
   # The same three artifacts, authored in a different order and built from a
   # reversed list rather than a literal attribute set. The compiled catalog
@@ -730,7 +757,7 @@ in
     ];
   };
 
-  "provider-catalog/closed-27-row-matrix" = {
+  "provider-catalog/closed-26-row-matrix" = {
     expr = {
       rowCount = builtins.length shape.providerMatrix;
       idCount = builtins.length shape.providerIds;
@@ -745,8 +772,8 @@ in
       layout = shape.artifactLayout;
     };
     expected = {
-      rowCount = 27;
-      idCount = 27;
+      rowCount = 26;
+      idCount = 26;
       idsMatchRows = true;
       rowsUnique = true;
       bootstrapIds = [ "system-core" "system-minijail" ];
@@ -843,7 +870,7 @@ in
   };
 
   "provider-catalog/extra-provider-id-fails-closed" = {
-    expr = lib.hasInfix "outside the closed 27-row"
+    expr = lib.hasInfix "outside the closed 26-row"
       (matrixFailure {
         extra-provider = {
           artifactId = "not-in-the-provider-matrix";
@@ -858,7 +885,8 @@ in
         u20Cfg = (mkEvalCatalog [{
           d2b.artifacts = {
             acceptance-provider = artifactFor "acceptance-provider";
-            runtime-cloud-hypervisor = artifactFor "runtime-cloud-hypervisor";
+            runtime-cloud-hypervisor =
+              declaredArtifactFor "runtime-cloud-hypervisor";
             volume-acceptance-provider =
               artifactFor "volume-acceptance-provider";
           };
@@ -879,7 +907,7 @@ in
           (failure:
             !failure.assertion
             && lib.hasInfix
-              "outside the closed 27-row"
+              "outside the closed 26-row"
               failure.message)
           catalogCfg.assertions;
       in {
@@ -899,6 +927,56 @@ in
       providerCatalogIds = [ "runtime-cloud-hypervisor" ];
       fixtureAssertionsPass = true;
       providerCatalogRejected = true;
+    };
+  };
+
+  # The catalog and the declaration projection must agree on exactly which
+  # Providers exist, in both directions and on exact identity. The comparison
+  # is closed and always runs, so a declaration set that is empty is a named
+  # refusal rather than a quiet pass: dropping the declaration that produces
+  # a selected row, or removing the producing artifact altogether, fails and
+  # states which rows the catalog selected and which declarations produced
+  # them. A configuration that selects nothing and declares nothing satisfies
+  # the same comparison truthfully, because both closed sets are then empty.
+  "provider-catalog/declaration-agreement-is-closed-in-both-directions" = {
+    expr = {
+      nothingSelectedNothingDeclared = agreementFailures [ ] == [ ];
+      agreed = agreementFailures [{
+        d2b.artifacts.runtime-cloud-hypervisor =
+          declaredArtifactFor "runtime-cloud-hypervisor";
+        d2b.providerCatalog.runtime-cloud-hypervisor = {
+          artifactId = "runtime-cloud-hypervisor";
+        };
+      }] == [ ];
+      selectedWithoutDeclaration = agreementFailures [{
+        d2b.artifacts.runtime-cloud-hypervisor =
+          artifactFor "runtime-cloud-hypervisor";
+        d2b.providerCatalog.runtime-cloud-hypervisor = {
+          artifactId = "runtime-cloud-hypervisor";
+        };
+      }];
+      selectedWithoutProducingArtifact = agreementFailures [{
+        d2b.providerCatalog.runtime-cloud-hypervisor = {
+          artifactId = "runtime-cloud-hypervisor";
+        };
+      }];
+      declaredWithoutSelection = agreementFailures [{
+        d2b.artifacts.runtime-cloud-hypervisor =
+          declaredArtifactFor "runtime-cloud-hypervisor";
+      }];
+    };
+    expected = {
+      nothingSelectedNothingDeclared = true;
+      agreed = true;
+      selectedWithoutDeclaration = [
+        "d2b.providerCatalog and the declaration projection disagree. The catalog selects [ runtime-cloud-hypervisor ]; the declarations produce [ ]. Both sets are closed: each selected row must be produced by a declaration, and each produced declaration must be selected."
+      ];
+      selectedWithoutProducingArtifact = [
+        "d2b.providerCatalog and the declaration projection disagree. The catalog selects [ runtime-cloud-hypervisor ]; the declarations produce [ ]. Both sets are closed: each selected row must be produced by a declaration, and each produced declaration must be selected."
+      ];
+      declaredWithoutSelection = [
+        "d2b.providerCatalog and the declaration projection disagree. The catalog selects [ ]; the declarations produce [ runtime-cloud-hypervisor ]. Both sets are closed: each selected row must be produced by a declaration, and each produced declaration must be selected."
+      ];
     };
   };
 

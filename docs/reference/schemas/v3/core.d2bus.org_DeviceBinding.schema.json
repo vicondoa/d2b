@@ -1,0 +1,326 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/core.d2bus.org_DeviceBinding.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "BindingArbitration": {
+      "description": "How the source arbitrates one admitted relationship.",
+      "oneOf": [
+        {
+          "description": "The source admits this consumer alongside its peers.",
+          "enum": [
+            "shared"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The source admits this consumer alone until it releases.",
+          "enum": [
+            "exclusive"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "BindingRealizationFacet": {
+      "description": "The realization facet a requested presentation depends on.\n\nA presentation the selected backend cannot enforce is refused rather than skipped: an unapplied mount policy, an unclaimed device, or an unproven endpoint is not success.",
+      "oneOf": [
+        {
+          "description": "A private mount tree carrying the exact named view at the destination.",
+          "enum": [
+            "filesystem-presentation"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A block device in a consumer device slot.",
+          "enum": [
+            "consumer-device-slot"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A verified device descriptor or mediated attachment.",
+          "enum": [
+            "device-attachment"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An inherited interface in the consumer's own network namespace.",
+          "enum": [
+            "namespace-interface"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Membership in the provider-owned shared fabric realization.",
+          "enum": [
+            "shared-fabric"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A verified connected or listening descriptor for the exact endpoint.",
+          "enum": [
+            "endpoint-descriptor"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A private binding of the exact socket where the backend needs a name.",
+          "enum": [
+            "endpoint-pathname"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Credential material delivered inside an admitted delivery session.",
+          "enum": [
+            "credential-delivery"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "BindingSourceDecision": {
+      "additionalProperties": false,
+      "description": "The source's accepted decision, as committed on a binding row.\n\nA binding row is not only a relationship: it is the source provider's decision about that relationship. The accepted graph a boundary evaluates against is rebuilt from committed rows alone, so the rights the source admitted, the arbitration it chose, and the realization facets it declared all have to be recoverable from the row. Without them a boundary would see an absence and refuse - which is the correct default for an absent fact, and the wrong answer for a committed one.",
+      "properties": {
+        "admittedRights": {
+          "items": {
+            "$ref": "#/definitions/RequestedRights"
+          },
+          "type": "array"
+        },
+        "arbitration": {
+          "$ref": "#/definitions/BindingArbitration"
+        },
+        "realizedFacets": {
+          "items": {
+            "$ref": "#/definitions/BindingRealizationFacet"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "admittedRights",
+        "arbitration",
+        "realizedFacets"
+      ],
+      "type": "object"
+    },
+    "BoundedToken": {
+      "maxLength": 63,
+      "minLength": 1,
+      "type": "string"
+    },
+    "DeviceClaimRequest": {
+      "description": "How one consumer claims the device capability.",
+      "oneOf": [
+        {
+          "description": "The consumer shares the capability with its peers.",
+          "enum": [
+            "shared"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The consumer holds the capability alone until it releases.",
+          "enum": [
+            "exclusive"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "DeviceFunction": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/BoundedToken"
+        }
+      ],
+      "description": "The named function one device claim covers.\n\nThe Device provider resolves the name against its trusted inventory; this contract never carries the physical identity, a device node path, or a host permission bit that could be widened later."
+    },
+    "RequestedRights": {
+      "description": "The right one request asks for.\n\nThis is the shared requested-rights vocabulary. Each kind admits only the subset its own semantics define, so a device claim, a storage writer, a network membership, and a credential delivery cannot be exchanged for one another by spelling a different variant.",
+      "oneOf": [
+        {
+          "description": "Observe the exact named capability without changing it.",
+          "enum": [
+            "observe"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Use the exact named capability for its own effect.",
+          "enum": [
+            "consume"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Take a mutating claim the source arbitrates.",
+          "enum": [
+            "mutate"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Share the source with peer consumers under one source-side decision.",
+          "enum": [
+            "share"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Hold the source exclusively while this relationship is live.",
+          "enum": [
+            "exclusive"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ResourceRef": {
+      "oneOf": [
+        {
+          "maxLength": 81,
+          "minLength": 6,
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|VolumeBinding|Network|Device|CredentialBinding|DeviceBinding|User|Credential|Endpoint|ResourceExport|ResourceImport|Operation|SeccompProfile|EndpointBinding|ExecutionPolicy|NetworkBinding)/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        {
+          "maxLength": 201,
+          "minLength": 15,
+          "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      ],
+      "x-d2b-reference-kind": "ResourceRef",
+      "x-d2b-reference-scope": "same-zone"
+    }
+  },
+  "description": "One named device function attached to one consumer.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$",
+          "type": "string",
+          "x-d2b-allowed-ref-types": [],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "description": "Strict base DeviceBinding specification.\n\nA DeviceBinding row is the committed attachment of one named device function to one consumer. The `function` is part of the row rather than implied by the device: [`DeviceInventory::entry`] is keyed by the function alone, so a row that did not name one would be a claim on \"some function of this device\" - precisely the template-shaped grant this contract removes. The consumer is whatever the kind admits, not a fixed `Guest`.",
+      "properties": {
+        "claim": {
+          "$ref": "#/definitions/DeviceClaimRequest"
+        },
+        "deviceRef": {
+          "$ref": "#/definitions/ResourceRef",
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "executionRef": {
+          "$ref": "#/definitions/ResourceRef",
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "function": {
+          "$ref": "#/definitions/DeviceFunction"
+        },
+        "providerRef": {
+          "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
+          "type": "string",
+          "x-d2b-allowed-ref-types": [
+            "Provider"
+          ],
+          "x-d2b-reference-kind": "ResourceRef",
+          "x-d2b-reference-scope": "same-zone"
+        },
+        "slot": {
+          "$ref": "#/definitions/BoundedToken"
+        },
+        "source": {
+          "$ref": "#/definitions/BindingSourceDecision"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "claim",
+        "deviceRef",
+        "executionRef",
+        "function",
+        "slot",
+        "source"
+      ],
+      "title": "DeviceBindingSpec",
+      "type": "object"
+    },
+    "type": {
+      "const": "DeviceBinding"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "DeviceBinding",
+  "type": "object",
+  "x-d2b-resource-type": "DeviceBinding"
+}

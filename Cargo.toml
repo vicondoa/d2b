@@ -33,7 +33,6 @@ members = [
     "packages/d2b-provider-guest-qemu-media",
     "packages/d2b-provider-shell-terminal",
     "packages/d2b-provider-transport-azure-relay",
-    "packages/d2b-provider-transport-unix",
     "packages/d2b-provider-transport-vsock",
     "packages/d2b-process-conformance",
     "packages/d2b-provider-system-core",
@@ -92,9 +91,9 @@ members = [
     "packages/d2b-provider-emergency-policy",
     "packages/d2b-provider-resource-export",
     "packages/d2b-provider-resource-import",
-    "packages/d2b-provider-command",
     "packages/d2b-provider-operation",
     "packages/d2b-provider-seccomp-profile",
+    "packages/d2b-provider-execution-policy",
     "packages/d2b-test-vm-harness",
 ]
 

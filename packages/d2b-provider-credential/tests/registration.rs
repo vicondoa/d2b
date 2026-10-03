@@ -112,17 +112,28 @@ async fn descriptor_declares_and_registers_the_credential_type() {
         "the declaration carries the family's effects service"
     );
 
-    // The one declared creation is the managed-identity agent Process, under
-    // the minijail Process Provider's own exported reference: the family does
-    // not carry a second spelling of that Provider.
+    // The declared creations are the delivery relationship the committed spec
+    // derives and the managed-identity agent it realizes, in that order: the
+    // relationship is derived from the row's own spec before any Provider
+    // effect runs, and children retire in descending rank. The agent rides the
+    // minijail Process Provider's own exported reference: the family does not
+    // carry a second spelling of that Provider.
     assert_eq!(
         descriptor.creations,
-        &[d2b_resource_types::ChildCreation {
-            child: WellKnownType::PROCESS,
-            provider_ref: d2b_provider_process_minijail::PROVIDER_REF,
-            custody: ChildCustody::DriverOwned,
-            order: 0,
-        }]
+        &[
+            d2b_resource_types::ChildCreation {
+                child: WellKnownType::CREDENTIAL_BINDING,
+                provider_ref: "credential-binding",
+                custody: ChildCustody::DriverOwned,
+                order: 0,
+            },
+            d2b_resource_types::ChildCreation {
+                child: WellKnownType::PROCESS,
+                provider_ref: d2b_provider_process_minijail::PROVIDER_REF,
+                custody: ChildCustody::DriverOwned,
+                order: 1,
+            },
+        ]
     );
 
     let mut providers = ProviderDirectory::new();

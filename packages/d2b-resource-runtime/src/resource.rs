@@ -620,12 +620,35 @@ impl ResourceActorState {
         Ok(())
     }
 
-    /// Teardown (R10, F3): the durable deleting mark is already committed.
-    /// The drain step runs first - on every resource, not only the types the
-    /// old plane gave a finalizer - and a retryable failure from either step
-    /// requeues another pass. Success reports completion to the manager
-    /// (which removes the row and stops this actor).
+    /// Teardown (R10, F3; KTD10): the durable deleting mark is already
+    /// committed, which is also what blocks new authority for the row.
+    ///
+    /// Three stages run in this order, and only a successful pre-drain
+    /// authorizes the second one:
+    ///
+    /// 1. `pre_drain` - this resource's own drain. It fences whatever use the
+    ///    resource keeps open for someone else (a binding's source
+    ///    reservation and its helper legs), detaches the consumer while the
+    ///    required helpers still exist, and finalizes the helpers. A
+    ///    retryable failure requeues and the reservation is retained, so a
+    ///    source can never be freed under a consumer or helper that still
+    ///    holds admitted use.
+    /// 2. `finalize` - the generic children-first finalization, now
+    ///    authorized.
+    /// 3. `delete` - teardown.
+    ///
+    /// The pre-drain stage is driven from here rather than from inside
+    /// `finalize` so the ordering is the actor's lifecycle, not a property a
+    /// driver can reach around. It handles cancellation from every state: a
+    /// request cancelled before anything was reserved and a relationship
+    /// that never became active both converge without waiting for consumer
+    /// activity that cannot exist. No stage blocks the mailbox on a
+    /// descendant; a not-ready stage requeues.
     async fn delete_pass(&mut self, myself: ActorRef<ResourceMsg>) {
+        if let Err(failure) = self.driver.pre_drain(&mut self.ctx).await {
+            self.handle_driver_failure(failure, &myself);
+            return;
+        }
         if let Err(failure) = self.driver.finalize(&mut self.ctx).await {
             self.handle_driver_failure(failure, &myself);
             return;
@@ -1495,6 +1518,10 @@ pub(crate) mod test_support {
         let args = crate::manager::ResourceManagerArgs {
             zone: zone.to_string(),
             store: store.clone(),
+            // The actor test harness has no broker: the recording publisher
+            // fences and accepts what the manager publishes, which is what
+            // these fixtures assert against - the actor's own lifecycle.
+            authority: crate::test_support::RecordingPublisher::new(),
             providers,
             hub: hub.clone(),
             admission: Arc::new(crate::manager::AllowAll),
@@ -1504,6 +1531,10 @@ pub(crate) mod test_support {
             host_target: crate::target::TargetRef::host("test-host").expect("host target"),
             target_resolver,
             backoff,
+            // No per-type relation projection is registered in the actor test
+            // harness: the derived index carries ownership only there, which is
+            // all those fixtures declare.
+            relation_extractors: crate::relations::RelationExtractors::new(),
         };
         let (actor, _join) =
             ractor::Actor::spawn(None, crate::manager::ResourceManager::new(), args)

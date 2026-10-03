@@ -370,6 +370,14 @@ pub struct DurableAuthorityClaim {
     max_holders: u32,
     provider_cardinality: Option<ProviderCardinality>,
     owner_proof: DurableAuthorityOwnerProof,
+    /// The resource whose teardown must reach this claim.
+    ///
+    /// The column name is the legacy spelling: the Zone persistence adapter
+    /// owns this durable format, and the authority index no longer carries a
+    /// Guest-specific field. The index rehydrates it as the family-neutral
+    /// teardown participant that `close_then_drain_teardown` drains by, so
+    /// the storage name is the only surviving family wording and the cutover
+    /// that retires it belongs with the durable-format change.
     dependent_guest: Option<ResourceUid>,
 }
 
@@ -469,17 +477,103 @@ impl core::fmt::Debug for AuthorityStorageClaim {
 }
 
 /// Persisted lifecycle state for one authority operation.
+///
+/// This is the pending/effect/close/release vocabulary every claim owner
+/// already shares. It is deliberately not a per-family enum: a provider
+/// reservation, a device claim, and a binding's source reservation are the
+/// same record at different stages, and a second vocabulary would be a second
+/// ledger to reconcile against this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuthorityOperationState {
+    /// The claim is reserved and its effect has not been dispatched.
     Pending,
+    /// The effect completed and observation confirmed it.
     EffectConfirmed,
+    /// The effect failed retryably; the claim is still held.
     EffectRetryable,
+    /// The effect failed terminally; the claim is still held for drain.
     EffectTerminal,
+    /// The effect is being closed ahead of release.
     Closing,
+    /// The effect is confirmed closed and the claim may be released.
     Closed,
+    /// The claim is released and its record retired.
     Released,
 }
+
+/// The common pending/effect/close/release record of one claim (KTD9).
+///
+/// This is the record a reservation owner drives, extracted from the
+/// storage row so the lifecycle a claim follows is one shape rather than a
+/// per-family variant. It carries the operation identity, the lifecycle
+/// state, and the two digests that fence the record; the authority claim
+/// itself stays on the storage row, because the claim is what the index
+/// rehydrates from and the record is what the owner advances.
+///
+/// The record is not an authority: it names no holder and mints no
+/// capability, so recovering from it can never remint access on its own.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AuthorityReservationRecord {
+    operation_id: String,
+    state: AuthorityOperationState,
+    claim_digest: String,
+    store_binding_digest: String,
+}
+
+impl AuthorityReservationRecord {
+    /// Extract the common record from one storage row.
+    pub fn of(operation: &AuthorityStorageOperation) -> Self {
+        Self {
+            operation_id: operation.operation_id.clone(),
+            state: operation.state,
+            claim_digest: operation.claim_digest.clone(),
+            store_binding_digest: operation.store_binding_digest.clone(),
+        }
+    }
+
+    /// Borrow the operation identity this record advances.
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+
+    /// The lifecycle state the record is in.
+    pub const fn state(&self) -> AuthorityOperationState {
+        self.state
+    }
+
+    /// Borrow the digest of the claim this record belongs to.
+    pub fn claim_digest(&self) -> &str {
+        &self.claim_digest
+    }
+
+    /// Borrow the digest binding this record to its store incarnation.
+    pub fn store_binding_digest(&self) -> &str {
+        &self.store_binding_digest
+    }
+
+    /// Whether this record has reached the release stage, so the claim it
+    /// describes is free and the record may be retired.
+    pub const fn is_released(&self) -> bool {
+        matches!(self.state, AuthorityOperationState::Released)
+    }
+}
+
+impl core::fmt::Debug for AuthorityReservationRecord {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AuthorityReservationRecord")
+            .field("operation_id", &"<opaque>")
+            .field("state", &self.state)
+            .field("has_claim_digest", &!self.claim_digest.is_empty())
+            .field(
+                "has_store_binding_digest",
+                &!self.store_binding_digest.is_empty(),
+            )
+            .finish()
+    }
+}
+
 
 /// Non-authorizing operation row stored by the Zone persistence adapter.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -500,6 +594,17 @@ impl core::fmt::Debug for AuthorityStorageOperation {
             .field("claim", &self.claim)
             .field("state", &self.state)
             .finish()
+    }
+}
+
+impl AuthorityStorageOperation {
+    /// The common pending/effect/close/release record of this row (KTD9).
+    ///
+    /// The storage row stays family-shaped because the Zone persistence
+    /// adapter owns its durable format; the record every claim owner advances
+    /// is the same shape regardless of which claim variant the row carries.
+    pub fn record(&self) -> AuthorityReservationRecord {
+        AuthorityReservationRecord::of(self)
     }
 }
 
@@ -622,7 +727,7 @@ pub struct AuthorityRequest {
     arbitration: AuthorityArbitration,
     max_holders: usize,
     provider_cardinality: Option<ProviderCardinality>,
-    dependent_guest: Option<ResourceUid>,
+    teardown_participant: Option<ResourceUid>,
 }
 
 impl AuthorityRequest {
@@ -1007,7 +1112,7 @@ impl AuthorityRequest {
             max_holders: self.max_holders as u32,
             provider_cardinality: self.provider_cardinality,
             owner_proof: DurableAuthorityOwnerProof::from_owner_proof(&self.owner_proof),
-            dependent_guest: self.dependent_guest.clone(),
+            dependent_guest: self.teardown_participant.clone(),
         }
     }
 
@@ -1020,13 +1125,13 @@ impl AuthorityRequest {
         max_holders: usize,
         provider_cardinality: Option<ProviderCardinality>,
         owner_proof: AuthorityOwnerProof,
-        dependent_guest: Option<ResourceUid>,
+        teardown_participant: Option<ResourceUid>,
     ) -> Result<Self, AuthorityError> {
         if max_holders == 0 || max_holders > u32::MAX as usize {
             return Err(AuthorityError::InvalidAuthorityHolderLimit);
         }
         if !valid_resource_uid(&owner_proof.resource_uid)
-            || dependent_guest
+            || teardown_participant
                 .as_ref()
                 .is_some_and(|uid| !valid_resource_uid(uid))
         {
@@ -1041,7 +1146,7 @@ impl AuthorityRequest {
             arbitration,
             max_holders,
             provider_cardinality,
-            dependent_guest.as_ref(),
+            teardown_participant.as_ref(),
         )?;
         Ok(Self {
             key: AuthorityKey::new(scope, class, opaque_digest)?,
@@ -1049,7 +1154,7 @@ impl AuthorityRequest {
             arbitration,
             max_holders,
             provider_cardinality,
-            dependent_guest,
+            teardown_participant,
         })
     }
 
@@ -1059,7 +1164,7 @@ impl AuthorityRequest {
         arbitration: AuthorityArbitration,
         max_holders: usize,
         provider_cardinality: Option<ProviderCardinality>,
-        dependent_guest: Option<&ResourceUid>,
+        teardown_participant: Option<&ResourceUid>,
     ) -> Result<(), AuthorityError> {
         let host_scoped = matches!(scope, AuthorityScope::Host(_));
         let zone_scoped = matches!(scope, AuthorityScope::Zone(_));
@@ -1069,7 +1174,7 @@ impl AuthorityRequest {
                     || arbitration != AuthorityArbitration::Exclusive
                     || max_holders != 1
                     || provider_cardinality.is_none()
-                    || dependent_guest.is_some()
+                    || teardown_participant.is_some()
                 {
                     return Err(AuthorityError::InvalidAuthorityRequest);
                 }
@@ -1081,7 +1186,7 @@ impl AuthorityRequest {
                     || arbitration != AuthorityArbitration::Exclusive
                     || max_holders != 1
                     || provider_cardinality.is_some()
-                    || dependent_guest.is_some()
+                    || teardown_participant.is_some()
                 {
                     return Err(AuthorityError::InvalidAuthorityRequest);
                 }
@@ -1091,7 +1196,7 @@ impl AuthorityRequest {
                     || arbitration != AuthorityArbitration::Exclusive
                     || max_holders != 1
                     || provider_cardinality.is_some()
-                    || dependent_guest.is_none()
+                    || teardown_participant.is_none()
                 {
                     return Err(AuthorityError::InvalidAuthorityRequest);
                 }
@@ -1101,7 +1206,7 @@ impl AuthorityRequest {
                     || arbitration != AuthorityArbitration::Shared
                     || max_holders < 2
                     || provider_cardinality.is_some()
-                    || dependent_guest.is_some()
+                    || teardown_participant.is_some()
                 {
                     return Err(AuthorityError::InvalidAuthorityRequest);
                 }
@@ -1116,7 +1221,7 @@ impl AuthorityRequest {
                     || arbitration == AuthorityArbitration::Shared
                     || max_holders != 1
                     || provider_cardinality.is_some()
-                    || dependent_guest.is_some()
+                    || teardown_participant.is_some()
                 {
                     return Err(AuthorityError::InvalidAuthorityRequest);
                 }
@@ -1126,7 +1231,7 @@ impl AuthorityRequest {
                     || arbitration != AuthorityArbitration::Exclusive
                     || max_holders != 1
                     || provider_cardinality.is_some()
-                    || dependent_guest.is_some()
+                    || teardown_participant.is_some()
                 {
                     return Err(AuthorityError::InvalidAuthorityRequest);
                 }
@@ -1136,7 +1241,7 @@ impl AuthorityRequest {
                     || arbitration != AuthorityArbitration::Shared
                     || max_holders != 1
                     || provider_cardinality.is_some()
-                    || dependent_guest.is_some()
+                    || teardown_participant.is_some()
                 {
                     return Err(AuthorityError::InvalidAuthorityRequest);
                 }
@@ -1146,7 +1251,7 @@ impl AuthorityRequest {
                     || arbitration != AuthorityArbitration::Shared
                     || max_holders != 1
                     || provider_cardinality.is_some()
-                    || dependent_guest.is_some()
+                    || teardown_participant.is_some()
                 {
                     return Err(AuthorityError::InvalidAuthorityRequest);
                 }
@@ -1162,7 +1267,7 @@ impl AuthorityRequest {
         arbitration: AuthorityArbitration,
         max_holders: usize,
         owner_proof: AuthorityOwnerProof,
-        dependent_guest: Option<ResourceUid>,
+        teardown_participant: Option<ResourceUid>,
     ) -> Result<Self, AuthorityError> {
         if backing.is_zero() {
             return Err(AuthorityError::InvalidAuthorityKey);
@@ -1181,7 +1286,7 @@ impl AuthorityRequest {
             max_holders,
             None,
             owner_proof,
-            dependent_guest,
+            teardown_participant,
         )
     }
 
@@ -1225,7 +1330,7 @@ pub struct AuthorityLease {
     arbitration: AuthorityArbitration,
     max_holders: usize,
     provider_cardinality: Option<ProviderCardinality>,
-    dependent_guest: Option<ResourceUid>,
+    teardown_participant: Option<ResourceUid>,
     token: u128,
     operation_id: Option<String>,
 }
@@ -1365,7 +1470,7 @@ struct GenericHolder {
     operation_id: Option<String>,
     owner_proof: AuthorityOwnerProof,
     max_holders: usize,
-    dependent_guest: Option<ResourceUid>,
+    teardown_participant: Option<ResourceUid>,
 }
 
 struct GenericAuthorityEntry {
@@ -1373,7 +1478,7 @@ struct GenericAuthorityEntry {
     arbitration: AuthorityArbitration,
     max_holders: usize,
     provider_cardinality: Option<ProviderCardinality>,
-    dependent_guest: Option<ResourceUid>,
+    teardown_participant: Option<ResourceUid>,
 }
 
 /// Core-owned Host-global external physical-NIC authority index.
@@ -1507,7 +1612,7 @@ impl HostGlobalAuthorityIndex {
                         request.arbitration,
                         request.max_holders,
                         request.provider_cardinality,
-                        request.dependent_guest.clone(),
+                        request.teardown_participant.clone(),
                     )) {
                         return Err(AuthorityError::InvalidAuthorityRequest);
                     }
@@ -1698,7 +1803,7 @@ impl HostGlobalAuthorityIndex {
                     max_holders: entry.max_holders as u32,
                     provider_cardinality: entry.provider_cardinality,
                     owner_proof: DurableAuthorityOwnerProof::from_owner_proof(&holder.owner_proof),
-                    dependent_guest: holder.dependent_guest.clone(),
+                    dependent_guest: holder.teardown_participant.clone(),
                 })
             })
             .collect()
@@ -1759,7 +1864,7 @@ impl HostGlobalAuthorityIndex {
                 operation_id: operation_id.clone(),
                 owner_proof: request.owner_proof.clone(),
                 max_holders: request.max_holders,
-                dependent_guest: request.dependent_guest.clone(),
+                teardown_participant: request.teardown_participant.clone(),
             });
         } else {
             self.authorities.insert(
@@ -1770,12 +1875,12 @@ impl HostGlobalAuthorityIndex {
                         operation_id: operation_id.clone(),
                         owner_proof: request.owner_proof.clone(),
                         max_holders: request.max_holders,
-                        dependent_guest: request.dependent_guest.clone(),
+                        teardown_participant: request.teardown_participant.clone(),
                     }],
                     arbitration: request.arbitration,
                     max_holders: request.max_holders,
                     provider_cardinality: request.provider_cardinality,
-                    dependent_guest: request.dependent_guest.clone(),
+                    teardown_participant: request.teardown_participant.clone(),
                 },
             );
         }
@@ -1785,7 +1890,7 @@ impl HostGlobalAuthorityIndex {
             arbitration: request.arbitration,
             max_holders: request.max_holders,
             provider_cardinality: request.provider_cardinality,
-            dependent_guest: request.dependent_guest,
+            teardown_participant: request.teardown_participant,
             token,
             operation_id,
         })
@@ -1833,7 +1938,7 @@ impl HostGlobalAuthorityIndex {
         let indexed = entry.holders.iter().find(|holder| {
             holder.owner_proof == request.owner_proof
                 && holder.max_holders == request.max_holders
-                && holder.dependent_guest == request.dependent_guest
+                && holder.teardown_participant == request.teardown_participant
                 && entry.arbitration == request.arbitration
                 && entry.provider_cardinality == request.provider_cardinality
         });
@@ -1846,7 +1951,7 @@ impl HostGlobalAuthorityIndex {
                 arbitration: entry.arbitration,
                 max_holders: holder.max_holders,
                 provider_cardinality: entry.provider_cardinality,
-                dependent_guest: holder.dependent_guest.clone(),
+                teardown_participant: holder.teardown_participant.clone(),
                 token: holder.token,
                 operation_id: holder.operation_id.clone(),
             })
@@ -1890,7 +1995,7 @@ impl HostGlobalAuthorityIndex {
             .position(|holder| {
                 holder.token == lease.token
                     && holder.owner_proof == lease.owner_proof
-                    && holder.dependent_guest == lease.dependent_guest
+                    && holder.teardown_participant == lease.teardown_participant
                     && holder.max_holders == lease.max_holders
                     && entry.arbitration == lease.arbitration
                     && entry.provider_cardinality == lease.provider_cardinality
@@ -1906,24 +2011,38 @@ impl HostGlobalAuthorityIndex {
         Ok(())
     }
 
-    /// Confirm closure of every authority-backed effect before releasing
-    /// leases owned by a finalized Guest.
-    pub fn close_then_drain_guest(
+    /// Confirm closure of every authority-backed effect one teardown
+    /// participant holds, then release exactly those holders.
+    ///
+    /// This is the close-before-release path (KTD9, R6, R36) and it is
+    /// family-neutral by construction: the caller names the scope it is
+    /// draining and the participant whose teardown must reach the claims, and
+    /// the index matches those two identities without knowing what kind of
+    /// resource either one is. It used to be a `close_then_drain_guest` method
+    /// that hard-coded the Host scope and a Guest identity, which is the
+    /// family-specific ownership this index must not carry (R6: a controller
+    /// requests deletion and release only for its own resources).
+    ///
+    /// All-or-nothing: one unconfirmed close returns
+    /// [`AuthorityError::AuthorityCloseUnconfirmed`] and releases nothing, so
+    /// a claim whose effect could not be proven closed stays held rather than
+    /// becoming free for reassignment.
+    pub fn close_then_drain_teardown(
         &mut self,
-        host_uid: &ResourceUid,
-        guest_uid: &ResourceUid,
+        scope: &AuthorityScope,
+        participant: &ResourceUid,
         mut close: impl FnMut(&AuthorityLease) -> AuthorityCloseOutcome,
     ) -> Result<usize, AuthorityError> {
         let keys = self
             .authorities
             .iter()
             .filter(|(key, entry)| {
-                matches!(&key.scope, AuthorityScope::Host(host) if host == host_uid)
-                    && (entry.dependent_guest.as_ref() == Some(guest_uid)
+                &key.scope == scope
+                    && (entry.teardown_participant.as_ref() == Some(participant)
                         || entry
                             .holders
                             .iter()
-                            .any(|holder| holder.dependent_guest.as_ref() == Some(guest_uid)))
+                            .any(|holder| holder.teardown_participant.as_ref() == Some(participant)))
             })
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
@@ -1937,7 +2056,7 @@ impl HostGlobalAuthorityIndex {
                         arbitration: entry.arbitration,
                         max_holders: holder.max_holders,
                         provider_cardinality: entry.provider_cardinality,
-                        dependent_guest: holder.dependent_guest.clone(),
+                        teardown_participant: holder.teardown_participant.clone(),
                         token: holder.token,
                         operation_id: holder.operation_id.clone(),
                     })
@@ -2875,31 +2994,144 @@ fn authority_proof(value: &str, generation: u64) -> AuthorityOwnerProof {
     }
 
     #[test]
-    fn dependent_authority_requires_close_before_finalizer_release() {
+    fn a_teardown_participant_requires_close_before_finalizer_release() {
         let host = uid("c83e4567-e89b-42d3-a456-426614174047");
-        let guest = uid("d83e4567-e89b-42d3-a456-426614174048");
+        let teardown = uid("d83e4567-e89b-42d3-a456-426614174048");
         let request = AuthorityRequest::guest_store_view_writer(
             host.clone(),
-            guest.clone(),
+            teardown.clone(),
             authority_proof("e83e4567-e89b-42d3-a456-426614174049", 1),
         )
         .unwrap();
         let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
         index.admit_authority(request.clone()).unwrap();
 
+        // The drain is close-before-release and all-or-nothing: an
+        // unconfirmed close releases nothing, so the claim stays held instead
+        // of becoming free for reassignment.
         assert_eq!(
-            index
-                .close_then_drain_guest(&host, &guest, |_| AuthorityCloseOutcome::RetryableFailure),
+            index.close_then_drain_teardown(
+                &AuthorityScope::Host(host.clone()),
+                &teardown,
+                |_| AuthorityCloseOutcome::RetryableFailure
+            ),
             Err(AuthorityError::AuthorityCloseUnconfirmed)
         );
         assert_eq!(index.authority_status(&request).unwrap().holder_count(), 1);
         assert_eq!(
             index
-                .close_then_drain_guest(&host, &guest, |_| AuthorityCloseOutcome::Confirmed)
+                .close_then_drain_teardown(
+                    &AuthorityScope::Host(host),
+                    &teardown,
+                    |_| AuthorityCloseOutcome::Confirmed
+                )
                 .unwrap(),
             1
         );
         assert!(index.authority_status(&request).is_none());
+    }
+
+    #[test]
+    fn the_teardown_drain_reaches_only_the_named_scope_and_participant() {
+        let host = uid("c83e4567-e89b-42d3-a456-42661417404a");
+        let zone = uid("c83e4567-e89b-42d3-a456-42661417404b");
+        let teardown = uid("d83e4567-e89b-42d3-a456-42661417404c");
+        let other = uid("d83e4567-e89b-42d3-a456-42661417404d");
+        let dependent = AuthorityRequest::guest_store_view_writer(
+            host.clone(),
+            teardown.clone(),
+            authority_proof("e83e4567-e89b-42d3-a456-42661417404e", 1),
+        )
+        .unwrap();
+        let zone_scoped = AuthorityRequest::kvm(
+            host.clone(),
+            authority_proof("e83e4567-e89b-42d3-a456-42661417404f", 1),
+        )
+        .unwrap();
+        let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
+        index.admit_authority(dependent.clone()).unwrap();
+        index.admit_authority(zone_scoped.clone()).unwrap();
+
+        // A different participant drains nothing: ownership is not inferred
+        // from the key, and the index never decides who owns a claim.
+        assert_eq!(
+            index.close_then_drain_teardown(
+                &AuthorityScope::Host(host.clone()),
+                &other,
+                |_| AuthorityCloseOutcome::Confirmed
+            )
+            .unwrap(),
+            0
+        );
+        assert!(index.authority_status(&zone_scoped).is_some());
+
+        // A different scope is likewise not reached, even for the right
+        // participant.
+        assert_eq!(
+            index.close_then_drain_teardown(
+                &AuthorityScope::Zone(zone),
+                &teardown.clone(),
+                |_| AuthorityCloseOutcome::Confirmed
+            )
+            .unwrap(),
+            0
+        );
+        assert!(index.authority_status(&dependent).is_some());
+
+        assert_eq!(
+            index
+                .close_then_drain_teardown(
+                    &AuthorityScope::Host(host),
+                    &teardown,
+                    |_| AuthorityCloseOutcome::Confirmed
+                )
+                .unwrap(),
+            1
+        );
+        assert!(index.authority_status(&dependent).is_none());
+        assert!(
+            index.authority_status(&zone_scoped).is_some(),
+            "a claim this participant never named is untouched by its teardown"
+        );
+    }
+
+    #[test]
+    fn the_extracted_reservation_record_is_the_pending_to_release_shape() {
+        let host = uid("c83e4567-e89b-42d3-a456-426614174050");
+        let teardown = uid("d83e4567-e89b-42d3-a456-426614174051");
+        let request = AuthorityRequest::guest_store_view_writer(
+            host,
+            teardown,
+            authority_proof("e83e4567-e89b-42d3-a456-426614174052", 1),
+        )
+        .unwrap();
+        let (mut operation, _prepared) =
+            operation_row("op-record", &request);
+
+        for state in [
+            AuthorityOperationState::Pending,
+            AuthorityOperationState::EffectConfirmed,
+            AuthorityOperationState::EffectRetryable,
+            AuthorityOperationState::EffectTerminal,
+            AuthorityOperationState::Closing,
+            AuthorityOperationState::Closed,
+        ] {
+            operation.state = state;
+            let record = operation.record();
+            assert_eq!(record.operation_id(), "op-record");
+            assert_eq!(record.state(), state);
+            assert_eq!(record.claim_digest(), claim_digest(&operation.claim).unwrap());
+            assert_eq!(
+                record.store_binding_digest(),
+                operation.store_binding_digest
+            );
+            assert!(
+                !record.is_released(),
+ "{state:?} is not a released record"
+            );
+        }
+        operation.state = AuthorityOperationState::Released;
+        assert!(operation.record().is_released());
     }
 
     fn operation_row(

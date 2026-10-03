@@ -1,16 +1,20 @@
-//! The RoleBinding provider crate: the RoleBinding resource type's driver declaration.
+//! The RoleBinding provider crate: the RoleBinding resource type's driver
+//! declaration.
 //!
 //! The crate owns the RoleBinding type's identity and the
 //! [`DriverDescriptor`](d2b_resource_types::DriverDescriptor) the plane
 //! registers the type by. The conversion itself - validate, recover,
 //! reconcile, finalize, and delete - is the shared declaration-only metadata
-//! driver of `d2b_resource_runtime::metadata`, so this crate cannot diverge
-//! from its siblings on it.
+//! driver of `d2b-resource-runtime`, so this crate cannot diverge from its
+//! siblings on it.
 //!
 //! `RoleBinding` binds a role to its declared subjects: the driver converges
 //! it as metadata once its desired state is admitted, and the row carries the
 //! role reference and the typed subject, resource, zone, and execution scopes
-//! the authorization path resolves.
+//! the authorization path resolves. The grant shape itself is the canonical
+//! `RoleBindingSpec` in `d2b-contracts-zone-session`, and the decision is the
+//! shared evaluator's; a candidate binding is judged against the prior
+//! accepted graph, so it can never authorize its own creation.
 
 #![deny(missing_docs)]
 

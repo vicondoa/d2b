@@ -280,7 +280,6 @@ pub fn context_specs(root: &Path) -> Result<Vec<ContextSpec>, String> {
         });
         for (name, feature) in [
             ("broker-default-tests", None),
-            ("broker-layer1-bootstrap-tests", Some("layer1-bootstrap")),
             ("broker-fake-backends-tests", Some("fake-backends")),
         ] {
             contexts.push(ContextSpec {

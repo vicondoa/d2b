@@ -23,26 +23,48 @@
 
 #![deny(missing_docs)]
 
+mod binding;
 mod driver;
-
 mod effects_service;
 mod facets;
 
+
 #[cfg(any(test, feature = "test-support"))]
+/// Recording doubles shared with downstream crates unit tests.
 pub mod test_support;
 
 pub use driver::{
     EndpointDriver, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverError,
     EndpointDriverFactory, EndpointDriverStatus, EndpointPurposeVocabulary, EndpointRealization,
-    GuestControlProducer, VIRTIOFSD_PURPOSE, endpoint_descriptor, endpoint_realization,
-    endpoint_spec_decoder,
+    GuestControlProducer, VIRTIOFSD_PURPOSE, endpoint_child_support_ceiling,
+    endpoint_descriptor, endpoint_realization, endpoint_spec_decoder,
 };
 pub use effects_service::{
     ENDPOINT_EFFECTS_SERVICE, EndpointEffectsService, EndpointEffectsServiceFactory,
     device_worker_endpoint_class, device_worker_purpose, guest_control_producer,
     guest_control_purpose,
 };
-pub use facets::{DeviceWorkerEvidenceSource, EndpointEffectFacets, EndpointSocketSource, GuestVmmEvidenceSource};
+pub use facets::{
+    DeviceWorkerEvidenceSource, EndpointAccessDispatch, EndpointAccessDispatchError,
+    UnwiredEndpointAccess,
+    EndpointEffectFacets, EndpointSocketSource, GuestVmmEvidenceSource,
+};
+
+pub use binding::{
+    ENDPOINT_BINDING_TYPE_NAME, AdmittedEndpointBinding, BindingReadiness,
+    DeclaredEndpointBinding, DeliveryFenceViolation, DeliveryForm, EndpointAccessObservation,
+    EndpointBindingAdmission, EndpointBindingDriver, EndpointBindingDriverArgs,
+    EndpointBindingDriverError, EndpointBindingDriverFactory, EndpointBindingDriverStatus,
+    EndpointBindingError, EndpointBindingRegistry, EndpointBindingRow, EndpointConsumerTarget,
+    EndpointDelivery, EndpointDeliveryRefusal, EndpointProvenance, EndpointSocketIdentity,
+    EndpointSourceKey, EndpointTeardown, ParentInputOutcome, binding_row_name,
+    canonical_binding_row, canonical_binding_rows, declared_attachment, declared_delivery_form,
+    declared_endpoint_bindings, endpoint_access_request, endpoint_binding_descriptor,
+    endpoint_binding_spec_decoder, endpoint_binding_support,
+    endpoint_binding_support_ceiling, endpoint_delivery_slot, endpoint_grants_observe,
+    ensure_realizable, fence_delivery_environment, fence_delivery_environment_all,
+    fence_delivery_payload, fence_delivery_payload_all, required_right_bits,
+};
 
 /// The Endpoint ResourceType spec and status shapes owned by this crate.
 pub mod endpoint;

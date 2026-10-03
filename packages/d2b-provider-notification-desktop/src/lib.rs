@@ -14,7 +14,12 @@
 pub mod test_support;
 
 mod action_nonce;
-mod admission;
+/// ComponentSession admission, the Provider's declared service, and its
+/// declared endpoint grants (U28).
+///
+/// This module is public because the composing host reads the declared
+/// service and the endpoint-grant vocabulary from it.
+pub mod admission;
 mod audit;
 mod controller;
 mod descriptor;
@@ -29,7 +34,14 @@ mod runtime;
 mod types;
 
 pub use action_nonce::{ActionNonce, ActionNonceError, ActionNonceStore};
-pub use admission::{AdmissionError, AdmissionPurpose, SessionEvidence, TransportClass};
+pub use admission::{
+    AdmittedNotificationEndpoint, AdmissionError, AdmissionPurpose, DISPLAY_DESKTOP_PROVIDER_REF,
+    DISPLAY_DESKTOP_SERVICE, NOTIFICATION_METHODS, NOTIFICATION_SERVICE, NotificationEndpointBinding,
+    NotificationEndpointError, NotificationEndpointEvidence, NotificationEndpointFence,
+    NotificationEndpointGate, NotificationEndpointPhase, NotificationEndpointRefusal,
+    NotificationEndpointRole, NotificationHostEndpoints, SessionEvidence, TransportClass,
+    admit_notification_endpoint, notification_endpoint_bindings,
+};
 pub use audit::{NotificationAuditKind, NotificationAuditRecord};
 pub use controller::{
     DisplayDependencyEvidence, DisplayDependencyState, GuestSourceConfig, NotificationController,

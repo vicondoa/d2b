@@ -25,7 +25,7 @@ use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
 use d2b_contracts::types::{PathClass as BrokerPathClass, ScopeId};
-use d2b_contracts_broker::broker_wire::{CgroupKillRequest, OpenCgroupDirRequest};
+use d2b_contracts_broker::broker_wire::OpenCgroupDirRequest;
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_host::cgroup::{
     self as host_cgroup, CgroupBackend, CgroupError, Controller, D2B_SLICE_NAME,
@@ -77,6 +77,11 @@ impl fmt::Display for CgroupOpError {
 }
 
 impl CgroupOpError {
+    /// The audit `error_kind` slug for this refusal.
+    // Reached only from the retained legacy `handle_*` helpers, which
+    // nothing routes to; the live `live_*` helpers surface the error
+    // through `Display` instead.
+    #[allow(dead_code, reason = "audit slug used only by the unrouted legacy handle_* helpers")]
     fn code(&self) -> &'static str {
         match self {
             CgroupOpError::Host(err) => err.code(),
@@ -110,6 +115,7 @@ impl From<CgroupOpError> for super::OpError {
 /// Paths extracted from the trusted bundle that the cgroup handlers
 /// resolve to. Constructed by the integrator-managed bundle loader.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code, reason = "legacy generic-backend cgroup seam: only the retained handle_* helpers below and this module's tests build it")]
 pub struct CgroupBundleContext {
     pub unified_hierarchy_root: PathBuf,
     /// Systemd-managed delegated parent slice. The broker only writes
@@ -124,6 +130,7 @@ pub struct CgroupBundleContext {
 }
 
 impl CgroupBundleContext {
+    #[allow(dead_code, reason = "path helpers of the legacy bundle-context seam, reached only from the retained handle_* helpers and this module's tests")]
     pub fn slice_path(&self) -> &Path {
         &self.parent_slice
     }
@@ -135,14 +142,6 @@ impl CgroupBundleContext {
     /// the only entries that carry processes.
     pub fn vm_interior_path(&self, vm_id: &str) -> PathBuf {
         self.slice_path().join(vm_id)
-    }
-
-    /// v1.1.1 per-role leaf cgroup path
-    /// `d2b.slice/<vm_id>/<role_id>/`. Processes for the
-    /// `(vm_id, role_id)` SpawnRunner instance are placed here via
-    /// `clone3(CLONE_INTO_CGROUP)` at spawn time.
-    pub fn vm_role_leaf_path(&self, vm_id: &str, role_id: &str) -> PathBuf {
-        self.vm_interior_path(vm_id).join(role_id)
     }
 
     /// v1.0 backward-compat alias: returns the per-VM INTERIOR
@@ -169,6 +168,7 @@ impl CgroupBundleContext {
 /// Outcome of a `DelegateCgroupV2` call: includes the slice path,
 /// owner uid, and the controllers enabled by this delegation pass.
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "return value of the retained legacy delegate handler; the dispatched path acks without an outcome")]
 pub struct DelegateCgroupV2Outcome {
     pub slice_path: PathBuf,
     pub owner_uid: u32,
@@ -177,6 +177,7 @@ pub struct DelegateCgroupV2Outcome {
 
 /// Outcome of an `OpenCgroupDir` call.
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "return value of the retained legacy open-dir handler; the dispatched path returns LiveOpenCgroupDirOutcome")]
 pub struct OpenCgroupDirOutcome {
     pub cgroup_path: PathBuf,
     pub cgroup_id: String,
@@ -186,6 +187,7 @@ pub struct OpenCgroupDirOutcome {
 /// Audit-recording trait. The integrator wires this up to the live
 /// [`crate::audit::AuditLog`]; the fake harness for L1c tests records
 /// to an in-memory `Vec<AuditFields>`.
+#[allow(dead_code, reason = "legacy audit seam implemented only by this module's recording sink; AuditLog owns the dispatched rows")]
 pub trait AuditSink {
     fn record(
         &self,
@@ -198,6 +200,7 @@ pub trait AuditSink {
 
 /// Per-variant audit fields for `DelegateCgroupV2`/`OpenCgroupDir` rows.
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code, reason = "audit-row payload of the retained legacy handlers; AuditLog owns the dispatched rows")]
 pub struct AuditFields {
     pub slice_path: Option<PathBuf>,
     pub controllers_enabled: Vec<Controller>,
@@ -208,22 +211,12 @@ pub struct AuditFields {
 
 /// `path_class` discriminant per plan.md `OpenCgroupDir` audit row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code, reason = "path-class discriminant the retained legacy handlers record into their audit rows")]
 pub enum PathClass {
     D2bSlice,
     VmLeaf,
     Foreign,
     Unknown,
-}
-
-impl PathClass {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            PathClass::D2bSlice => "d2b-slice",
-            PathClass::VmLeaf => "vm-leaf",
-            PathClass::Foreign => "foreign",
-            PathClass::Unknown => "unknown-subject",
-        }
-    }
 }
 
 /// `DelegateCgroupV2`: runs the cgroup delegation algorithm against a
@@ -234,6 +227,7 @@ impl PathClass {
 /// enables controllers / chowns only within that subtree. Per the
 /// broker variant table, `destructive: no`, `secret: no`, audit
 /// decision `allowed` on success.
+#[allow(dead_code, reason = "legacy delegation arm: this module's tests drive it against the fake backend; the dispatch reaches live_delegate_cgroup_v2")]
 pub fn handle_delegate_cgroup_v2<B, A>(
     backend: &B,
     context: &CgroupBundleContext,
@@ -300,6 +294,7 @@ where
 /// dispatch; this handler returns the canonical path plus a stable
 /// `cgroup_id` derived from the unified subject name so the audit
 /// record matches the plan-named field.
+#[allow(dead_code, reason = "legacy open-dir arm: this module's tests drive it against the fake backend; the dispatch reaches live_open_cgroup_dir")]
 pub fn handle_open_cgroup_dir<B, A>(
     backend: &B,
     context: &CgroupBundleContext,
@@ -373,6 +368,7 @@ where
 
 /// Cgroup-kill handler: refuses ancestor kills with `cgroup-kill-on-
 /// ancestor-refused`. Only callable from teardown paths in the runtime.
+#[allow(dead_code, reason = "legacy cgroup-kill arm: this module's tests drive its unknown-subject refusal; the kernel cgroup-kill surface serves teardown now")]
 pub fn handle_cgroup_kill<B, A>(
     backend: &B,
     context: &CgroupBundleContext,
@@ -445,6 +441,7 @@ pub(crate) fn create_d2b_slice<B: CgroupBackend>(
     Ok(parent_slice.to_path_buf())
 }
 
+#[allow(dead_code, reason = "audit-decision mapping used only by the retained legacy delegate handler")]
 fn classify_decision(err: &CgroupOpError) -> AuditDecision {
     match err {
         CgroupOpError::Host(
@@ -460,6 +457,7 @@ fn classify_decision(err: &CgroupOpError) -> AuditDecision {
     }
 }
 
+#[allow(dead_code, reason = "path-escape guard used only by the retained legacy open-dir handler")]
 fn is_under_slice(candidate: &Path, slice: &Path) -> bool {
     candidate.starts_with(slice)
 }
@@ -474,11 +472,13 @@ pub mod test_harness {
     use std::sync::Mutex;
 
     #[derive(Debug, Default)]
+    #[allow(dead_code, reason = "in-memory audit sink whose only consumer is this module's tests, so the fake-backends library build has no reader")]
     pub struct RecordingAuditSink {
         pub entries: Mutex<Vec<RecordedEntry>>,
     }
 
     #[derive(Debug, Clone)]
+    #[allow(dead_code, reason = "row recorded by the in-memory audit sink, read only by this module's tests")]
     pub struct RecordedEntry {
         pub operation: &'static str,
         pub decision: AuditDecision,
@@ -506,11 +506,15 @@ pub mod test_harness {
 }
 
 #[derive(Debug)]
+// The real-wire dispatcher opens the cgroup dir; the bootstrap dispatcher
+// compiles no cgroup arm, so this pair has no reader there.
 pub struct LiveOpenCgroupDirOutcome {
     pub cgroup_path: PathBuf,
     pub fd: OwnedFd,
 }
 
+// The real-wire dispatcher delegates the slice; the bootstrap dispatcher
+// compiles no cgroup arm, so this handler has no caller there.
 pub fn live_delegate_cgroup_v2(
     exec: &SystemLiveExec,
     resolver: &BundleResolver,
@@ -542,6 +546,8 @@ pub fn live_delegate_cgroup_v2(
     Ok(())
 }
 
+// The real-wire dispatcher opens the cgroup dir; the bootstrap dispatcher
+// compiles no cgroup arm, so this handler has no caller there.
 pub fn live_open_cgroup_dir(
     exec: &SystemLiveExec,
     resolver: &BundleResolver,
@@ -599,106 +605,6 @@ pub fn live_open_cgroup_dir(
         }
     })?;
     Ok(LiveOpenCgroupDirOutcome { cgroup_path, fd })
-}
-
-fn resolve_runner_cgroup_leaf(
-    resolver: &BundleResolver,
-    req: &CgroupKillRequest,
-) -> Result<PathBuf, super::OpError> {
-    let mut matching_intent = None;
-    for intent_id in resolver.runner_intent_ids() {
-        let Some(intent) = resolver.find_runner_intent(intent_id) else {
-            continue;
-        };
-        if intent.vm_name == req.vm_id.as_str()
-            && runner_role_matches(&intent.role_id, req.role_id.as_str())
-            && runner_cgroup_shape(&intent.cgroup_placement.subtree, req.vm_id.as_str()).is_some()
-        {
-            if matching_intent.is_some() {
-                return Err(super::OpError::InvalidInput {
-                    detail: "ambiguous trusted runner cgroup intent".to_owned(),
-                });
-            }
-            matching_intent = Some(intent);
-        }
-    }
-    let intent = matching_intent.ok_or_else(|| super::OpError::UnknownSubject {
-        operation: "CgroupKill",
-        subject: format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str()),
-    })?;
-
-    let components = Path::new(&intent.cgroup_placement.subtree)
-        .components()
-        .collect::<Vec<_>>();
-    let segment = |index: usize| {
-        components.get(index).and_then(|component| match component {
-            std::path::Component::Normal(value) => value.to_str(),
-            _ => None,
-        })
-    };
-    let Some(role_index) =
-        runner_cgroup_shape(&intent.cgroup_placement.subtree, req.vm_id.as_str())
-    else {
-        return Err(super::OpError::Refused {
-            operation: "CgroupKill",
-            reason: "runner-cgroup-leaf-invalid".to_owned(),
-        });
-    };
-    let role_matches_path = segment(role_index) == Some(intent.role_id.as_str())
-        || (req.role_id.as_str() == "ch-runner"
-            && intent.role_id == "cloud-hypervisor"
-            && segment(role_index) == Some("cloud-hypervisor"));
-    if !role_matches_path {
-        return Err(super::OpError::Refused {
-            operation: "CgroupKill",
-            reason: "runner-cgroup-leaf-invalid".to_owned(),
-        });
-    }
-    Ok(Path::new("/sys/fs/cgroup").join(&intent.cgroup_placement.subtree))
-}
-
-fn runner_role_matches(intent_role: &str, requested_role: &str) -> bool {
-    intent_role == requested_role
-        || (requested_role == "ch-runner" && intent_role == "cloud-hypervisor")
-}
-
-fn runner_cgroup_shape(subtree: &str, vm_id: &str) -> Option<usize> {
-    let components = Path::new(subtree).components().collect::<Vec<_>>();
-    if components.len() == 4
-        && matches!(components[0], std::path::Component::Normal(value) if value == "d2b.slice")
-        && matches!(components[2], std::path::Component::Normal(value) if value == vm_id)
-    {
-        Some(3)
-    } else if components.len() == 3
-        && matches!(components[0], std::path::Component::Normal(value) if value == "d2b.slice")
-        && matches!(components[1], std::path::Component::Normal(value) if value == vm_id)
-        && matches!(components[2], std::path::Component::Normal(_))
-    {
-        Some(2)
-    } else {
-        None
-    }
-}
-
-/// Kill one trusted runner leaf during intentional teardown.
-///
-/// The request carries `(vm_id, role_id)`. The broker resolves the cgroup
-/// placement from its bundle copy and refuses anything other than a
-/// canonical `d2b.slice/<zone>/<guest>/<role>` or legacy
-/// `d2b.slice/<vm>/<role>` leaf shape. A same-named Zone-qualified Guest
-/// collision is refused as ambiguous rather than selecting a cgroup.
-pub fn live_kill_runner_cgroup(
-    resolver: &BundleResolver,
-    req: &CgroupKillRequest,
-) -> Result<(), super::OpError> {
-    let leaf = resolve_runner_cgroup_leaf(resolver, req)?;
-    let backend = host_cgroup::RealCgroupBackend::new();
-    host_cgroup::cgroup_kill_leaf_only(&backend, &leaf, std::slice::from_ref(&leaf)).map_err(
-        |error| super::OpError::Refused {
-            operation: "CgroupKill",
-            reason: error.code().to_owned(),
-        },
-    )
 }
 
 #[cfg(test)]

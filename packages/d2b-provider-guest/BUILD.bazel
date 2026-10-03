@@ -77,6 +77,24 @@ d2b_rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
+d2b_rust_test(
+    name = "graph_target_contract",
+    srcs = ["tests/graph_target_contract.rs"],
+    # The structural ratchet reads the contract's own source at compile time.
+    compile_data = [
+        "Cargo.toml",
+        "src/lib.rs",
+        "src/target_control.rs",
+        "src/target_service.rs",
+    ],
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2bd-runtime:d2bd_runtime",
+        ":d2b_provider_guest",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 # keep
 filegroup(
     name = "cargo_workspace_sources",
@@ -90,6 +108,10 @@ filegroup(
             "integration/**/*",
             "nix/**/*",
             "README.md",
+            "operations.json",
+            "registrations.json",
+            "resource-types.json",
+            "service-catalog.json",
             "src/**/*.rs",
             "tests/**/*.rs",
         ],

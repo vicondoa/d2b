@@ -1,5 +1,6 @@
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test", "rust_doc_test", "rust_clippy_test")
+load("//bazel/checks/rust:d2b_rust_rules.bzl", "d2b_rust_test")
 load("//bazel/checks/rust:defs.bzl", "broker_test_tags")
 
 
@@ -72,32 +73,6 @@ rust_library(
 )
 
 rust_library(
-    name = "d2b_broker_layer1_bootstrap",
-    srcs = d2b_broker_srcs,
-    compile_data = d2b_broker_compile_data,
-    crate_features = ["layer1-bootstrap"],
-    crate_name = "d2b_broker",
-    visibility = ["//visibility:public"],
-    deps = d2b_broker_shared_deps + [
-        "//packages/d2b-core:d2b_core",
-        "//packages/d2b-host:d2b_host",
-    ] + all_crate_deps(normal = True, cargo_only = True),
-)
-
-rust_library(
-    name = "d2b_broker_layer1_bootstrap_test_support",
-    srcs = d2b_broker_srcs,
-    compile_data = d2b_broker_compile_data,
-    crate_features = ["layer1-bootstrap"],
-    crate_name = "d2b_broker",
-    visibility = ["//visibility:public"],
-    deps = d2b_broker_test_support_deps + [
-        "//packages/d2b-core:d2b_core_test_support",
-        "//packages/d2b-host:d2b_host_fake_backends",
-    ] + all_crate_deps(normal = True, cargo_only = True),
-)
-
-rust_library(
     name = "d2b_broker_fake_backends",
     srcs = d2b_broker_srcs,
     compile_data = d2b_broker_compile_data,
@@ -129,6 +104,96 @@ rust_library(
 # the prebuilt host-tool selection stay untouched). The tests below reach
 # the binary through the composition package's targets.
 
+d2b_rust_test(
+    name = "authority_publication",
+    srcs = ["tests/authority_publication.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = broker_test_tags(),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_broker",
+        "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "owned_reset",
+    srcs = ["tests/owned_reset.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = broker_test_tags(),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_broker",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-host:d2b_host",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+
+d2b_rust_test(
+    name = "endpoint_delivery",
+    srcs = ["tests/endpoint_delivery.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "//:tests/golden/manifest_v04/baseline-vms.json",
+        "//tests/fixtures:deny-unknown/host-valid.json",
+    ],
+    tags = broker_test_tags(),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_broker",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "volume_presentation",
+    srcs = ["tests/volume_presentation.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = broker_test_tags(),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_broker",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "store_view_binding",
+    srcs = ["tests/store_view_binding.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = broker_test_tags(),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-host:d2b_host",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
+    name = "admitted_effects",
+    srcs = ["tests/admitted_effects.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = broker_test_tags(),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_broker",
+        "//packages/d2b-contracts-broker:d2b_contracts_broker",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-core:d2b_core",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 rust_test(
     name = "bridge_lifecycle",
     srcs = ["tests/bridge_lifecycle.rs"],
@@ -143,39 +208,6 @@ rust_test(
         ":d2b_broker_test_support",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-core:d2b_core_test_support",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "broker_export_audit",
-    srcs = [
-        "tests/broker_export_audit.rs",
-        "tests/common/mod.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    crate_features = ["layer1-bootstrap"],
-    crate_root = "tests/broker_export_audit.rs",
-    data = ["//packages/d2b-broker-composition:d2b-broker-layer1-bootstrap"],
-    env = {"CARGO_BIN_EXE_d2b-broker": "$(rootpath //packages/d2b-broker-composition:d2b-broker-layer1-bootstrap)"},
-    rustc_env = {"CARGO_BIN_EXE_d2b-broker": "$(rootpath //packages/d2b-broker-composition:d2b-broker-layer1-bootstrap)"},
-    tags = broker_test_tags(),
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts:d2b_contracts_test_support",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "bootstrap_caller_role_labels",
-    srcs = ["tests/bootstrap_caller_role_labels.rs"],
-    compile_data = ["Cargo.toml"],
-    crate_features = ["layer1-bootstrap"],
-    crate_root = "tests/bootstrap_caller_role_labels.rs",
-    tags = broker_test_tags(),
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2b_broker_layer1_bootstrap",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -196,25 +228,6 @@ rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts:d2b_contracts_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
-    name = "broker_socket_acl",
-    srcs = [
-        "tests/broker_socket_acl.rs",
-        "tests/common/mod.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    crate_features = ["layer1-bootstrap"],
-    crate_root = "tests/broker_socket_acl.rs",
-    data = ["//packages/d2b-broker-composition:d2b-broker-layer1-bootstrap"],
-    env = {"CARGO_BIN_EXE_d2b-broker": "$(rootpath //packages/d2b-broker-composition:d2b-broker-layer1-bootstrap)"},
-    rustc_env = {"CARGO_BIN_EXE_d2b-broker": "$(rootpath //packages/d2b-broker-composition:d2b-broker-layer1-bootstrap)"},
-    tags = broker_test_tags(),
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -373,20 +386,6 @@ rust_test(
 )
 
 rust_test(
-    name = "d2b_broker_layer1_bootstrap_test",
-    compile_data = ["Cargo.toml"],
-    crate = ":d2b_broker_layer1_bootstrap_test_support",
-    data = ["//packages/d2b-broker-composition:d2b-broker"],
-    env = {"CARGO_BIN_EXE_d2b-broker": "$(rootpath //packages/d2b-broker-composition:d2b-broker)"},
-    rustc_env = {
-        "CARGO_BIN_EXE_d2b-broker": "$(rootpath //packages/d2b-broker-composition:d2b-broker)",
-        "CARGO_MANIFEST_DIR": ".",
-    },
-    tags = broker_test_tags(),
-    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-rust_test(
     name = "d2b_broker_fake_backends_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_broker_fake_backends_test_support",
@@ -484,17 +483,14 @@ rust_doc_test(
 # the crate's own targets.
 rust_clippy_test(
     name = "clippy",
-    targets = [":d2b_broker",
+    targets = [":admitted_effects",
+        ":authority_publication",
+        ":d2b_broker",
         ":d2b_broker_test_support",
-        ":d2b_broker_layer1_bootstrap",
-        ":d2b_broker_layer1_bootstrap_test_support",
         ":d2b_broker_fake_backends",
         ":d2b_broker_fake_backends_test_support",
         ":bridge_lifecycle",
-        ":broker_export_audit",
-        ":bootstrap_caller_role_labels",
         ":broker_protocol_compatibility",
-        ":broker_socket_acl",
         ":bundle_tampered_broker",
         ":kernel_surface",
         ":persistent_tap_lifecycle",
@@ -504,7 +500,6 @@ rust_clippy_test(
         ":socket_activation",
         ":w12_fd_passing_response",
         ":d2b_broker_test",
-        ":d2b_broker_layer1_bootstrap_test",
         ":d2b_broker_fake_backends_test",
         ":host_profile",
         ":guest_profile",

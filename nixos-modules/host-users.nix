@@ -7,9 +7,10 @@
 # the allocation, so an account cannot pin a colliding or host-specific id
 # and a re-seed cannot renumber a live principal.
 #
-# The per-Device TPM accounts are not in the allocation: their names are
-# derived per Zone from the trusted bundle rows (`d2bLib.deviceTpmPrincipals`),
-# so they stay config-derived here.
+# The template-bound row accounts are not in the allocation: their
+# names are derived per Zone from the same trusted Zone rows
+# `d2b-core`'s `template_account` composes them from
+# (`d2bLib.templateWorkerAccounts`), so they stay config-derived here.
 { config, lib, ... }:
 
 let
@@ -36,28 +37,53 @@ let
   # The host lifecycle users the site declares: the accounts exist outside
   # this module, membership of the `d2b` admission group is what it grants.
   lifecycleUsers = lib.unique (cfg.site.adminUsers ++ cfg.site.launcherUsers);
-  tpmPrincipals = d2bLib.deviceTpmPrincipals cfg;
-  tpmAccountRows = map
-    (row: {
-      name = row.account;
-      uid = row.ownerUid;
-      gid = row.ownerUid;
-      description = "d2b Device TPM state owner";
-    })
-    tpmPrincipals;
-  tpmFlushRows = map
-    (row: {
-      name = row.flushAccount;
-      uid = row.flushUid;
-      gid = row.flushUid;
-      description = "d2b Device TPM pre-start flush principal";
-    })
-    tpmPrincipals;
-  rows = accountRows ++ tpmAccountRows ++ tpmFlushRows;
+  # The accounts every template-bound row class runs as, derived per Zone
+  # from the same trusted Zone rows `d2b-core`'s `template_account`
+  # composes its names from.
+  templateAccounts = d2bLib.templateWorkerAccounts cfg;
+  rows = accountRows ++ templateAccounts;
 
   rowOf = name: lib.findFirst (row: row.name == name) null rows;
+  # The allocated identities and the derived per-Zone identities are two
+  # independent derivations, so a collision between them is checked here
+  # rather than assumed away.
+  distinct = f:
+    builtins.length (builtins.attrNames (builtins.listToAttrs
+      (map (row: { name = f row; value = true; }) rows)));
 in
 {
+  assertions = [
+    {
+      assertion = distinct (row: row.name) == builtins.length rows;
+      message = "d2b host accounts: two provisioned rows compose the same
+        account name. Rename the Zone, Device or Provider they are derived
+        from; two row classes cannot share one identity.";
+    }
+    {
+      assertion = distinct (row: toString row.uid) == builtins.length rows;
+      message = "d2b host accounts: two provisioned accounts collide on a uid.
+        The allocated identities and the derived per-Zone identities are two
+        independent derivations, so rename the Zone, Device or Provider they
+        are derived from.";
+    }
+    # The host account database carries a name of at most
+    # `d2bLib.accountNameLimit` bytes, and the derived per-Zone accounts
+    # are already bounded to it by `d2bLib.boundedAccountName`. This is
+    # where the allocated principals are proved to fit the same bound,
+    # rather than aborting the host's own evaluation at a length the
+    # account database cannot hold.
+    {
+      assertion = builtins.all
+        (row: builtins.stringLength row.name <= d2bLib.accountNameLimit)
+        rows;
+      message = "d2b host accounts: a provisioned account name is longer
+        than the bytes the host account database carries. NixOS's own user
+        and group options refuse 32 bytes or more, so rename the principal
+        the allocation names; a name the host cannot hold is refused by
+        the resolver rather than truncated into another identity.";
+    }
+  ];
+
   users.groups = {
     # Membership grants admission to the root daemon public socket. Object
     # authorization remains the daemon's SO_PEERCRED and Zone policy check.

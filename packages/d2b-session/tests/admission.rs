@@ -963,3 +963,67 @@ fn authorization_request_enforces_relay_and_diagnostic_bindings() {
     )
     .unwrap();
 }
+
+/// A peer's teardown ends this side's driver, and that driver has already
+/// read the peer's answer off the wire. The answer is owed to the caller
+/// waiting on it, so ending the session must not discard it: the caller
+/// that claims it after the teardown still gets its response instead of the
+/// session's own `session-disconnected`.
+///
+/// The peer here answers and then drops the session with no wait at all for
+/// this side to collect the answer, which is the ordering a peer's teardown
+/// produces. The test then waits for this side's driver to actually be gone
+/// before it claims anything, so the response is provably buffered at
+/// teardown rather than merely still in flight.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+async fn a_ttrpc_response_read_before_the_peer_closes_is_still_delivered() {
+    let policy = endpoint_policy();
+    let (initiator, responder) = engine_pair(&policy).await;
+    let request = b"in-flight-request".to_vec();
+    let response = b"in-flight-response".to_vec();
+    let initiator = Arc::new(initiator.into_driver());
+    let peer = {
+        let response = response.clone();
+        let request = request.clone();
+        tokio::spawn(async move {
+            let responder = responder.into_driver();
+            assert_eq!(responder.receive_ttrpc().await.unwrap(), request);
+            responder.send_ttrpc(response).await.unwrap();
+            // The peer answers and ends the session in the same breath, with
+            // no signal that this side has read the answer.
+            drop(responder);
+        })
+    };
+    initiator
+        .start_ttrpc(
+            d2b_session::contract::RequestId::new(vec![0x51; 16]).unwrap(),
+            request,
+        )
+        .await
+        .unwrap();
+    peer.await.unwrap();
+    // Retire a request this side never issued: harmless bookkeeping that
+    // still needs a live driver, so it is an exact probe for the driver
+    // having ended on the peer's close.
+    let probe = d2b_session::contract::RequestId::new(vec![0x52; 16]).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if initiator.complete_ttrpc(probe.clone()).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("this side's driver never ended on the peer's close");
+    assert_eq!(
+        initiator
+            .receive_ttrpc()
+            .await
+            .unwrap_or_else(|error| panic!(
+                "the peer's teardown dropped the response it had already written: {error}"
+            )),
+        response
+    );
+}

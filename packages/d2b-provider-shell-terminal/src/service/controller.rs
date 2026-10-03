@@ -8,7 +8,10 @@ use std::{
 use crate::{
     Authorizer, ShellPool, ShellSession, ShellTerminalError, Subject,
     resources::validate_name,
-    service::supervisor::{Attachment, SessionCapability, SessionSupervisor, ShellAuthorityPort},
+    service::supervisor::{
+        Attachment, SessionCapability, SessionSupervisor, ShellAuthorityPort,
+        SupervisorProcessResource, TerminalStreamBinding, WorkloadIdentity,
+    },
     session::{AdoptionDecision, SupervisorCandidate, SupervisorIdentity, adopt_supervisor},
 };
 use tracing::warn;
@@ -103,6 +106,38 @@ impl OpenSessionResult {
             identity,
             Arc::clone(&self.authority),
         ))
+    }
+
+    /// Build a supervisor only for the identity its launch actually ran as.
+    ///
+    /// The process adapter proves the effective `User` from the launched
+    /// unit, so this is evidence about a running process rather than a
+    /// request parameter: a user-domain supervisor cannot be started under a
+    /// different user's identity, and the refusal lands before the supervisor
+    /// is claimed and before any attachment can be reserved.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::StaleSessionGeneration`] for a stale
+    /// generation, [`ShellTerminalError::WorkloadIdentityMismatch`] when the
+    /// proven identity is not the session's admitted `User`, or the
+    /// authority's refusal otherwise.
+    pub fn start_supervisor_for(
+        &self,
+        identity: SupervisorIdentity,
+        workload: &WorkloadIdentity,
+    ) -> Result<SessionSupervisor, ShellTerminalError> {
+        SupervisorProcessResource::admitted_for_session(&self.session, workload).inspect_err(
+            |error| {
+                warn!(
+                    provider = "shell-terminal",
+                    session = self.session.name(),
+                    error = ?error,
+                    "supervisor start refused: launch identity is not the session's admitted user"
+                );
+            },
+        )?;
+        self.start_supervisor(identity)
     }
 }
 
@@ -220,8 +255,14 @@ impl ShellTerminalController {
 
     /// Restore a reconciled session before the controller admits new sessions.
     ///
+    /// `stream` is the admitted `EndpointBinding` relationship the session's
+    /// interactive stream rides. A reconnect retains only a supervisor that
+    /// still measures against it, so a stale reconnect generation, a `Process`
+    /// this session does not own, and a different stream endpoint are each
+    /// their own refusal rather than one "ambiguous" verdict.
+    ///
     /// The session remains counted for capacity even when the supervisor is
-    /// missing or ambiguous, preventing a restart from recreating a resource
+    /// missing or refused, preventing a restart from recreating a resource
     /// name while its earlier process may still exist.
     ///
     /// # Errors
@@ -231,6 +272,7 @@ impl ShellTerminalController {
     pub fn restore_session(
         &mut self,
         session: ShellSession,
+        stream: &TerminalStreamBinding,
         expected_identity: &SupervisorIdentity,
         candidates: &[SupervisorCandidate],
     ) -> Result<AdoptionDecision, ShellTerminalError> {
@@ -244,7 +286,11 @@ impl ShellTerminalController {
             );
             return Err(ShellTerminalError::CapacityExceeded);
         }
-        let decision = adopt_supervisor(session.name(), expected_identity, candidates);
+        // A reconnect retains only a supervisor that still measures against
+        // the admitted Process and terminal Endpoint. Older reconnect
+        // evidence, a Process this session does not own, and a different
+        // stream endpoint are separate refusals rather than one "ambiguous".
+        let decision = adopt_supervisor(&session, stream, expected_identity, candidates);
         if decision != AdoptionDecision::Adopted {
             warn!(
                 provider = "shell-terminal",

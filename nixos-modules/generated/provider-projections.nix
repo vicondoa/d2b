@@ -19,7 +19,6 @@
     "clipboard-wayland"
     "notification-desktop"
     "activation-nixos"
-    "observability-otel"
     "shell-terminal"
     "runtime-qemu-media"
     "runtime-azure-container-apps"
@@ -38,7 +37,6 @@
     "clipboard-wayland" = "providerProjectionClipboardWayland";
     "notification-desktop" = "providerProjectionNotificationDesktop";
     "activation-nixos" = "providerProjectionActivationNixos";
-    "observability-otel" = "providerProjectionObservabilityOtel";
     "shell-terminal" = "providerProjectionShellTerminal";
     "runtime-qemu-media" = "providerProjectionRuntimeQemuMedia";
     "runtime-azure-container-apps" = "providerProjectionRuntimeAzureContainerApps";

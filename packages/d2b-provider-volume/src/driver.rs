@@ -31,13 +31,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use d2b_contracts_resource::v3::{
-    ResourceName, ResourceRef, ResourceSpec, ResourceTypeName as ContractResourceTypeName,
-    ResourceUid,
+    BindingContractError, ResourceName, ResourceRef, ResourceSpec, ZoneId,
+    ResourceTypeName as ContractResourceTypeName, ResourceUid,
     volume::VolumeSpec,
 };
 use crate::effects_service::{VOLUME_EFFECTS_SERVICE, VolumeEffectsService};
-use crate::facets::VolumeEffectFacets;
-use d2b_provider_volume_local::desired_binding_intents;
+use crate::facets::{
+    BindingDelivery, BindingDeliveryReason, BindingEvidenceAbsent, CommittedBinding,
+    VolumeBindingAdmission, VolumeEffectFacets,
+};
+use d2b_provider_volume_virtiofs::{BindingPhase, MountObservation, VirtiofsServingError};
+use d2b_resource_runtime::spec_store::EnsureOutcome;
+use d2b_provider_toolkit::shared_provider::{ContextChildSurface, SharedProviderChildSurface};
+use d2b_provider_volume_local::{
+    AdmittedVolumeBinding, canonical_binding_row, desired_binding_intents,
+};
 use d2b_resource_runtime::context::{
     ChildEnsure, ResourceContext, SpecDecoder, typed_spec_decoder,
 };
@@ -49,6 +57,7 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
+use d2b_provider_volume_local::is_admitted_binding_row_name;
 use d2b_resource_types::{
     AllowedSources, CONVERTED_TYPE_VERBS, ChildCreation, ChildCustody, DriverDescriptor,
     WellKnownType,
@@ -171,13 +180,100 @@ impl core::fmt::Display for VolumeDriverError {
 impl std::error::Error for VolumeDriverError {}
 
 /// Typed in-memory status projection (R11: never persisted).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum VolumeDriverStatus {
     /// The layout effect is in flight.
     EnsuringLayout,
     /// Binding children derived; readiness aggregates the child rows this
     /// pass converged (R8/R9: child phases, never a parent-side override).
-    ServingChildren { desired: usize, converged: bool },
+    ServingChildren {
+        /// Every `VolumeBinding` row this pass serves: the attachment-shaped
+        /// children the spec derives plus the canonical relationships the
+        /// admission committed.
+        desired: usize,
+        /// Whether every attachment-shaped child this pass derived is
+        /// present. A canonical row is committed by the pass that derives it,
+        /// so it is converged by construction or that pass failed.
+        converged: bool,
+        /// What the canonical KTD2 path (U14) did on this pass.
+        canonical: CanonicalBindingState,
+    },
+}
+
+/// What the canonical `VolumeBinding` path (U14, KTD2/KTD3) did on one
+/// pass.
+///
+/// These three states are the whole contract of the producing half: a row
+/// is committed only out of a real admission, and a pass with no evidence
+/// changes nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CanonicalBindingState {
+    /// The pass did not reach the admission (recover adopts without
+    /// reconciling).
+    NotReconciled,
+    /// The seam admitted exactly this many relationships, and every one of
+    /// them is committed under this row.
+    Committed {
+        /// Relationships committed under this row on this pass.
+        relationships: usize,
+        /// What the virtiofs delivery pass (U15) did with those committed
+        /// rows.
+        delivery: BindingDeliverySet,
+    },
+    /// The seam carried no admission evidence: nothing was committed and
+    /// nothing was retired, and the refusal names what is missing.
+    EvidenceAbsent(BindingEvidenceAbsent),
+}
+
+impl CanonicalBindingState {
+    /// How many canonical relationships this row commits after the pass.
+    pub(crate) const fn committed(&self) -> usize {
+        match self {
+            Self::NotReconciled | Self::EvidenceAbsent(_) => 0,
+            Self::Committed { relationships, .. } => *relationships,
+        }
+    }
+}
+
+/// What the virtiofs delivery pass (U15) did with this row's committed
+/// canonical relationships.
+///
+/// The two states are the whole contract: the privileged leg is daemon-only,
+/// so a runtime that composes none reports the absence by name and delivers
+/// nothing, rather than describing rows as served by a leg nobody holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingDeliverySet {
+    /// This Zone's runtime composes no virtiofs serving delivery, so every
+    /// committed relationship is undelivered and no row is described as
+    /// served.
+    CompositionAbsent,
+    /// One verdict per committed relationship this pass delivered, in the
+    /// order the pass committed them.
+    Delivered(Vec<BindingDelivery>),
+}
+
+impl BindingDeliverySet {
+    /// How many committed relationships this pass reported a verdict for.
+    ///
+    /// Not `len`: this counts the verdicts a pass reported, not the contents
+    /// of a collection, so it is zero for a runtime that composes no delivery
+    /// rather than for one that delivered nothing. `delivered_any` is the
+    /// predicate that answers whether anything reached a consumer.
+    pub fn verdict_count(&self) -> usize {
+        match self {
+            Self::CompositionAbsent => 0,
+            Self::Delivered(delivered) => delivered.len(),
+        }
+    }
+
+    /// Whether no relationship reached the consumer.
+    ///
+    /// This is the negative the delivery contract turns on: a committed row
+    /// whose consumer never reports its mount is NOT delivered, and a Zone
+    /// with no privileged leg delivers nothing at all.
+    pub fn delivered_any(&self) -> bool {
+        matches!(self, Self::Delivered(delivered) if delivered.iter().any(BindingDelivery::is_delivered))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +332,72 @@ pub trait VolumeDriverEffects: Send + Sync + 'static {
     /// Discover existing volume-local layout state for this exact uid
     /// (recover probe).
     fn has_layout(&self, volume_uid: &ResourceUid) -> bool;
+
+    /// Admit the canonical `VolumeBindingRequest` relationships declared
+    /// against this Volume and report the ones the source may commit a row
+    /// for (U14, KTD2/KTD3).
+    ///
+    /// The refusal is a named absence of evidence, never a fallback: the
+    /// driver commits no canonical row without it, because a row is a
+    /// relationship and an unfenced relationship is not one.
+    async fn admit_bindings(
+        &self,
+        source: &VolumeBindingAdmission<'_>,
+    ) -> Result<Vec<AdmittedVolumeBinding>, BindingEvidenceAbsent>;
+
+    /// Whether this driver's effects compose a virtiofs serving delivery.
+    ///
+    /// The privileged leg is daemon-only (R2): a driver whose effects were
+    /// not given one reports the absence by name, rather than calling the
+    /// delivery verbs once per relationship and recording the same refusal
+    /// over and over as if each row had failed on its own.
+    fn serves_virtiofs_bindings(&self) -> bool {
+        false
+    }
+
+    /// Deliver one committed `VolumeBinding` row's virtiofs view (U15).
+    ///
+    /// The delivery is a real observation: the verdict is the consumer's
+    /// own mount reaching it, as the privileged leg reports it. A row
+    /// whose consumer reports the source serving while its own mount is
+    /// absent is delivered as `Degraded`, never as served.
+    ///
+    /// # Errors
+    ///
+    /// Returns the named refusal under [`BindingDeliveryReason`] when the
+    /// privileged leg refused, never answered, or answered about another
+    /// relationship, and when this runtime composes no delivery at all.
+    async fn deliver_binding(
+        &self,
+        _source: &VolumeBindingAdmission<'_>,
+        _row: &CommittedBinding,
+    ) -> Result<BindingDelivery, BindingDeliveryReason> {
+        Err(BindingDeliveryReason::Dispatch(VirtiofsServingError::Unavailable(
+            "this Volume driver's effects compose no virtiofs serving delivery".to_owned(),
+        )))
+    }
+
+    /// Withdraw one committed row's virtiofs delivery (U15).
+    ///
+    /// A relationship the source no longer admits takes its delivery with
+    /// it: the binding-owned worker is deleted through the same privileged
+    /// dispatch it was launched through, and a mount the consumer still
+    /// reports blocks the withdrawal rather than being force-cleared (KTD6).
+    ///
+    /// # Errors
+    ///
+    /// Returns the named refusal under [`BindingDeliveryReason`] when the
+    /// privileged leg refused or never answered, or when the consumer still
+    /// reports the mount.
+    async fn withdraw_binding(
+        &self,
+        _source: &VolumeBindingAdmission<'_>,
+        _row: &CommittedBinding,
+    ) -> Result<(), BindingDeliveryReason> {
+        Err(BindingDeliveryReason::Dispatch(VirtiofsServingError::Unavailable(
+            "this Volume driver's effects compose no virtiofs serving delivery".to_owned(),
+        )))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +469,46 @@ pub(crate) struct DesiredBindingChild {
     pub(crate) spec: Vec<u8>,
 }
 
+/// One canonical `VolumeBinding` child derived from an admitted source
+/// relationship (U14).
+///
+/// The desired bytes are the consumer's own `VolumeBindingRequest`, so the
+/// committed row is the declaration the consumer authored rather than a
+/// second description translated out of an attachment list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalBindingChild {
+    /// Deterministic child name derived from the relationship's identities.
+    pub name: String,
+    /// Exact canonical request bytes committed as the child's base spec.
+    pub spec: Vec<u8>,
+}
+
+/// Derive the canonical `VolumeBinding` children the source owns.
+///
+/// Every admitted relationship becomes exactly one row, named from the
+/// KTD3 key rather than from a declaration position, so the same relationship
+/// keeps one identity across restarts and two relationships never collide by
+/// ordering.
+///
+/// # Errors
+///
+/// Returns [`BindingContractError::InvalidField`] when a derived row name is
+/// not a bounded token.
+pub fn canonical_binding_children(
+    admitted: &[AdmittedVolumeBinding],
+) -> Result<Vec<CanonicalBindingChild>, BindingContractError> {
+    admitted
+        .iter()
+        .map(|admitted| {
+            let row = canonical_binding_row(admitted)?;
+            Ok(CanonicalBindingChild {
+                name: row.name().as_str().to_owned(),
+                spec: with_binding_provider_ref(row.spec())?,
+            })
+        })
+        .collect()
+}
+
 impl VolumeDriver {
     pub(crate) fn new(args: VolumeDriverArgs) -> Self {
         Self {
@@ -367,6 +569,13 @@ impl VolumeDriver {
 
     /// Derive the deterministic `VolumeBinding` children per virtiofs
     /// attachment (old `volume_children`).
+    ///
+    /// The attachment list is a path-typed input, so each row it mints names
+    /// a filesystem presentation at the declared mount path.  A block-device
+    /// attachment is not reachable from this translation and is never given a
+    /// destination invented for it: it arrives as a consumer request, is
+    /// admitted through the canonical path below, and commits its own device
+    /// slot.
     fn desired_children(
         &self,
         volume_ref: &ResourceRef,
@@ -380,16 +589,32 @@ impl VolumeDriver {
         intents
             .into_iter()
             .map(|intent| {
-                // Neutral binding payload only (KTD1): access mode and mount
-                // intent. The envelope carries no provider extension or
-                // attachment settings; the serving posture is the frozen
-                // default.
+                // Neutral binding payload only (KTD1): access mode and the
+                // consumer-side presentation. The envelope carries no
+                // provider extension or attachment settings; the serving
+                // posture is the frozen default.
                 let binding = d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec::new(
                     intent.volume_ref().clone(),
                     intent.execution_ref().clone(),
                     intent.view().as_str(),
                     intent.access(),
-                    intent.mount_path(),
+                    d2b_contracts_resource::v3::volume_binding::VolumePresentation::filesystem(
+                        intent.mount_path(),
+                    )
+                    .map_err(|_| self.error(VolumeDriverErrorKind::ChildDerivation, op))?,
+                    // The attachment names no consumer slot of its own, so the
+                    // view it selects is the slot this row occupies - the
+                    // same slot the admitted path derives from the request the
+                    // consumer authored for the same view.
+                    intent.view().as_str(),
+                    d2b_contracts_resource::v3::BindingSourceDecision::new(
+                        vec![d2b_contracts_resource::v3::RequestedRights::Consume],
+                        d2b_contracts_resource::v3::binding::BindingArbitration::Shared,
+                        vec![
+                            d2b_contracts_resource::v3::BindingRealizationFacet::FilesystemPresentation,
+                        ],
+                    )
+                    .map_err(|_| self.error(VolumeDriverErrorKind::ChildDerivation, op))?,
                 )
                 .map_err(|_| self.error(VolumeDriverErrorKind::ChildDerivation, op))?;
                 let mut binding_spec = serde_json::to_value(&binding)
@@ -438,6 +663,13 @@ impl VolumeDriver {
             .iter()
             .filter(|row| {
                 row.key.type_name == VOLUME_BINDING_TYPE
+                    // Ownership boundary (U14): this diff owns the
+                    // attachment-derived rows it derives. A row the KTD2
+                    // admission below minted belongs to that diff, which
+                    // retires only what it no longer derives - two
+                    // derivations over one resource type would otherwise
+                    // retire each other's rows on every pass.
+                    && !is_canonical_binding_row(&row.key.name)
                     && !desired.iter().any(|child| child.name == row.key.name)
             })
             .map(|row| row.key.clone())
@@ -450,6 +682,213 @@ impl VolumeDriver {
                 .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
         }
         Ok(owned)
+    }
+
+    /// The canonical `VolumeBinding` rows this pass commits (U14,
+    /// KTD2/KTD3).
+    ///
+    /// One admitted relationship becomes exactly one row, named from the
+    /// KTD3 key by [`canonical_binding_children`], and each is committed
+    /// through the manager-routed [`SharedProviderChildSurface`] so the row
+    /// is durable before the binding's actor exists (F1/AE1).
+    ///
+    /// The pass is idempotent by construction: the name is derived from the
+    /// relationship's identities, so a second pass over an unchanged parent
+    /// re-ensures the same rows and the manager answers `Unchanged`. A
+    /// relationship the admitted set no longer names is retired with its
+    /// owner, so a shrinking set does not leak rows (the ownership-bounded
+    /// reset).
+    ///
+    /// Two refusals are load-bearing here. A relationship whose KTD3 key does
+    /// not name this row as its source is not this parent's relationship and
+    /// is never committed under it. And an absent admission admits nothing:
+    /// the pass commits nothing and retires nothing, because a missing grant
+    /// is not evidence that a relationship ended. Nothing here mints an
+    /// authorization or a fence of its own.
+    async fn reconcile_canonical_bindings(
+        &self,
+        ctx: &mut ResourceContext,
+        source: &VolumeBindingAdmission<'_>,
+        op: DriverOp,
+    ) -> Result<CanonicalBindingState, VolumeDriverError> {
+        let admitted = match self.effects.admit_bindings(source).await {
+            Ok(admitted) => admitted,
+            Err(absent) => {
+                tracing::warn!(
+                    zone = %source.zone().as_str(),
+                    volume = %source.volume_ref().to_canonical_string(),
+                    reason = %absent,
+                    "no canonical volume binding row committed: admission evidence absent"
+                );
+                return Ok(CanonicalBindingState::EvidenceAbsent(absent));
+            }
+        };
+        if let Some(foreign) = admitted
+            .iter()
+            .find(|admitted| !names_this_source(admitted, source))
+        {
+            // The seam answered for a relationship this row is not the
+            // source of. Committing it would mint a row under one parent
+            // naming another Volume, so the pass refuses instead.
+            return Err(self
+                .error(VolumeDriverErrorKind::ChildDerivation, op)
+                .with_detail(
+                    FailureDetail::at("bindings/derive")
+                        .comparison(FailureComparison::new(
+                            "binding.sourceRef",
+                            source.volume_ref().to_canonical_string(),
+                            foreign.key().source_ref().to_canonical_string(),
+                        ))
+                        .with_note("the admitted relationship names another source"),
+                ));
+        }
+        let derived = canonical_binding_children(&admitted).map_err(|error| {
+            self.error(VolumeDriverErrorKind::ChildDerivation, op)
+                .with_detail(binding_contract_detail(&error))
+        })?;
+        // The owned set is read once, before the pass mutates it: the rows
+        // this pass may retire are the canonical ones its derived set no
+        // longer names.
+        let owned = ctx
+            .children()
+            .await
+            .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
+        let obsolete = owned
+            .iter()
+            .filter(|row| {
+                row.key.type_name == VOLUME_BINDING_TYPE
+                    && is_canonical_binding_row(&row.key.name)
+                    && !derived.iter().any(|child| child.name == row.key.name)
+            })
+            .collect::<Vec<_>>();
+        let mut committed_rows: Vec<EnsureOutcome> = Vec::with_capacity(derived.len());
+        let retired_keys = obsolete
+            .iter()
+            .map(|row| row.key.clone())
+            .collect::<Vec<_>>();
+        {
+            let surface = ContextChildSurface::new(ctx);
+            for child in &derived {
+                let outcome = surface
+                    .ensure(ChildEnsure {
+                        type_name: ResourceTypeName::new(VOLUME_BINDING_TYPE),
+                        name: child.name.clone(),
+                        spec: child.spec.clone(),
+                        metadata: Vec::new(),
+                    })
+                    .await
+                    .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
+                committed_rows.push(outcome);
+            }
+            for key in retired_keys {
+                // A canonical row this pass no longer derives: the manager
+                // marks it deleting and owns its teardown, R9/F3. Its
+                // delivery is withdrawn below rather than left serving a
+                // relationship the source no longer admits.
+                surface
+                    .delete(&key)
+                    .await
+                    .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
+            }
+        }
+        // The COMMITTED row, not the derived intent, is what the virtiofs
+        // family delivers (U15): the pass hands over the manager's own
+        // handle for the row it just wrote, so a delivery can only ever be
+        // about a row that exists in the store under the fence its status
+        // carries.
+        let delivery = self
+            .deliver_committed_bindings(source, &committed_rows, &obsolete)
+            .await;
+        Ok(CanonicalBindingState::Committed {
+            relationships: derived.len(),
+            delivery,
+        })
+    }
+
+    /// Deliver every committed canonical row's virtiofs view, and withdraw
+    /// the delivery of every canonical row this pass retired (U15).
+    ///
+    /// The verdict is the consumer's own mount reaching it, as the
+    /// privileged leg reports it; a refusal is recorded under its own code
+    /// rather than collapsing the pass, because a parent's own convergence
+    /// must not depend on a guest that may still be booting.
+    async fn deliver_committed_bindings(
+        &self,
+        source: &VolumeBindingAdmission<'_>,
+        committed: &[EnsureOutcome],
+        retired: &[&StoredDesiredResource],
+    ) -> BindingDeliverySet {
+        if !self.effects.serves_virtiofs_bindings() {
+            // The privileged leg is daemon-only. A runtime that composes
+            // none delivers nothing, and says so by name rather than
+            // describing the rows as served by a leg nobody holds.
+            return BindingDeliverySet::CompositionAbsent;
+        }
+        let mut delivered = Vec::with_capacity(committed.len());
+        for outcome in committed {
+            delivered.push(self.deliver_one(source, outcome.row()).await);
+        }
+        for row in retired {
+            if let Err(reason) = self.withdraw_one(source, row).await {
+                // Cardinality: once per retired row per resync pass.
+                tracing::debug!(
+                    volume = %source.volume_ref().to_canonical_string(),
+                    binding = %row.key.name,
+                    reason = reason.code(),
+                    "withdrawn binding's virtiofs delivery could not be withdrawn",
+                );
+            }
+        }
+        BindingDeliverySet::Delivered(delivered)
+    }
+
+    /// One committed row's delivery verdict, including the rows the pass
+    /// could not even read as a serving identity.
+    async fn deliver_one(
+        &self,
+        source: &VolumeBindingAdmission<'_>,
+        row: &StoredDesiredResource,
+    ) -> BindingDelivery {
+        match CommittedBinding::from_row(row) {
+            Ok(committed) => match self.effects.deliver_binding(source, &committed).await {
+                Ok(delivery) => delivery,
+                Err(reason) => {
+                    // Cardinality: once per undelivered relationship per
+                    // resync pass.
+                    tracing::debug!(
+                        volume = %source.volume_ref().to_canonical_string(),
+                        binding = %committed.name(),
+                        reason = reason.code(),
+                        "committed binding reports no virtiofs delivery",
+                    );
+                    BindingDelivery::new(
+                        committed.name(),
+                        BindingPhase::Failed,
+                        false,
+                        MountObservation::ConsumerNotRunning,
+                        Some(reason),
+                    )
+                }
+            },
+            Err(reason) => BindingDelivery::new(
+                row.key.name.clone(),
+                BindingPhase::Failed,
+                false,
+                MountObservation::ConsumerNotRunning,
+                Some(BindingDeliveryReason::Serving(reason)),
+            ),
+        }
+    }
+
+    /// One retired row's delivery withdrawal.
+    async fn withdraw_one(
+        &self,
+        source: &VolumeBindingAdmission<'_>,
+        row: &StoredDesiredResource,
+    ) -> Result<(), BindingDeliveryReason> {
+        let committed = CommittedBinding::from_row(row)
+            .map_err(BindingDeliveryReason::Serving)?;
+        self.effects.withdraw_binding(source, &committed).await
     }
 
     /// Spawn the preserved layout effect as a long effect (R5, KTD12): the
@@ -534,6 +973,62 @@ fn derivation_detail(code: &str) -> FailureDetail {
         .with_note(code)
 }
 
+/// The comparison naming why a canonical row's derivation refused: the
+/// derived row name or its desired bytes are not the closed contract's.
+fn binding_contract_detail(code: &BindingContractError) -> FailureDetail {
+    FailureDetail::at("bindings/derive")
+        .comparison(FailureComparison::new(
+            "binding.row",
+            "a bounded row name over the canonical request",
+            "refused",
+        ))
+        .with_note(code.to_string())
+}
+
+/// Attach the serving Provider reference to one committed row's envelope.
+///
+/// The base spec is the closed neutral row contract; the serving Provider is
+/// envelope metadata beside it, exactly as the attachment-derived rows carry
+/// it. Both the manager's relation index and the serving driver attribute
+/// these reserved fields before reading the base spec, so one committed row
+/// serves both readers.
+///
+/// # Errors
+///
+/// Returns [`BindingContractError::InvalidField`] when the row does not render
+/// as a JSON object the reference can be attached to.
+fn with_binding_provider_ref(spec: &[u8]) -> Result<Vec<u8>, BindingContractError> {
+    let mut value: serde_json::Value = serde_json::from_slice(spec)
+        .map_err(|_| BindingContractError::InvalidField)?;
+    value
+        .as_object_mut()
+        .ok_or(BindingContractError::InvalidField)?
+        .insert(
+            "providerRef".to_owned(),
+            serde_json::Value::String(BINDING_PROVIDER_REF.to_owned()),
+        );
+    serde_json::to_vec(&value).map_err(|_| BindingContractError::InvalidField)
+}
+
+/// Whether one owned `VolumeBinding` row belongs to the admitted-relationship
+/// derivation (KTD2).
+///
+/// The two derivations commit the same closed row encoding, so the row's
+/// desired bytes no longer say which one minted it - the row's name does, and
+/// it says so durably, across a restart, which an in-memory set of this pass's
+/// rows would not.  This is the ownership boundary between the two retirement
+/// diffs: each retires exactly the rows it mints.
+fn is_canonical_binding_row(name: &str) -> bool {
+    is_admitted_binding_row_name(name)
+}
+
+/// Whether one admitted relationship's KTD3 key names exactly this Volume
+/// as its source.
+fn names_this_source(admitted: &AdmittedVolumeBinding, source: &VolumeBindingAdmission<'_>) -> bool {
+    admitted.key().source_ref() == source.volume_ref()
+        && admitted.key().source_uid() == source.volume_uid()
+}
+
 fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, ()> {
     ResourceUid::from_bytes(bytes).map_err(|_| ())
 }
@@ -583,7 +1078,11 @@ impl ResourceDriver for VolumeDriver {
             // follows re-runs the layout effect, which re-derives and
             // re-materializes the root, and is idempotent on a root that is
             // still there.
-            ctx.set_status(VolumeDriverStatus::ServingChildren { desired: 0, converged: false });
+            ctx.set_status(VolumeDriverStatus::ServingChildren {
+                desired: 0,
+                converged: false,
+                canonical: CanonicalBindingState::NotReconciled,
+            });
             Ok(RecoveryOutcome::Adopted)
         } else {
             Ok(RecoveryOutcome::Missing)
@@ -593,7 +1092,9 @@ impl ResourceDriver for VolumeDriver {
     /// One reconcile pass: pass one spawns the preserved layout effect
     /// (R5); after its completion the actor re-reconciles and this pass
     /// derives the deterministic binding children and ensures each through
-    /// the manager (F1); readiness aggregates the child rows this pass
+    /// the manager (F1), then admits the canonical KTD2 relationships and
+    /// commits one row per admitted relationship through the manager-routed
+    /// child surface (U14); readiness aggregates the child rows this pass
     /// converged.
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, Self::Error> {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Reconcile)?;
@@ -618,9 +1119,22 @@ impl ResourceDriver for VolumeDriver {
                 .iter()
                 .any(|row| row.key.type_name == VOLUME_BINDING_TYPE && row.key.name == child.name)
         });
+        // The canonical pass runs last so the pass's final child state is the
+        // one the KTD2 admission produced; the two diffs are fenced apart
+        // above, so neither order would collide.
+        let zone = ZoneId::parse(&ctx.key().zone)
+            .map_err(|_| self.error(VolumeDriverErrorKind::SpecInvalid, DriverOp::Reconcile))?;
+        let canonical = self
+            .reconcile_canonical_bindings(
+                ctx,
+                &VolumeBindingAdmission::new(zone, volume_ref, uid, &spec),
+                DriverOp::Reconcile,
+            )
+            .await?;
         ctx.set_status(VolumeDriverStatus::ServingChildren {
-            desired: desired.len(),
+            desired: desired.len() + canonical.committed(),
             converged,
+            canonical,
         });
         // The child set is what this plane serves, and a set that did not
         // converge re-checks on the preserved cadence so a binding that drifts
@@ -740,6 +1254,7 @@ pub fn volume_descriptor(args: VolumeDriverArgs) -> DriverDescriptor {
 
 #[cfg(test)]
 mod tests {
+    use crate::BindingDeliverySet;
     use std::sync::Arc;
 
     use d2b_provider_toolkit::testing::fakes::RecordingManagerEndpoint;
@@ -918,7 +1433,16 @@ mod tests {
             .expect("status");
         assert_eq!(
             *status,
-            super::VolumeDriverStatus::ServingChildren { desired: 1, converged: true }
+            super::VolumeDriverStatus::ServingChildren {
+                desired: 1,
+                converged: true,
+                canonical: super::CanonicalBindingState::EvidenceAbsent(
+                    BindingEvidenceAbsent::new(vec![
+                        BindingAdmissionEvidence::Authorization,
+                        BindingAdmissionEvidence::FreshnessFence,
+                    ]),
+                ),
+            }
         );
     }
 
@@ -1241,6 +1765,460 @@ mod tests {
         let mut d = driver(RecordingRuntime::new()).await;
         let failure = d.reconcile(&mut f.ctx).await.expect_err("terminal");
         assert_eq!(failure.class(), FailureClass::Terminal);
+    }
+
+    // -- canonical binding children (U14) ------------------------------------
+
+    use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::volume::{AttachmentAccess, VolumeSpec};
+    use d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec;
+    use d2b_contracts_resource::v3::{
+        BindingAuthorization, BindingRealizationFacet, BindingRealizationSupport, BindingSlot,
+        BindingSpecFingerprint, DesiredDigest, DesiredRevision, FreshnessTuple, ResourceUid,
+        StoreIncarnation, VolumeBindingRequest, VolumePresentation, ZoneId,
+    };
+    use d2b_provider_volume_local::{
+        AdmittedVolumeBinding, VolumeAdmissionGrant, VolumeAdmissionSource, VolumeConsumerRequest,
+        admit_consumer_requests,
+    };
+    use d2b_resource_runtime::relations::DecodedBindingRequest;
+
+    use super::{
+        CanonicalBindingState, VOLUME_BINDING_TYPE, VolumeDriverStatus, canonical_binding_children,
+        canonical_binding_row,
+    };
+    use crate::facets::{BindingAdmissionEvidence, BindingEvidenceAbsent};
+
+    const VOLUME_UID_VALUE: &str = "6f9619ff-8b86-4d01-b42d-00cf4fc964ff";
+    const PROCESS_UID: &str = "323e4567-e89b-42d3-a456-426614174002";
+    const GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
+
+    /// The durable uid the reconciled test row carries: the identity its
+    /// relationships are admitted against, because a KTD3 key names the
+    /// source's store identity and not its reference alone.
+    const ROW_UID: [u8; 16] = [0x42; 16];
+
+    /// A conformant graph-era Volume: declared views, no attachment list.
+    /// Its relationships arrive through the admission seam instead.
+    fn canonical_graph_volume_value() -> serde_json::Value {
+        serde_json::json!({
+            "source": {
+                "executionRef": "Host/host-system",
+                "settings": { "kind": "local-path", "sourcePolicyId": "state-root" },
+            },
+            "kind": "durable",
+            "layout": [],
+            "views": {
+                "controller": { "path": "", "rights": ["read", "write", "traverse"] },
+            },
+        })
+    }
+
+    fn canonical_graph_volume() -> VolumeSpec {
+        serde_json::from_value(canonical_graph_volume_value())
+            .expect("conformant Volume spec")
+    }
+
+    /// The same spec as the row the driver reconciles: the stored envelope
+    /// carries the Provider reference the driver checks.
+    fn canonical_row_bytes() -> Vec<u8> {
+        let mut spec = canonical_graph_volume_value();
+        spec.as_object_mut()
+            .expect("spec object")
+            .insert(
+                "providerRef".to_owned(),
+                serde_json::Value::String("Provider/volume-local".to_owned()),
+            );
+        serde_json::to_vec(&spec).expect("canonical volume spec")
+    }
+
+    /// The reconciled row's own store identity, as the authority spells it.
+    fn row_uid() -> ResourceUid {
+        ResourceUid::from_bytes(&ROW_UID).expect("canonical row uid")
+    }
+
+    /// One admitted relationship per consumer kind, admitted through the one
+    /// source-side path against exactly the identity the source carries.
+    fn admitted_source(
+        source_ref: &str,
+        source_uid: &str,
+        spec: &VolumeSpec,
+    ) -> Vec<AdmittedVolumeBinding> {
+        let zone = ZoneId::parse("work").expect("zone");
+        let volume_ref =
+            d2b_contracts_resource::v3::ResourceRef::parse(source_ref).expect("volume");
+        let volume_uid = ResourceUid::parse(source_uid).expect("uid");
+        let support = BindingRealizationSupport::new(vec![
+            BindingRealizationFacet::FilesystemPresentation,
+            BindingRealizationFacet::ConsumerDeviceSlot,
+        ])
+        .expect("support set");
+        let authorization = BindingAuthorization::granted();
+        let fence: Vec<FreshnessTuple> = [
+            (source_ref, source_uid),
+            ("Process/worker", PROCESS_UID),
+            ("Guest/work-vm", GUEST_UID),
+        ]
+        .into_iter()
+        .map(|(name, identity)| {
+            FreshnessTuple::new(
+                zone.clone(),
+                StoreIncarnation::parse("store-one").expect("incarnation"),
+                d2b_contracts_resource::v3::ResourceRef::parse(name).expect("reference"),
+                ResourceUid::parse(identity).expect("uid"),
+                DesiredRevision::INITIAL,
+                DesiredDigest::of(name.as_bytes()),
+            )
+        })
+        .collect();
+        let grant = VolumeAdmissionGrant::new(&support, &authorization, &fence);
+        let source =
+            VolumeAdmissionSource::new(&zone, &volume_ref, &volume_uid, spec, false, &grant);
+        let requests = [
+            VolumeConsumerRequest::new(
+                ResourceUid::parse(PROCESS_UID).expect("uid"),
+                VolumeBindingRequest::new(
+                    volume_ref.clone(),
+                    d2b_contracts_resource::v3::ResourceRef::parse("Process/worker")
+                        .expect("consumer"),
+                    BindingSlot::parse("work").expect("slot"),
+                    BoundedToken::parse("controller").expect("view"),
+                    AttachmentAccess::ReadWrite,
+                    VolumePresentation::filesystem("/srv/work").expect("destination"),
+                )
+                .expect("canonical request"),
+            ),
+            VolumeConsumerRequest::new(
+                ResourceUid::parse(GUEST_UID).expect("uid"),
+                VolumeBindingRequest::new(
+                    volume_ref.clone(),
+                    d2b_contracts_resource::v3::ResourceRef::parse("Guest/work-vm")
+                        .expect("consumer"),
+                    BindingSlot::parse("state").expect("slot"),
+                    BoundedToken::parse("controller").expect("view"),
+                    AttachmentAccess::ReadOnly,
+                    VolumePresentation::block_device(1).expect("device slot"),
+                )
+                .expect("canonical request"),
+            ),
+        ];
+        admit_consumer_requests(&source, &requests).expect("admitted")
+    }
+
+    /// The admitted set for the source identity the derivation tests pin.
+    fn admitted_set() -> Vec<AdmittedVolumeBinding> {
+        admitted_source("Volume/state", VOLUME_UID_VALUE, &canonical_graph_volume())
+    }
+
+    /// The admitted set the seam answers with for the row the driver
+    /// reconciles: the same two consumer kinds, against that row's own
+    /// identity.
+    fn admitted_for_row() -> Vec<AdmittedVolumeBinding> {
+        admitted_source("Volume/data", row_uid().as_str(), &canonical_graph_volume())
+    }
+
+    /// One committed row's closed base spec: the reserved envelope fields the
+    /// producing half stamps beside it are attributed first, exactly as both
+    /// real readers do.
+    fn committed_base_spec(bytes: &[u8]) -> VolumeBindingSpec {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(bytes).expect("committed row value");
+        let object = value.as_object_mut().expect("a committed row is an object");
+        for field in ["providerRef", "updatePolicy", "provider"] {
+            object.remove(field);
+        }
+        serde_json::from_value(value).expect("the committed row is the closed row contract")
+    }
+
+    /// The manager key one derived canonical row is committed under.
+    fn binding_key(name: &str) -> ResourceKey {
+        ResourceKey::new("work", VOLUME_BINDING_TYPE, name)
+    }
+
+    /// The committed `VolumeBinding` rows, ordered by name.
+    fn committed_bindings(manager: &RecordingManagerEndpoint) -> Vec<StoredDesiredResource> {
+        let mut rows: Vec<StoredDesiredResource> = manager
+            .rows()
+            .into_iter()
+            .filter(|row| row.key.type_name == VOLUME_BINDING_TYPE)
+            .collect();
+        rows.sort_by(|left, right| left.key.name.cmp(&right.key.name));
+        rows
+    }
+
+    /// The reconciliation facts the assertions read: (name, generation).
+    fn generations(rows: &[StoredDesiredResource]) -> Vec<(String, u64)> {
+        rows.iter().map(|row| (row.key.name.clone(), row.generation)).collect()
+    }
+
+    // The producing half (U14): the pass a real verb owns commits what the
+    // seam admitted, a second pass over an unchanged parent commits nothing
+    // new, and what the admitted set no longer names is retired.
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn an_admitted_relationship_commits_one_row_a_second_pass_does_not_duplicate() {
+        let fake = RecordingRuntime::new();
+        fake.set_admitted(admitted_for_row()).await;
+        let manager = RecordingManagerEndpoint::new();
+        let mut f = fixture(test_row(&canonical_row_bytes()), manager.clone());
+        let mut d = driver(fake.clone()).await;
+
+        assert_eq!(reconcile_to_children(&mut d, &mut f).await, ReconcileOutcome::Satisfied);
+
+        let derived = canonical_binding_children(&admitted_for_row()).expect("derived rows");
+        let committed = committed_bindings(&manager);
+        assert_eq!(committed.len(), derived.len(), "one row per admitted relationship");
+        for (child, relationship) in derived.iter().zip(&admitted_for_row()) {
+            let row = manager
+                .row(&binding_key(&child.name))
+                .unwrap_or_else(|| panic!("{} is committed under its KTD3 name", child.name));
+            assert_eq!(row.spec, child.spec, "the committed row is the derived row");
+            assert_eq!(row.owner_uid, Some(ROW_UID), "the deriving Volume owns the row");
+            // The committed row is what the graph reads back: the manager's
+            // own relation-index decoder resolves it to this exact
+            // relationship, with the consumer slot and rights the admission
+            // decided.
+            let decoded = DecodedBindingRequest::decode(VOLUME_BINDING_TYPE, &row.spec)
+                .unwrap_or_else(|| panic!("{} is not an indexable relationship", child.name));
+            assert_eq!(decoded.source_ref(), relationship.request().source_ref());
+            assert_eq!(decoded.consumer_ref(), relationship.request().consumer_ref());
+            assert_eq!(decoded.slot(), relationship.request().slot());
+            assert_eq!(decoded.rights(), relationship.request().requested_rights());
+            assert_eq!(
+                decoded.required_facets(),
+                relationship.request().required_facets(),
+                "{} commits the facets its own presentation needs",
+                child.name
+            );
+            assert_eq!(
+                decoded.fingerprint(),
+                &BindingSpecFingerprint::from_request(&committed_base_spec(&row.spec)),
+                "the index digests the committed row itself, so its slot index and its \
+                 pre-commit check read the same bytes"
+            );
+        }
+        assert_eq!(
+            *f.ctx.status::<VolumeDriverStatus>().expect("status"),
+            VolumeDriverStatus::ServingChildren {
+                desired: derived.len(),
+                converged: true,
+                canonical: CanonicalBindingState::Committed {
+                    relationships: derived.len(),
+                    delivery: BindingDeliverySet::CompositionAbsent,
+                },
+            }
+        );
+
+        // A second pass over an unchanged parent re-ensures the same rows, so
+        // the manager answers `Unchanged`: no row is rewritten and no second
+        // row is minted.
+        let before = generations(&committed);
+        let passes = fake.admission_passes();
+        let calls = manager.call_order().len();
+        assert_eq!(d.reconcile(&mut f.ctx).await.expect("second pass"), ReconcileOutcome::Satisfied);
+        assert_eq!(fake.admission_passes(), passes + 1, "each pass asks the seam again");
+        let after = committed_bindings(&manager);
+        assert_eq!(generations(&after), before, "an unchanged parent rewrites no row");
+        assert_eq!(after.len(), derived.len(), "no second row is minted");
+        assert_eq!(
+            manager.call_order()[calls..]
+                .iter()
+                .filter(|call| call.starts_with("delete:"))
+                .count(),
+            0,
+            "an unchanged parent retires nothing: the attachment-shaped diff leaves the \
+             canonical rows it does not own alone"
+        );
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_relationship_the_admitted_set_no_longer_names_is_retired_with_its_owner() {
+        let fake = RecordingRuntime::new();
+        fake.set_admitted(admitted_for_row()).await;
+        let manager = RecordingManagerEndpoint::new();
+        let mut f = fixture(test_row(&canonical_row_bytes()), manager.clone());
+        let mut d = driver(fake.clone()).await;
+        assert_eq!(reconcile_to_children(&mut d, &mut f).await, ReconcileOutcome::Satisfied);
+
+        // The Guest withdraws its block presentation: one relationship still
+        // admits, one no longer does.
+        let admitted = admitted_for_row();
+        let kept = admitted
+            .iter()
+            .find(|admitted| admitted.request().consumer_ref().name().as_str() == "worker")
+            .expect("the filesystem relationship")
+            .clone();
+        let dropped = admitted
+            .iter()
+            .find(|admitted| admitted.request().consumer_ref().name().as_str() == "work-vm")
+            .expect("the device relationship");
+        let dropped_name = canonical_binding_row(dropped).expect("row").name().as_str().to_owned();
+        let kept_name =
+            canonical_binding_row(&kept).expect("row").name().as_str().to_owned();
+        let kept_before = manager
+            .row(&binding_key(&kept_name))
+            .expect("the kept row is committed")
+            .generation;
+        fake.set_admitted(vec![kept]).await;
+
+        let calls = manager.call_order().len();
+        assert_eq!(d.reconcile(&mut f.ctx).await.expect("shrunk pass"), ReconcileOutcome::Satisfied);
+        assert!(
+            manager.row(&binding_key(&dropped_name)).is_none(),
+            "a row the admitted set no longer names is retired with its owner"
+        );
+        assert_eq!(
+            manager.call_order()[calls..]
+                .iter()
+                .filter(|call| call.starts_with("delete:"))
+                .cloned()
+                .collect::<Vec<String>>(),
+            vec![format!("delete:VolumeBinding/{dropped_name}")],
+            "exactly the row the admission dropped is retired"
+        );
+        let kept_row = manager
+            .row(&binding_key(&kept_name))
+            .expect("the relationship that still admits keeps its row");
+        assert_eq!(kept_row.generation, kept_before, "the surviving row is not rewritten");
+        assert_eq!(
+            *f.ctx.status::<VolumeDriverStatus>().expect("status"),
+            VolumeDriverStatus::ServingChildren {
+                desired: 1,
+                converged: true,
+                canonical: CanonicalBindingState::Committed {
+                    relationships: 1,
+                    delivery: BindingDeliverySet::CompositionAbsent,
+                },
+            }
+        );
+    }
+
+    // The negative cases: no evidence commits no row, and no evidence
+    // retires none.
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn without_admission_evidence_no_row_is_committed_and_a_committed_one_survives() {
+        let fake = RecordingRuntime::new();
+        let manager = RecordingManagerEndpoint::new();
+        let mut f = fixture(test_row(&canonical_row_bytes()), manager.clone());
+        let mut d = driver(fake.clone()).await;
+
+        assert_eq!(reconcile_to_children(&mut d, &mut f).await, ReconcileOutcome::Satisfied);
+        assert!(committed_bindings(&manager).is_empty(), "no evidence, no committed row");
+        assert!(
+            !manager.call_order().iter().any(|call| call.starts_with("ensure:VolumeBinding/")),
+            "the pass never reaches the child surface without evidence"
+        );
+        assert_eq!(
+            *f.ctx.status::<VolumeDriverStatus>().expect("status"),
+            VolumeDriverStatus::ServingChildren {
+                desired: 0,
+                converged: true,
+                canonical: CanonicalBindingState::EvidenceAbsent(BindingEvidenceAbsent::new(vec![
+                    BindingAdmissionEvidence::Authorization,
+                    BindingAdmissionEvidence::FreshnessFence,
+                ])),
+            }
+        );
+
+        // With evidence on the seam, the relationships commit.
+        fake.set_admitted(admitted_for_row()).await;
+        assert_eq!(d.reconcile(&mut f.ctx).await.expect("evidenced pass"), ReconcileOutcome::Satisfied);
+        let committed = generations(&committed_bindings(&manager));
+        assert_eq!(committed.len(), 2);
+
+        // Losing the evidence is not evidence that a relationship ended: the
+        // pass commits nothing new and retires nothing.
+        fake.withdraw_evidence().await;
+        assert_eq!(d.reconcile(&mut f.ctx).await.expect("unevidenced pass"), ReconcileOutcome::Satisfied);
+        assert_eq!(
+            generations(&committed_bindings(&manager)),
+            committed,
+            "an absent grant is not evidence that a relationship ended"
+        );
+        assert!(
+            !manager.call_order().iter().any(|call| call.starts_with("delete:VolumeBinding/")),
+            "no owned row is retired without an admission that dropped it"
+        );
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_relationship_naming_another_source_is_refused_instead_of_committed_here() {
+        let fake = RecordingRuntime::new();
+        // The seam answers for a relationship this row is not the source of.
+        fake.set_admitted(admitted_set()).await;
+        let manager = RecordingManagerEndpoint::new();
+        let mut f = fixture(test_row(&canonical_row_bytes()), manager.clone());
+        let mut d = driver(fake.clone()).await;
+
+        let first = d.reconcile(&mut f.ctx).await.expect("reconcile spawns the effect");
+        assert!(matches!(first, ReconcileOutcome::InProgress { .. }), "{first:?}");
+        let _ = f.effects.recv().await.expect("typed completion");
+        let failure = d
+            .reconcile(&mut f.ctx)
+            .await
+            .expect_err("a relationship for another source is refused");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert!(
+            committed_bindings(&manager).is_empty(),
+            "a row naming another source is never minted under this parent"
+        );
+    }
+
+    #[test]
+    fn one_admitted_relationship_commits_exactly_one_canonical_row() {
+        let admitted = admitted_set();
+        let children = canonical_binding_children(&admitted).expect("derived rows");
+        assert_eq!(children.len(), admitted.len());
+        for (child, relationship) in children.iter().zip(&admitted) {
+            // The committed bytes are the closed row contract carrying the
+            // declaration that was admitted, so the row the graph reads back
+            // resolves to that relationship and the row the serving driver
+            // decodes is the same row.
+            let decoded = DecodedBindingRequest::decode("VolumeBinding", &child.spec)
+                .expect("the committed row is an indexable relationship");
+            assert_eq!(decoded.consumer_ref(), relationship.request().consumer_ref());
+            assert_eq!(decoded.slot(), relationship.request().slot());
+            let row = committed_base_spec(&child.spec);
+            assert_eq!(
+                decoded.fingerprint(),
+                &row.fingerprint(),
+                "the index digests the committed row itself"
+            );
+            assert_eq!(
+                row.request().expect("the row declares the admitted relationship"),
+                *relationship.request(),
+                "the committed row carries the declaration the admission decided"
+            );
+            assert_eq!(
+                row.presentation(),
+                relationship.request().presentation(),
+                "a block-device relationship commits its device slot, never a destination"
+            );
+            assert_eq!(row.slot().as_str(), relationship.key().slot().as_str());
+            assert_eq!(row.source().arbitration(), relationship.admission().arbitration());
+        }
+    }
+
+    #[test]
+    fn a_relationship_keeps_one_row_name_across_passes_and_consumers() {
+        let admitted = admitted_set();
+        let first = canonical_binding_children(&admitted).expect("derived rows");
+        // Deriving again from the same admitted set changes nothing, so a
+        // restart re-ensures the same rows instead of churning identities.
+        let second = canonical_binding_children(&admitted).expect("derived rows");
+        assert_eq!(first, second);
+        // Distinct relationships - here two different consumer kinds - never
+        // collide on one row name.
+        let names: std::collections::BTreeSet<&str> = first
+            .iter()
+            .map(|child| child.name.as_str())
+            .collect();
+        assert_eq!(names.len(), first.len());
     }
 
 }

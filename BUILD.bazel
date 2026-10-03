@@ -124,6 +124,7 @@ exports_files([
     "nixos-modules/components/usbip.nix",
     "nixos-modules/components/video/guest.nix",
     "nixos-modules/default.nix",
+    "nixos-modules/deployment-bootstrap.nix",
     "nixos-modules/generated/options-zones-Zone.nix",
     "nixos-modules/generated/options-zones-ZoneLink.nix",
     "nixos-modules/component-session.nix",
@@ -310,7 +311,6 @@ filegroup(
         "//packages/d2b-provider-process-systemd:cargo_workspace_sources",
         "//packages/d2b-provider-toolkit:cargo_workspace_sources",
         "//packages/d2b-provider-transport-azure-relay:cargo_workspace_sources",
-        "//packages/d2b-provider-transport-unix:cargo_workspace_sources",
         "//packages/d2b-provider-transport-vsock:cargo_workspace_sources",
         "//packages/d2b-provider-volume-local:cargo_workspace_sources",
         "//packages/d2b-provider-volume-virtiofs:cargo_workspace_sources",
@@ -348,13 +348,20 @@ filegroup(
         "//packages/d2b-provider-emergency-policy:cargo_workspace_sources",
         "//packages/d2b-provider-resource-export:cargo_workspace_sources",
         "//packages/d2b-provider-resource-import:cargo_workspace_sources",
-        "//packages/d2b-provider-command:cargo_workspace_sources",
         "//packages/d2b-provider-operation:cargo_workspace_sources",
         "//packages/d2b-provider-seccomp-profile:cargo_workspace_sources",
+        "//packages/d2b-provider-execution-policy:cargo_workspace_sources",
         "//packages/d2b-provider-host:cargo_workspace_sources",
         "//packages/d2b-provider-user:cargo_workspace_sources",
         "//packages/d2b-provider-test-controller:cargo_workspace_sources",
         "//packages/d2b-test-vm-harness:cargo_workspace_sources",
+        # The suite-membership guard reads every packages/*/BUILD.bazel to
+        # decide which packages declare an all-tests aggregate. This filegroup
+        # was the guard's entire view of the tree, and it listed this
+        # package's `cargo_workspace_sources` but not its BUILD.bazel, so the
+        # staged tree was missing one package out of 94 and the guard failed
+        # intermittently with a DIFFERENT package named each run.
+        "//packages/d2b-test-vm-harness:BUILD.bazel",
         "//packages/d2b-resource-runtime:cargo_workspace_sources",
         "//packages/d2b-audit:BUILD.bazel",
         "//packages/d2b-broker-composition:BUILD.bazel",
@@ -379,7 +386,6 @@ filegroup(
         "//packages/d2b-provider-audio-pipewire:BUILD.bazel",
         "//packages/d2b-provider-audio-service:BUILD.bazel",
         "//packages/d2b-provider-clipboard-wayland:BUILD.bazel",
-        "//packages/d2b-provider-command:BUILD.bazel",
         "//packages/d2b-provider-credential-entra:BUILD.bazel",
         "//packages/d2b-provider-credential-managed-identity:BUILD.bazel",
         "//packages/d2b-provider-credential-secret-service:BUILD.bazel",
@@ -412,6 +418,7 @@ filegroup(
         "//packages/d2b-provider-role-binding:BUILD.bazel",
         "//packages/d2b-provider-role:BUILD.bazel",
         "//packages/d2b-provider-seccomp-profile:BUILD.bazel",
+        "//packages/d2b-provider-execution-policy:BUILD.bazel",
         "//packages/d2b-provider-shell-pool:BUILD.bazel",
         "//packages/d2b-provider-shell-session:BUILD.bazel",
         "//packages/d2b-provider-shell-terminal:BUILD.bazel",
@@ -422,7 +429,6 @@ filegroup(
         "//packages/d2b-provider-test-controller:BUILD.bazel",
         "//packages/d2b-provider-toolkit:BUILD.bazel",
         "//packages/d2b-provider-transport-azure-relay:BUILD.bazel",
-        "//packages/d2b-provider-transport-unix:BUILD.bazel",
         "//packages/d2b-provider-transport-vsock:BUILD.bazel",
         "//packages/d2b-provider-user:BUILD.bazel",
         "//packages/d2b-provider-volume-binding:BUILD.bazel",
@@ -599,7 +605,23 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# keep
+# The committed new-graph closure `gen-new-graph` renders from the per-crate
+# provider declarations. Every `.rs` member is compiled by the production file
+# `build_closure.json` names as `compiledInto`, and nothing no production file
+# compiles is staged, so the members are named rather than globbed: a staged
+# file added without a consumer fails the generation step and its drift gate
+# instead of joining the closure silently.
+filegroup(
+    name = "generated_new_graph",
+    srcs = [
+        "generated/new-graph/build_closure.json",
+        "generated/new-graph/provider_registrations.rs",
+        "generated/new-graph/service_provider_catalog.rs",
+        "generated/new-graph/v3_converted_resource_types.rs",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 filegroup(
     name = "github_workspace_sources",
     srcs = glob(

@@ -7,6 +7,23 @@
 //! `GuestComponentSession` client, which is the carrier the channel rides.
 //! The session runtime stays here because it belongs to the daemon, not to
 //! the family.
+//!
+//! ## Where the common contract lives
+//!
+//! The common Guest target/session contract is
+//! [`d2b_provider_guest::GuestTargetContract`], and its evidence type is
+//! `d2bd_runtime::target_runtime::GuestParentSessionEvidence`. Both are
+//! provider-neutral: the declared Provider is carried as graph data and never
+//! matched, so the local VM, media, and remote-cloud Guest providers all ride
+//! the same contract.
+//!
+//! This adapter is the carrier, not the contract: the family fences the
+//! channel on the graph evidence, and this carrier only answers whether the
+//! session underneath it is still live. U34 switches the daemon's two
+//! composition call sites from
+//! [`d2b_provider_guest::session_target_control`] to
+//! [`d2b_provider_guest::graph_target_control`], which runs the same
+//! carrier's frames through the contract first.
 
 use std::sync::Arc;
 

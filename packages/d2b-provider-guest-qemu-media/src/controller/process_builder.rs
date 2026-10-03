@@ -11,6 +11,8 @@ use d2b_contracts_resource::v3::{
     ResourceRef,
     execution_policy::{BoundedToken, BudgetSpec, CountBudget, DurationMs, ExecutionDomain},
 };
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 /// Process template id.
@@ -34,17 +36,8 @@ pub enum AttachmentKind {
     Serial,
 }
 
-/// One opaque LaunchTicket slot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AttachmentSlot {
-    /// Slot label.
-    pub slot: String,
-    /// Slot kind.
-    pub kind: AttachmentKind,
-    /// Authorizing ResourceRef.
-    pub source_ref: ResourceRef,
-}
+
+use crate::controller::attachments::{AdmittedAttachments, LaunchAttachments};
 
 /// Construct the canonical qemu-media worker Process base spec.
 pub fn build_process_spec(
@@ -204,106 +197,102 @@ fn duration(value: &str, min_millis: u64, max_millis: u64) -> Result<DurationMs,
     DurationMs::parse(value, min_millis, max_millis).map_err(|_| ProcessSpecError::InvalidShape)
 }
 
+
 /// Opaque Core LaunchTicket.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+///
+/// The ticket is a private carrier, not an authority surface. Its
+/// [`LaunchAttachments::Admitted`] form is the converted model: every
+/// descriptor already carries the relationship, reservation, and right that
+/// authorized it, so a descriptor list that named a source the Guest never
+/// bound cannot be built through it (R15, R16, R34).
+///
+/// The [`LaunchAttachments::Declared`] form is the pre-graph staging shape the
+/// unchanged daemon composition still constructs. U34 deletes it together
+/// with the snapshot fields that feed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchTicket {
     /// Process resource template.
     pub process: ProcessSpec,
     /// Authorized attachment slots.
-    pub attachments: Vec<AttachmentSlot>,
+    pub attachments: LaunchAttachments,
 }
 
 impl LaunchTicket {
-    /// Construct a ticket from already-authorized refs.
+    /// Construct a ticket from the descriptors the graph admitted.
     ///
     /// # Errors
     ///
-    /// Returns [`ProcessSpecError`] when the process spec fails validation,
-    /// when more than four media refs are named, when a media ref is not a
-    /// Volume, or when a media ref is duplicated.
-    pub fn new(
+    /// Returns [`ProcessSpecError`] when the process spec fails validation or
+    /// when two descriptors claim the same private slot label.
+    pub fn admitted(
         process: ProcessSpec,
-        media_refs: impl IntoIterator<Item = ResourceRef>,
-        display_ref: Option<ResourceRef>,
+        attachments: AdmittedAttachments,
     ) -> Result<Self, ProcessSpecError> {
         validate_process_spec(&process)?;
-        let media_refs = media_refs.into_iter().collect::<Vec<_>>();
-        if media_refs.len() > 4
-            || media_refs
-                .iter()
-                .any(|reference| reference.resource_type().as_str() != "Volume")
-            || {
-                let mut seen = std::collections::BTreeSet::new();
-                media_refs.iter().any(|reference| !seen.insert(reference))
-            }
-        {
-            return Err(ProcessSpecError::InvalidReference);
-        }
-        let mut attachments = Vec::with_capacity(media_refs.len() + 3);
-        if let Some(device_ref) = process.execution().device_usage().first() {
-            attachments.push(AttachmentSlot {
-                slot: "kvm".to_owned(),
-                kind: AttachmentKind::Kvm,
-                source_ref: device_ref.device_ref().clone(),
-            });
-        }
-        if let Some(network_ref) = process
-            .execution()
-            .network_usage()
-            .and_then(|usage| usage.network_ref())
-        {
-            attachments.push(AttachmentSlot {
-                slot: "tap-0".to_owned(),
-                kind: AttachmentKind::Tap,
-                source_ref: network_ref.clone(),
-            });
-        }
-        for (index, reference) in media_refs.into_iter().enumerate() {
-            attachments.push(AttachmentSlot {
-                slot: format!("media-{index}"),
-                kind: AttachmentKind::Media,
-                source_ref: reference,
-            });
-        }
-        if let Some(reference) = display_ref {
-            if reference.resource_type().as_str() != "Endpoint" {
-                return Err(ProcessSpecError::InvalidReference);
-            }
-            attachments.push(AttachmentSlot {
-                slot: "display".to_owned(),
-                kind: AttachmentKind::Display,
-                source_ref: reference,
-            });
-        }
         let ticket = Self {
             process,
-            attachments,
+            attachments: LaunchAttachments::Admitted(attachments),
         };
         ticket.validate()?;
         Ok(ticket)
     }
 
-    /// Validate unique slot labels and typed sources.
+    /// Construct a ticket from the pre-graph declared refs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessSpecError`] when the process spec fails validation or
+    /// when a declared ref does not match its slot's ResourceType.
+    pub fn declared(
+        process: ProcessSpec,
+        media_refs: impl IntoIterator<Item = d2b_contracts_resource::v3::ResourceRef>,
+        display_ref: Option<d2b_contracts_resource::v3::ResourceRef>,
+    ) -> Result<Self, ProcessSpecError> {
+        validate_process_spec(&process)?;
+        let declared = crate::controller::attachments::DeclaredAttachments {
+            media_refs: media_refs.into_iter().collect(),
+            display_ref,
+        };
+        let slots = declared.project(&process)?;
+        let ticket = Self {
+            process,
+            attachments: LaunchAttachments::Declared(slots),
+        };
+        ticket.validate()?;
+        Ok(ticket)
+    }
+
+    /// Return the private slot labels, in launch order.
+    pub fn labels(&self) -> Vec<&str> {
+        self.attachments.labels()
+    }
+
+    /// Validate the process spec and the private slot labels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessSpecError::InvalidShape`] when the process spec fails
+    /// validation and [`ProcessSpecError::DuplicateAttachmentSlot`] when two
+    /// descriptors claim the same label.
     pub fn validate(&self) -> Result<(), ProcessSpecError> {
         validate_process_spec(&self.process)?;
-        let mut slots = std::collections::BTreeSet::new();
-        for attachment in &self.attachments {
-            if BoundedToken::parse(attachment.slot.as_str()).is_err() || !slots.insert(&attachment.slot) {
-                return Err(ProcessSpecError::DuplicateAttachmentSlot);
+        let labels: BTreeSet<&str> = match &self.attachments {
+            LaunchAttachments::Admitted(attachments) => {
+                attachments
+                    .validate_labels()
+                    .map_err(|_| ProcessSpecError::DuplicateAttachmentSlot)?
             }
-            let expected = match attachment.kind {
-                AttachmentKind::Kvm => "Device",
-                AttachmentKind::Tap => "Network",
-                AttachmentKind::Media => "Volume",
-                AttachmentKind::Display | AttachmentKind::Qmp | AttachmentKind::Serial => {
-                    "Endpoint"
+            LaunchAttachments::Declared(slots) => {
+                let mut labels = BTreeSet::new();
+                for slot in slots {
+                    if !labels.insert(slot.slot.as_str()) {
+                        return Err(ProcessSpecError::DuplicateAttachmentSlot);
+                    }
                 }
-            };
-            if attachment.source_ref.resource_type().as_str() != expected {
-                return Err(ProcessSpecError::InvalidReference);
+                labels
             }
-        }
+        };
+        debug_assert!(!labels.is_empty());
         Ok(())
     }
 }

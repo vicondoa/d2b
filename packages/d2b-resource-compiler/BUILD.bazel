@@ -82,6 +82,21 @@ d2b_rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
+# The declaration-derived graph projection (KTD1/U4). The target renders its
+# generated artifacts into the sandbox scratch directory, so a generation
+# action can never write beside a committed generated file.
+d2b_rust_test(
+    name = "provider_graph_projection",
+    srcs = ["tests/provider_graph_projection.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        ":d2b_resource_compiler",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 d2b_rust_test(
     name = "d2b_resource_compiler_test",
     compile_data = ["Cargo.toml"],

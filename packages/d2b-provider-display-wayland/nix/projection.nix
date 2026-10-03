@@ -1,8 +1,11 @@
 # Zone resource projection for Provider/display-wayland.
 #
 # WaylandSession is the authored policy boundary. Its host proxy, Guest
-# frontend, and private Endpoint are typed child intents; compositor sockets
-# and display credentials remain private to the Provider runtime.
+# frontend, their private Endpoints, and the exact host compositor Endpoint the
+# proxy is admitted to reach are typed child intents; the socket's locator and
+# the display credentials remain private to the Provider runtime. A worker
+# reaches an endpoint only through its admitted relationship, so the projected
+# consumer policy names that one worker and nothing else.
 { config, lib, ... }:
 
 let
@@ -124,9 +127,45 @@ let
         maxAttachments = 1;
       };
       consumerPolicy = {
-        allowedSubjects = [ row.spec.guestRef ];
+        # The one worker admitted to this exact socket.
+        allowedSubjects =
+          [ "Process/wayland-frontend-${row.sessionName}" ];
         allowedProviderComponents = [ "runtime-cloud-hypervisor" ];
         allowedOperations = [ "resolve" "attach" ];
+      };
+      lifecyclePolicy = "recycle-with-producer";
+    };
+  };
+
+  # The exact host compositor socket the proxy may reach. It is declared as an
+  # Endpoint of the session so the relationship that admits it names the socket
+  # itself rather than a runtime directory or an inherited display name.
+  compositorEndpointFor = row: {
+    type = "Endpoint";
+    metadata = {
+      name = "wayland-compositor-${row.sessionName}";
+      ownerRef =
+        "display-wayland.d2bus.org.WaylandSession/${row.sessionName}";
+    };
+    spec = {
+      producerRef = row.spec.hostRef;
+      providerRef = providerRef;
+      endpointClass = "transport";
+      transport = "unix";
+      purpose = row.spec.compositorDisplay or "display-compositor";
+      serviceFingerprint = "display-wayland-compositor-r${
+        row.spec.reconnectGeneration or 1
+      }";
+      locality = "cross-domain";
+      visibility = "owner";
+      attachmentPolicy = {
+        supported = false;
+        maxAttachments = 0;
+      };
+      consumerPolicy = {
+        allowedSubjects = [ "Process/wayland-proxy-${row.sessionName}" ];
+        allowedProviderComponents = [ ];
+        allowedOperations = [ "resolve" ];
       };
       lifecyclePolicy = "recycle-with-producer";
     };
@@ -146,9 +185,13 @@ let
       (sessionRows zoneName);
 
   resourcesForZone = zoneName:
-    lib.listToAttrs (map
-      (row:
-        lib.nameValuePair "wayland-${row.sessionName}" (endpointFor row))
+    lib.listToAttrs (lib.concatMap
+      (row: [
+        (lib.nameValuePair "wayland-${row.sessionName}" (endpointFor row))
+        (lib.nameValuePair
+          "wayland-compositor-${row.sessionName}"
+          (compositorEndpointFor row))
+      ])
       (sessionRows zoneName));
 
   processesByZone = lib.genAttrs

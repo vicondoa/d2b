@@ -5,10 +5,21 @@
 
 mod controller;
 mod effects;
+mod authority;
+mod declaration;
 
+pub use authority::{
+    ACA_CONTROL_AUDIENCE, AcaAdmittedGuest, AcaAdmittedRemote, AcaCloudIdentity, AcaDeliveryContext,
+    AcaReconciliationKey, AcaReleaseEvidence, AcaRemoteAuthority, AcaRemoteDeliveryPort,
+    AcaRemoteGrant, AcaRemotePurpose, AcaRemoteRefusal,
+};
 pub use controller::{
     AcaClock, AcaController, AcaControllerError, AcaPhase, AcaReconcileOutcome,
     AzureContainerAppsRuntimeProvider, ACA_GUEST_FINALIZER, ACA_REPAIR_INTERVAL_SECS,
+};
+pub use declaration::{
+    ACA_ARTIFACT_ID, GUEST_CONTROLLER, azure_container_apps_bindings,
+    azure_container_apps_declaration, declared_presentation,
 };
 pub use effects::{
     AcaConfiguredDiskId, AcaConfiguredImageId, AcaControl, AcaControlContext, AcaControlError,

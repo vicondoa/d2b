@@ -82,8 +82,9 @@ use crate::site::SiteJson;
 use crate::storage::StorageJson;
 use d2b_contracts::launcher::RealmWorkloadsLauncherV2Json;
 use d2b_contracts_resource::v3::{
-    IfName, MountAccess, MountSpec, NetworkIfRole, NetworkProvenance, ResourceRef, ResourceUid,
-    ZoneId, derive_network_ifname, derive_network_route_name,
+    PROCESS_RESOURCE_TYPE as PROCESS_RESOURCE_TYPE_NAME, IfName, MountAccess, MountSpec,
+    NetworkIfRole, NetworkProvenance, ResourceRef, ResourceUid, ZoneId,
+    derive_network_ifname, derive_network_route_name,
     network::{Ipv4Cidr, NetworkSpec},
     resource_schema::{CanonicalJsonValue, framed_canonical_digest},
     storage::ZoneStoreStorageRow,
@@ -141,6 +142,14 @@ pub struct BundleResolver {
     /// beside the intents they minted so a declared read-write binding can be
     /// re-resolved against the storage contract the broker attaches.
     device_worker_templates: BTreeMap<String, Vec<ProcessTemplateBinding>>,
+    /// The numeric principal each template-bound row runs as, by declaring
+    /// Zone and by declared row reference. Resolved from the same bindings
+    /// `runner_intents` is resolved from and through the same host account
+    /// lookup, so a broker effect that resolves a committed consumer's
+    /// principal resolves the account the launch path applies to that row
+    /// rather than a second derivation of it. A row with no host account has
+    /// no entry, so the lookup refuses rather than answering with a number.
+    consumer_principals: BTreeMap<String, BTreeMap<String, ConsumerPrincipal>>,
     /// The template-derived intents whose declared read-write grant no
     /// attached storage contract resolves, held out of `runner_intents` so
     /// the worker is refused rather than launched with an empty grant, and
@@ -194,7 +203,6 @@ struct ZoneNativeBundleIndex {
     bundle_hash: String,
     bundle_version: u32,
     schema_version: String,
-    privileges_path: String,
     storage_path: Option<String>,
     /// Private site-runtime contract (`site.json`). Optional: a bundle that
     /// predates the artifact leaves the site facts absent.
@@ -612,6 +620,20 @@ impl ResolvedRunnerIntent {
             accepts_launch_args: false,
         })
     }
+}
+
+/// The numeric principal one committed Zone consumer row runs as.
+///
+/// Both numbers are the ids [`template_principal`] read from the row's host
+/// account, the same resolution the launch path applies, so a broker effect
+/// that names this principal and a broker effect that launches the row address
+/// one host account rather than two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsumerPrincipal {
+    /// The host uid the consumer row runs as.
+    pub uid: u32,
+    /// The host gid the consumer row runs as.
+    pub gid: u32,
 }
 
 /// Resolve the legacy placement default for one trusted VM-DAG role.
@@ -1399,7 +1421,6 @@ impl BundleResolver {
         let bundle = Bundle {
             bundle_version: index.bundle_version,
             schema_version: index.schema_version,
-            privileges_path: normalize_zone_native_ref(bundle_root, &index.privileges_path)?,
             storage_path: index
                 .storage_path
                 .as_deref()
@@ -1658,6 +1679,7 @@ impl BundleResolver {
             &provider_controller_templates,
         ));
         let device_worker_templates = device_worker_templates_of(&provider_controller_templates);
+        let consumer_principals = consumer_principals_of(&provider_controller_templates);
         // A Device worker's intent id is `(execution target, declared row
         // name)`. Never displace another trusted intent that already claims
         // it: a row whose identity collides with a legacy runner or
@@ -1710,6 +1732,7 @@ impl BundleResolver {
             usbip_bind_intents,
             runner_intents,
             device_worker_templates,
+            consumer_principals,
             unresolved_device_worker_intents: BTreeMap::new(),
             store_view_intents,
         };
@@ -1983,9 +2006,7 @@ impl BundleResolver {
 
     /// Check that a supplied Zone UID is present in a verified private bundle.
     pub fn has_zone_uid(&self, zone_uid: &d2b_contracts_resource::v3::ResourceUid) -> bool {
-        self.parsed_zone_resources
-            .values()
-            .any(|bundle| bundle.zone_uid.as_ref() == Some(zone_uid))
+        self.zone_name_for_uid(zone_uid).is_some()
     }
 
     /// Return the immutable UID bound into one verified Zone resource bundle.
@@ -1993,6 +2014,22 @@ impl BundleResolver {
         self.parsed_zone_resources
             .get(zone.as_str())
             .and_then(|bundle| bundle.zone_uid.clone())
+    }
+
+    /// Return the Zone name whose verified bundle carries exactly this Zone
+    /// self-resource uid.
+    ///
+    /// The inverse of [`Self::zone_uid`]. A Zone uid is the durable identity a
+    /// broker request carries, while every table in this resolver is keyed by
+    /// Zone name, so a request that names a Zone by uid reaches its own Zone
+    /// tables through this lookup - and through no other, so a request naming a
+    /// Zone this host has no verified bundle for resolves to nothing rather
+    /// than to another Zone's rows.
+    pub fn zone_name_for_uid(&self, zone_uid: &ResourceUid) -> Option<&str> {
+        self.parsed_zone_resources
+            .values()
+            .find(|bundle| bundle.zone_uid.as_ref() == Some(zone_uid))
+            .map(|bundle| bundle.zone.as_str())
     }
 
     /// Return the verified broker-owned storage row for one Zone.
@@ -2428,6 +2465,32 @@ impl BundleResolver {
         self.runner_intents.get(id)
     }
 
+    /// Find the one trusted runner intent that carries `template`, refusing
+    /// ambiguity.
+    ///
+    /// The private runner artifact records the same trusted template identity
+    /// twice - as the per-role `role_id` and as the `profile_id` a v3
+    /// `Process` row selects - so both are matched, exactly as
+    /// [`Self::find_runner_intent_for_process`] matches them. This is the
+    /// narrower form of that lookup for the caller that holds only a
+    /// template: it answers when the verified bundle declares exactly one
+    /// intent for it, and `None` for every other case including a template
+    /// several VMs each declare. A caller that cannot say *which* execution
+    /// the template runs for therefore gets no intent rather than the first
+    /// one the bundle happens to hold, which is the difference between a
+    /// resolver and a guess.
+    pub fn find_unique_runner_intent_for_template(
+        &self,
+        template: &str,
+    ) -> Option<&ResolvedRunnerIntent> {
+        let mut matches = self
+            .runner_intents
+            .values()
+            .filter(|intent| intent.role_id == template || intent.profile_id == template);
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
+    }
+
     /// Find the unique trusted runner intent for a Process template and
     /// execution binding.
     ///
@@ -2683,6 +2746,50 @@ impl BundleResolver {
         matches.next().is_none().then_some(first)
     }
 
+    /// Resolve the numeric principal one committed Zone consumer row runs as,
+    /// from the committed consumer reference alone.
+    ///
+    /// This is the resolution surface a privileged broker effect needs and
+    /// every other runner-intent lookup leaves out: the other lookups take the
+    /// row's `executionRef`, execution domain, `userRef`, and template as
+    /// arguments, so a caller that held only a consumer reference had to supply
+    /// those four facts itself. Here they are read off the row the verified Zone
+    /// bundle declares, so the caller contributes a reference and nothing else.
+    ///
+    /// The lookup is exact on both axes:
+    ///
+    /// - **Zone**: the binding must come from `zone`'s own bundle. A consumer
+    ///   reference is not globally unique - two Zones each declare
+    ///   `Process/shell` - and the principal is derived from identities that
+    ///   include the Zone-local owner, so the same reference in another Zone is
+    ///   a different consumer and must never answer for this one.
+    /// - **Row**: the binding must name exactly `consumer_ref`, and a Zone that
+    ///   declared the same row twice resolves to nothing rather than picking one.
+    ///
+    /// `None` is the answer for a row this host's verified bundle does not
+    /// declare, for a reference that is not a `Process` / `EphemeralProcess`
+    /// row, and for a Zone this host has no verified bundle for. A row
+    /// committed through the Resource API rather than the bundle lands here
+    /// too, exactly as it does for [`Self::find_device_worker_intent`]: there is
+    /// no trusted executable binding to derive a principal from, and the
+    /// broker must refuse rather than invent one.
+    pub fn consumer_principal(
+        &self,
+        zone: &str,
+        consumer_ref: &ResourceRef,
+    ) -> Option<ConsumerPrincipal> {
+        if !matches!(
+            consumer_ref.resource_type().as_str(),
+            "Process" | "EphemeralProcess"
+        ) {
+            return None;
+        }
+        self.consumer_principals
+            .get(zone)?
+            .get(&consumer_ref.to_canonical_string())
+            .copied()
+    }
+
     /// Resolve a QEMU media source by VM + opaque ref.
     ///
     /// Raw physical identity is deliberately absent from the bundle; callers
@@ -2772,6 +2879,22 @@ impl BundleResolver {
         self.parsed_zone_resources.get(zone.as_str()).and_then(|bundle| {
             bundle.resources.iter().find(|resource| {
                 resource.resource_type().as_str() == "Guest"
+                    && resource.metadata().name().as_str() == name
+            })
+        })
+    }
+
+    /// Look up one zone-tagged v3 `Volume` resource by Zone + name.
+    ///
+    /// The same verified per-Zone resource bundle
+    /// [`Self::find_guest_resource`] reads: a `Volume`'s declared source
+    /// policy and named views are what decide where its bytes live on the
+    /// host, so they are authority the broker resolves rather than something
+    /// a caller states.
+    pub fn find_volume_resource(&self, zone: &ZoneId, name: &str) -> Option<&BundleResource> {
+        self.parsed_zone_resources.get(zone.as_str()).and_then(|bundle| {
+            bundle.resources.iter().find(|resource| {
+                resource.resource_type().as_str() == "Volume"
                     && resource.metadata().name().as_str() == name
             })
         })
@@ -5115,29 +5238,363 @@ impl TemplateIntentShape {
     }
 }
 
-/// Mint one trusted runner intent from a private template binding.
+/// The declared long-lived swtpm worker row prefix (`Process/swtpm-<device>`),
+/// owned by `packages/d2b-provider-device-tpm/src/vocabulary.rs`
+/// (`TPM_PROCESS_ROW_PREFIX`) and re-spelled here because a Provider crate
+/// cannot be a dependency of this one. The two spellings can only ever cost a
+/// row its principal: a row whose name no longer starts with the prefix has no
+/// provisioned account, so it is refused rather than granted anything.
+const TPM_WORKER_ROW_PREFIX: &str = "swtpm-";
+/// The declared one-shot flush row prefix
+/// (`EphemeralProcess/swtpm-flush-<device>`), owned by the same vocabulary
+/// module as [`TPM_WORKER_ROW_PREFIX`] (`TPM_FLUSH_ROW_PREFIX`).
+const TPM_FLUSH_ROW_PREFIX: &str = "swtpm-flush-";
+/// The principal-account suffix the TPM worker accounts carry
+/// (`d2b-<zone>-<device>-swtpm` and its `-flush` sibling), owned by the same
+/// vocabulary module (`TPM_STATE_OWNER_SUFFIX`).
+const TPM_STATE_OWNER_SUFFIX: &str = "-swtpm";
+/// The principal-account suffix of the one-shot flush sibling
+/// (`d2b-<zone>-<device>-swtpm-flush`).
+const TPM_FLUSH_OWNER_SUFFIX: &str = "-swtpm-flush";
+
+/// The declared Device GPU worker row prefix (`Process/gpu-<device>`) and the
+/// video decode sidecar's (`Process/video-<device>`), both declared by the
+/// Device GPU Provider's Nix projection
+/// (`packages/d2b-provider-device-gpu/nix/default.nix`). Neither is in the
+/// device-tpm vocabulary module, so they are spelled here for the same reason:
+/// a Provider crate cannot be a dependency of this one.
+const GPU_WORKER_ROW_PREFIX: &str = "gpu-";
+const VIDEO_WORKER_ROW_PREFIX: &str = "video-";
+/// The principal-account suffixes those two rows carry
+/// (`d2b-<zone>-<device>-gpu` and its `-video` sibling).
+const GPU_WORKER_OWNER_SUFFIX: &str = "-gpu";
+const VIDEO_WORKER_OWNER_SUFFIX: &str = "-video";
+
+/// The row-class token the binding-owned virtiofsd serving worker's account
+/// carries, which `bounded_account_name` prefixes with the Zone to compose
+/// `d2b-<zone>-virtiofsd`.
+const SERVING_WORKER_BODY: &str = "virtiofsd";
+/// The static Provider controller template prefix
+/// (`static_controller_template_name`, `packages/d2b-resource-compiler`):
+/// every controller row the compiler projects declares a template under it,
+/// either spelled out (`controller-<artifact>-<component>`) or hashed.
+const CONTROLLER_TEMPLATE_PREFIX: &str = "controller-";
+/// The segment a Provider controller's account carries, between the Zone and
+/// the owning Provider's name.
+const CONTROLLER_ACCOUNT_SEGMENT: &str = "controller";
+/// The ResourceType prefix every Provider-owned template binding carries as
+/// its owner reference.
+const PROVIDER_OWNER_PREFIX: &str = "Provider/";
+/// The longest account name the host account database carries.
+///
+/// NixOS's own user and group options refuse a name of 32 bytes or more
+/// (`nixos/modules/config/users-groups.nix`), and that is the POSIX bound on
+/// a group name rather than a NixOS choice: a name past it is not an account
+/// the host holds at all, so a host configured from
+/// [`bounded_account_name`]'s output is readable at any length this bound
+/// admits.
+pub const ACCOUNT_NAME_LIMIT: usize = 31;
+
+/// The hex digits of the digest a shortened account name carries, mirroring
+/// `accountNameHashHex` in `nixos-modules/lib.nix`.
+const ACCOUNT_NAME_HASH_HEX: usize = 8;
+
+/// The closed reason one template-bound row's principal cannot be resolved to
+/// a real host account.
+///
+/// A principal is a real host account or it is nothing. An earlier revision
+/// answered a row that had no account with a hash of its own three identities
+/// folded into the `50_000..16_777_215` band; that turned the loud refusal the
+/// contract wants into a silent permission grant for a uid no process holds,
+/// which is the harder failure to diagnose later. Each variant names the row
+/// it refused and the account it looked for, so a caller learns which
+/// declaration to provision rather than merely that something failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TemplatePrincipalError {
+    /// The host layer provisions no account for this row's class, so there is
+    /// no account to resolve the principal through.
+    Unprovisioned { row: String },
+    /// The account this row runs as is not in the host account database.
+    AccountAbsent { account: String, row: String },
+    /// The host account database could not be read at all.
+    AccountUnreachable { account: String, row: String },
+}
+
+impl fmt::Display for TemplatePrincipalError {
+    /// The closed, path-free slug a refusal and its audit record carry. The
+    /// row and the account stay in the structured fields: this string is what
+    /// an envelope surfaces.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Unprovisioned { .. } => "template-principal-unprovisioned",
+            Self::AccountAbsent { .. } => "template-principal-account-absent",
+            Self::AccountUnreachable { .. } => "template-principal-account-unreachable",
+        })
+    }
+}
+
+/// The host account one template-bound row runs as, or the refusal for a row
+/// class the host layer provisions no account for.
+///
+/// The account is composed from facts both sides of the boundary already
+/// hold - the declaring Zone, the binding's own owner reference, its declared
+/// row name, and its template - never from a hash of the binding triple. The
+/// resource compiler emits those facts from the same trusted Zone rows the
+/// host layer reads, so the two sides are two evaluators of one rule over one
+/// input rather than two naming schemes that have to be kept in agreement by
+/// hand:
+///
+/// | row class | owner | account |
+/// |---|---|---|
+/// | Device TPM worker | `Provider/device-tpm`, `Process/swtpm-<device>` | `d2b-<zone>-<device>-swtpm` |
+/// | its one-shot flush | `Provider/device-tpm`, `EphemeralProcess/swtpm-flush-<device>` | `d2b-<zone>-<device>-swtpm-flush` |
+/// | Device GPU worker | `Provider/device-gpu`, `Process/gpu-<device>` | `d2b-<zone>-<device>-gpu` |
+/// | video decode sidecar | `Provider/device-gpu`, `Process/video-<device>` | `d2b-<zone>-<device>-video` |
+/// | Provider controllers | `Provider/<provider>`, a `controller-*` template | `d2b-<zone>-controller-<provider>` |
+/// | serving worker | `Provider/volume-virtiofs`, `virtiofsd-worker` | `d2b-<zone>-virtiofsd` |
+///
+/// The granularity each row class carries is the privilege boundary it holds,
+/// not convenience. A Device worker owns one physical function, so each Device
+/// and each of its two families is its own account - the GPU Provider's
+/// authority admission refuses a video principal equal to the GPU principal
+/// (`PrincipalNotSeparated`), and a shared account would hand one Device's
+/// worker another Device's identity. A Provider's controllers all come from one
+/// signed artifact published under one key, so the Provider, not the hashed
+/// per-component row name, is the trust boundary that separates them, and the
+/// Zone keeps one Zone's controllers off another's. The serving worker is a
+/// single row per Zone whose launch ticket has two path trees opened to its
+/// principal, so it does not share its Provider's controller account either.
+///
+/// A row outside that vocabulary has no provisioned account. That is a
+/// provisioning gap, and it refuses here rather than becoming a number of our
+/// own: a number invented for an account the host does not hold answers every
+/// ACL request for a principal no process holds. Naming one more family here
+/// would also be a shared-crate family-knowledge violation (the credential
+/// agent a `Credential` controller adopts is the one that rule refuses), so a
+/// family this crate may not name is provisioned by the family crate and
+/// refused here until it is.
+///
+/// Each of those names is bounded to what the host account database carries
+/// ([`bounded_account_name`]), so a Provider name long enough to push a row
+/// class past that bound is still an account the host holds rather than a
+/// refusal.
+///
+/// `nixos-modules/lib.nix` (`templateWorkerAccounts`) derives the same names
+/// from the same Zone rows and `host-users.nix` materializes them, and one
+/// committed table of row classes is read through both
+/// (`tests/unit/nix/cases/host-worker-accounts.json`), so the two sides cannot
+/// name a row's account differently without one of them failing.
+fn template_account(
+    zone: &str,
+    binding: &ProcessTemplateBinding,
+) -> Result<String, TemplatePrincipalError> {
+    let unprovisioned = || TemplatePrincipalError::Unprovisioned {
+        row: binding.process_ref().to_canonical_string(),
+    };
+    let row = binding.process_ref();
+    let owner = binding.owner_ref().to_canonical_string();
+    let template = binding.template().as_str();
+    let row_name = row.name().as_str();
+    let row_type = row.resource_type().as_str();
+    // The Device families are tried first because they are the ones whose
+    // account carries the claiming Device's name, and a row name that is not
+    // one of their own vocabulary falls through to the classes below rather
+    // than ending the composition: a Device Provider also signs a controller
+    // artifact, so its controller rows are named by the Provider rule and not
+    // by the worker rule, and an arm that returned `None` for a row name it
+    // did not recognize would refuse a row the host has an account for.
+    let device_account = match (owner.as_str(), row_type) {
+        (DEVICE_TPM_PROVIDER_REF, "Process") => device_worker_account(
+            zone,
+            row_name,
+            TPM_WORKER_ROW_PREFIX,
+            TPM_STATE_OWNER_SUFFIX,
+        ),
+        (DEVICE_TPM_PROVIDER_REF, "EphemeralProcess") => device_worker_account(
+            zone,
+            row_name,
+            TPM_FLUSH_ROW_PREFIX,
+            TPM_FLUSH_OWNER_SUFFIX,
+        ),
+        (DEVICE_GPU_PROVIDER_REF, "Process") => device_worker_account(
+            zone,
+            row_name,
+            GPU_WORKER_ROW_PREFIX,
+            GPU_WORKER_OWNER_SUFFIX,
+        )
+        .or_else(|| {
+            device_worker_account(
+                zone,
+                row_name,
+                VIDEO_WORKER_ROW_PREFIX,
+                VIDEO_WORKER_OWNER_SUFFIX,
+            )
+        }),
+        _ => None,
+    };
+    let account = device_account.or_else(|| match (owner.as_str(), row_type) {
+        (SERVING_WORKER_PROVIDER_REF, "Process") if template == SERVING_WORKER_TEMPLATE => {
+            bounded_account_name(zone, SERVING_WORKER_BODY)
+        }
+        _ if row_type == PROCESS_RESOURCE_TYPE_NAME
+            && template.starts_with(CONTROLLER_TEMPLATE_PREFIX) =>
+        {
+            owner
+                .strip_prefix(PROVIDER_OWNER_PREFIX)
+                .filter(|provider| !provider.is_empty())
+                .and_then(|provider| {
+                    bounded_account_name(zone, &format!("{CONTROLLER_ACCOUNT_SEGMENT}-{provider}"))
+                })
+        }
+        _ => None,
+    });
+    let account = account.ok_or_else(unprovisioned)?;
+    Ok(account)
+}
+
+/// The account one row class runs as, bounded to what the host account
+/// database carries, or `None` when no name of that length is available.
+///
+/// A name that fits [`ACCOUNT_NAME_LIMIT`] is used exactly as composed, so
+/// every ordinary row class reads as the row it belongs to. One that does not
+/// keeps a readable prefix of the row-class token and carries the first
+/// [`ACCOUNT_NAME_HASH_HEX`] hex digits of the SHA-256 over the whole composed
+/// name: two row classes that overflow together stay two accounts rather than
+/// collapsing into one. A Zone name long enough that no prefix fits is a Zone
+/// this scheme cannot name, and yields no account at all.
+///
+/// `nixos-modules/lib.nix` (`boundedAccountName`) is this same composition
+/// over the same inputs, and `host-users.nix` materializes what it returns,
+/// so a row this resolves is a row a host built from those Zone rows holds.
+/// The Device TPM Provider names the same two accounts for its state Volume's
+/// granted principals and for its worker's own process principal
+/// (`packages/d2b-provider-device-tpm/src/resources.rs`), and composes them
+/// through here too, so there is one composition rather than three that agree.
+pub fn bounded_account_name(zone: &str, body: &str) -> Option<String> {
+    let prefix = format!("d2b-{zone}-");
+    let full = format!("{prefix}{body}");
+    if full.len() <= ACCOUNT_NAME_LIMIT {
+        return Some(full);
+    }
+    let keep = ACCOUNT_NAME_LIMIT
+        .checked_sub(prefix.len() + 1 + ACCOUNT_NAME_HASH_HEX)?;
+    if keep == 0 {
+        return None;
+    }
+    let head: String = body.chars().take(keep).collect();
+    if head.is_empty() {
+        return None;
+    }
+    let digest = sha256_hex(full.as_bytes());
+    let hash = digest
+        .strip_prefix("sha256:")
+        .and_then(|hex| hex.get(..ACCOUNT_NAME_HASH_HEX))?;
+    Some(format!("{prefix}{head}-{hash}"))
+}
+
+/// `d2b-<zone>-<device><suffix>`, or `None` when the declared row name is not
+/// the family's own vocabulary.
+fn device_worker_account(
+    zone: &str,
+    row_name: &str,
+    row_prefix: &str,
+    suffix: &str,
+) -> Option<String> {
+    let device = row_name.strip_prefix(row_prefix)?;
+    if device.is_empty() {
+        return None;
+    }
+    bounded_account_name(zone, &format!("{device}{suffix}"))
+}
+
+/// Why the host account database could not answer for one account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccountRead {
+    /// The database answered, and the account is not in it.
+    Absent,
+    /// The database itself could not be read.
+    Unreachable,
+}
+
+/// The ids one host account holds, read from the host account database.
+///
+/// This is the account read the state-Volume layout resolver already performs
+/// (`packages/d2bd/src/resource_plane_v3.rs`, `principal_id_for`), and it
+/// answers the same way: the account's own uid and gid, or the reason it
+/// could not say. There is no third answer, and in particular no number of
+/// our own - a principal that is not a real account cannot be granted.
+fn host_account_principal(account: &str) -> Result<ConsumerPrincipal, AccountRead> {
+    match nix::unistd::User::from_name(account) {
+        Ok(Some(entry)) => Ok(ConsumerPrincipal {
+            uid: entry.uid.as_raw(),
+            gid: entry.gid.as_raw(),
+        }),
+        Ok(None) => Err(AccountRead::Absent),
+        Err(_) => Err(AccountRead::Unreachable),
+    }
+}
+
+/// The host account ids one template-bound row runs as, resolved through the
+/// host account database, or the closed refusal.
+///
+/// This is the one resolution both the launch path and the broker's grant path
+/// read, so the principal a launch is given and the principal a broker effect
+/// grants an ACL to are the ids one real account holds.
+fn template_principal(
+    zone: &str,
+    binding: &ProcessTemplateBinding,
+) -> Result<ConsumerPrincipal, TemplatePrincipalError> {
+    let row = binding.process_ref().to_canonical_string();
+    let refused = |error| {
+        tracing::warn!(
+            zone = %zone,
+            row = %row,
+            reason = %error,
+            "a template-bound row with no host account is refused its principal"
+        );
+        error
+    };
+    let account = template_account(zone, binding).map_err(refused)?;
+    // The two refusals are distinct on purpose: an account the host does not
+    // hold is a provisioning gap, while a database that could not be read is a
+    // host that cannot answer the question at all. Neither is answered with a
+    // number.
+    let absent = || {
+        TemplatePrincipalError::AccountAbsent {
+            account: account.clone(),
+            row: row.clone(),
+        }
+    };
+    let unreachable = || {
+        TemplatePrincipalError::AccountUnreachable {
+            account: account.clone(),
+            row: row.clone(),
+        }
+    };
+    host_account_principal(&account)
+        .map_err(|read| match read {
+            AccountRead::Absent => refused(absent()),
+            AccountRead::Unreachable => refused(unreachable()),
+        })
+}
+
+/// Mint one trusted runner intent from a private template binding, or the
+/// closed refusal when the row's principal is not a real host account.
+///
+/// A row with no account mints no intent at all: there is no launch policy to
+/// resolve it, so the launch is refused rather than run as a uid nothing
+/// holds. Nothing here is a fallback - the intent carries the account's own
+/// uid and gid, and the in-namespace root maps to the same account.
 fn mint_template_intent(
+    zone: &str,
     binding: &ProcessTemplateBinding,
     shape: TemplateIntentShape,
-) -> ResolvedRunnerIntent {
+) -> Result<ResolvedRunnerIntent, TemplatePrincipalError> {
     let vm_name = binding.execution_ref().name().as_str().to_owned();
     let role_id = binding.process_ref().name().as_str().to_owned();
     let cgroup_subtree = format!("d2b.slice/{vm_name}/{role_id}");
     let profile_id = binding.template().as_str().to_owned();
-    let principal = format!(
-        "{}:{}:{}",
-        binding.owner_ref().to_canonical_string(),
-        binding.process_ref().to_canonical_string(),
-        binding.execution_ref().to_canonical_string()
-    );
-    let profile_hash = sha2::Sha256::digest(principal.as_bytes());
-    let principal_id = 50_000_u32.saturating_add(
-        u32::from_be_bytes(
-            profile_hash[..4]
-                .try_into()
-                .expect("SHA-256 always has four-byte prefixes"),
-        ) & 0x00ff_ffff,
-    );
+    let principal = template_principal(zone, binding)?;
     let (role, seccomp_policy_ref, namespaces, user_namespace, device_binds, umask) = match shape {
         TemplateIntentShape::ProviderController { serving_worker } => (
             ProcessRole::ProviderController,
@@ -5167,7 +5624,7 @@ fn mint_template_intent(
             posture.umask,
         ),
     };
-    ResolvedRunnerIntent {
+    Ok(ResolvedRunnerIntent {
         intent_id: intent_id_legacy_runner(&vm_name, &role_id),
         vm_name,
         execution_ref: binding.execution_ref().to_canonical_string(),
@@ -5179,8 +5636,8 @@ fn mint_template_intent(
         binary_path: PathBuf::from(binding.binary_path()),
         argv: vec![binding.binary_ref().as_str().to_owned()],
         env: Vec::new(),
-        uid: principal_id,
-        gid: principal_id,
+        uid: principal.uid,
+        gid: principal.gid,
         supplementary_groups: Vec::new(),
         capabilities: Vec::new(),
         namespaces,
@@ -5201,12 +5658,12 @@ fn mint_template_intent(
         root_carve_out: false,
         profile_id,
         user_namespace: user_namespace.then_some(UserNamespaceSpec {
-            host_uid_for_zero: principal_id,
-            host_gid_for_zero: principal_id,
+            host_uid_for_zero: principal.uid,
+            host_gid_for_zero: principal.gid,
         }),
         umask: Some(umask),
         accepts_launch_args: binding.admits_launch_args(),
-    }
+    })
 }
 
 /// Build the trusted intents for Provider controller Templates.
@@ -5218,13 +5675,19 @@ fn build_provider_controller_intents(
     templates: &BTreeMap<String, Vec<ProcessTemplateBinding>>,
 ) -> BTreeMap<String, ResolvedRunnerIntent> {
     let mut out = BTreeMap::new();
-    for binding in templates.values().flatten() {
-        let shape = TemplateIntentShape::of(binding);
-        if matches!(shape, TemplateIntentShape::DeviceWorker(_)) {
-            continue;
+    for (zone, bindings) in templates {
+        for binding in bindings {
+            let shape = TemplateIntentShape::of(binding);
+            if matches!(shape, TemplateIntentShape::DeviceWorker(_)) {
+                continue;
+            }
+            // A row whose principal is not a host account keeps no intent, so
+            // no launch policy resolves it and the launch is refused instead
+            // of running as a uid nothing holds.
+            if let Ok(intent) = mint_template_intent(zone, binding, shape) {
+                out.insert(intent.intent_id.clone(), intent);
+            }
         }
-        let intent = mint_template_intent(binding, shape);
-        out.insert(intent.intent_id.clone(), intent);
     }
     out
 }
@@ -5241,13 +5704,16 @@ fn build_device_worker_intents(
     templates: &BTreeMap<String, Vec<ProcessTemplateBinding>>,
 ) -> BTreeMap<String, ResolvedRunnerIntent> {
     let mut out = BTreeMap::new();
-    for binding in templates.values().flatten() {
-        let shape = TemplateIntentShape::of(binding);
-        if !matches!(shape, TemplateIntentShape::DeviceWorker(_)) {
-            continue;
+    for (zone, bindings) in templates {
+        for binding in bindings {
+            let shape = TemplateIntentShape::of(binding);
+            if !matches!(shape, TemplateIntentShape::DeviceWorker(_)) {
+                continue;
+            }
+            if let Ok(intent) = mint_template_intent(zone, binding, shape) {
+                out.insert(intent.intent_id.clone(), intent);
+            }
         }
-        let intent = mint_template_intent(binding, shape);
-        out.insert(intent.intent_id.clone(), intent);
     }
     out
 }
@@ -5273,6 +5739,44 @@ fn device_worker_templates_of(
                     .cloned()
                     .collect(),
             )
+        })
+        .collect()
+}
+
+/// The principal each template-bound row runs as, indexed by declaring Zone
+/// and declared row reference so a committed consumer reference resolves
+/// without any other fact.
+///
+/// An entry is minted only for a row whose principal resolved to a real host
+/// account, whatever role the row launches as: a broker effect may touch host
+/// state on behalf of a Provider controller as readily as on behalf of a
+/// Device worker, and both run as the ids [`template_principal`] resolved. A
+/// row with no account gets no entry at all, so the broker's grant path
+/// answers its own closed `RowUnresolved` instead of being handed a uid no
+/// process holds. A Zone that declared one row twice gets no entry for that
+/// row either, because there is no single account that row runs as and the
+/// lookup must refuse rather than pick one.
+fn consumer_principals_of(
+    templates: &BTreeMap<String, Vec<ProcessTemplateBinding>>,
+) -> BTreeMap<String, BTreeMap<String, ConsumerPrincipal>> {
+    templates
+        .iter()
+        .map(|(zone, bindings)| {
+            let mut principals = BTreeMap::new();
+            let mut ambiguous = BTreeSet::new();
+            for binding in bindings {
+                let row = binding.process_ref().to_canonical_string();
+                let Ok(principal) = template_principal(zone, binding) else {
+                    continue;
+                };
+                if principals.insert(row.clone(), principal).is_some() {
+                    ambiguous.insert(row);
+                }
+            }
+            for row in &ambiguous {
+                principals.remove(row);
+            }
+            (zone.clone(), principals)
         })
         .collect()
 }
@@ -6584,7 +7088,6 @@ mod tests {
                 bundle_version: 4,
                 schema_version: "v2".to_owned(),
 
-                privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
 
                 realm_workloads_launcher_v2_path: None,
@@ -6721,8 +7224,21 @@ mod tests {
         assert!(ResolvedRunnerIntent::from_process_node("host-system", &node).is_none());
     }
 
+    /// A Provider controller row the host has provisioned no account for
+    /// resolves to nothing, and the resolver says which row and why.
+    ///
+    /// The controller intent used to be readable here: it carried the private
+    /// bundle's own role, cgroup subtree, namespaces and binary path, and the
+    /// lookup discriminated a wrong owner, a wrong execution target, a wrong
+    /// template and a wrong row kind. A host account is what the launch
+    /// identity and the ACL entry both resolve through, and a host that
+    /// provisions none of these rows now refuses every one of them at the same
+    /// point, so that discrimination and the intent it carried are no longer
+    /// observable here. What this keeps is the end of the chain: the refusal
+    /// is typed, it names the declared row, and a loaded bundle exposes
+    /// neither an intent nor a consumer principal for it.
     #[test]
-    fn provider_controller_intent_uses_private_bundle_metadata_exactly() {
+    fn a_provider_controller_row_with_no_host_account_resolves_nothing() {
         let zone = ZoneId::parse("dev").expect("zone");
         let process_ref = ResourceRef::parse("Process/controller-test").expect("process ref");
         let owner_ref = ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("owner ref");
@@ -6798,7 +7314,6 @@ mod tests {
                 bundle_version: 11,
                 schema_version: "v2".to_owned(),
 
-                privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
 
                 realm_workloads_launcher_v2_path: None,
@@ -6816,93 +7331,45 @@ mod tests {
             manifest,
             BTreeMap::from([("dev".to_owned(), resource_bundle_bytes)]),
         );
-        let resolved = resolver
-            .find_provider_controller_intent(
-                &process_ref,
-                "Host/dev-host",
-                ProcessExecutionDomain::System,
-                None,
-                template,
-                Some("Provider/runtime-cloud-hypervisor"),
-            )
-            .expect("private controller intent");
-        assert_eq!(resolved.role, ProcessRole::ProviderController);
+        let binding = serde_json::from_value::<ProcessTemplateBinding>(
+            serde_json::json!({
+                "processRef": "Process/controller-test",
+                "ownerRef": "Provider/runtime-cloud-hypervisor",
+                "executionRef": "Host/dev-host",
+                "template": "controller-test",
+                "artifactId": "runtime-cloud-hypervisor",
+                "binaryRef": "d2b-cloud-hypervisor-controller",
+                "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+                "binaryPath": "/nix/store/runtime-cloud-hypervisor/bin/d2b-cloud-hypervisor-controller",
+            }),
+        )
+        .expect("the committed private template binding");
         assert_eq!(
-            resolved.cgroup_placement.subtree,
-            "d2b.slice/dev-host/controller-test"
+            mint_template_intent("dev", &binding, TemplateIntentShape::of(&binding)).err(),
+            Some(TemplatePrincipalError::AccountAbsent {
+                account: "d2b-dev-controller-run-af0d3fce".to_owned(),
+                row: "Process/controller-test".to_owned(),
+            }),
+            "a controller row the host has not provisioned is refused by the \
+             account it runs as, so a reader learns which account to create"
         );
-        assert!(!resolved.namespaces.mount);
-        assert!(!resolved.namespaces.pid);
-        assert!(!resolved.namespaces.net);
-        assert!(!resolved.namespaces.ipc);
-        assert!(!resolved.namespaces.uts);
-        assert!(!resolved.namespaces.user);
         assert_eq!(
-            resolved.binary_path,
-            PathBuf::from(
-                "/nix/store/runtime-cloud-hypervisor/bin/d2b-cloud-hypervisor-controller"
-            )
+            resolver.consumer_principal("dev", &process_ref),
+            None,
+            "so the broker's grant path resolves no principal for it"
         );
         assert!(
             resolver
-                .find_runner_intent_for_process_in_vm(
-                    None,
+                .find_provider_controller_intent(
+                    &process_ref,
                     "Host/dev-host",
                     ProcessExecutionDomain::System,
                     None,
                     template,
+                    Some("Provider/runtime-cloud-hypervisor"),
                 )
                 .is_none(),
-            "ProviderController must remain excluded from processes.json intents"
-        );
-        assert!(
-            resolver
-                .find_provider_controller_intent(
-                    &process_ref,
-                    "Host/dev-host",
-                    ProcessExecutionDomain::System,
-                    None,
-                    template,
-                    Some("Provider/wrong-owner"),
-                )
-                .is_none()
-        );
-        assert!(
-            resolver
-                .find_provider_controller_intent(
-                    &process_ref,
-                    "Host/wrong-target",
-                    ProcessExecutionDomain::System,
-                    None,
-                    template,
-                    Some("Provider/runtime-cloud-hypervisor"),
-                )
-                .is_none()
-        );
-        assert!(
-            resolver
-                .find_provider_controller_intent(
-                    &process_ref,
-                    "Host/dev-host",
-                    ProcessExecutionDomain::System,
-                    None,
-                    "controller-wrong",
-                    Some("Provider/runtime-cloud-hypervisor"),
-                )
-                .is_none()
-        );
-        let wrong_kind = ResourceRef::parse("EphemeralProcess/controller-test").expect("ref");
-        assert!(
-            resolver
-                .find_provider_controller_intent(
-                    &wrong_kind,
-                    "Host/dev-host",
-                    ProcessExecutionDomain::System,
-                    None,
-                    template,
-                    Some("Provider/runtime-cloud-hypervisor"),
-                )
-                .is_none()
+            "and no launch policy resolves it either"
         );
     }
 
@@ -7030,14 +7497,21 @@ mod tests {
     /// The serving-worker condition is spelled in this crate
     /// ([`is_serving_worker_template`], over the private template binding) and
     /// once more in the broker, over the *resolved* intent
-    /// (`intent_is_serving_worker_template`, `packages/d2b-broker/src/runtime.rs`).
-    /// d2b-core cannot call the broker's copy - the dependency runs broker ->
-    /// core, never back - so the predicate is restated verbatim below and the
-    /// case table is fed to both spellings through the production mint path:
-    /// the role, profile id, and owner ref the broker reads are taken off the
-    /// intent the resolver mints, never re-spelled for the assertion. A
-    /// template that starts minting a different triple, or one pair the two
-    /// spellings classify differently, fails here.
+    /// (`intent_is_serving_worker_template`,
+    /// `packages/d2b-broker/src/runtime.rs`). d2b-core cannot call the
+    /// broker's copy - the dependency runs broker -> core, never back - so the
+    /// predicate is restated verbatim below and the case table is fed to both
+    /// spellings through the production mint path: the role, profile id, and
+    /// owner ref the broker reads are taken off the intent the resolver
+    /// mints, never re-spelled for the assertion. A template that starts
+    /// minting a different triple, or one pair the two spellings classify
+    /// differently, fails here.
+    ///
+    /// The mint needs a host account, so where the host provisions none of
+    /// these rows the third assertion reads the refusal instead: the two
+    /// spellings are compared over a real intent wherever one is minted, and
+    /// the rule that keeps a fabricated uid out of the broker's hands is
+    /// checked wherever the host has no account to offer.
     #[test]
     fn serving_worker_condition_agrees_with_the_broker_spelling() {
         // Verbatim `intent_is_serving_worker_template`. The broker reads the
@@ -7062,22 +7536,58 @@ mod tests {
             .expect("template binding")
         };
 
+        // (owner ref, template, the serving-worker verdict, the refusal slug
+        // the mint answers with on a host that has provisioned none of these
+        // accounts). A pair that composes an account name reaches the account
+        // database and is refused for the account being absent; a pair outside
+        // the provisioned row classes has no account to look for at all and is
+        // refused as unprovisioned.
         let cases = [
-            (SERVING_WORKER_PROVIDER_REF, SERVING_WORKER_TEMPLATE, true),
+            (
+                SERVING_WORKER_PROVIDER_REF,
+                SERVING_WORKER_TEMPLATE,
+                true,
+                "template-principal-account-absent",
+            ),
             // The serving provider without the serving template.
-            (SERVING_WORKER_PROVIDER_REF, "virtiofsd-terminate", false),
+            (
+                SERVING_WORKER_PROVIDER_REF,
+                "virtiofsd-terminate",
+                false,
+                "template-principal-unprovisioned",
+            ),
             // The serving template under any other provider.
-            ("Provider/other-virtiofs", SERVING_WORKER_TEMPLATE, false),
-            // An ordinary signed Provider controller template.
+            (
+                "Provider/other-virtiofs",
+                SERVING_WORKER_TEMPLATE,
+                false,
+                "template-principal-unprovisioned",
+            ),
+            // A signed Provider controller template: the owning Provider names
+            // the account, so this reaches the account database.
+            (
+                "Provider/runtime-cloud-hypervisor",
+                "controller-1e72453ef8a8321a",
+                false,
+                "template-principal-account-absent",
+            ),
+            // The same Provider under a template outside the controller
+            // vocabulary: no provisioned account names it.
             (
                 "Provider/runtime-cloud-hypervisor",
                 "runtime-cloud-hypervisor-controller",
                 false,
+                "template-principal-unprovisioned",
             ),
             // A Device-owned worker template: the posture table answers first.
-            (DEVICE_TPM_PROVIDER_REF, "swtpm-socket", false),
+            (
+                DEVICE_TPM_PROVIDER_REF,
+                "swtpm-socket",
+                false,
+                "template-principal-account-absent",
+            ),
         ];
-        for (owner_ref, template, expected) in cases {
+        for (owner_ref, template, expected, refusal) in cases {
             let binding = binding(owner_ref, template);
             let shape = TemplateIntentShape::of(&binding);
             let serving_worker = matches!(
@@ -7086,7 +7596,6 @@ mod tests {
                     serving_worker: true
                 }
             );
-            let intent = mint_template_intent(&binding, shape);
             assert_eq!(
                 is_serving_worker_template(owner_ref, template),
                 expected,
@@ -7096,21 +7605,349 @@ mod tests {
                 serving_worker, expected,
                 "{owner_ref}/{template}: minted shape"
             );
+            match mint_template_intent("dev", &binding, shape) {
+                Ok(intent) => assert_eq!(
+                    broker_reads_serving_worker(&intent),
+                    expected,
+                    "{owner_ref}/{template}: broker spelling over the minted intent \
+                     (role {:?}, profile {:?}, owner {:?})",
+                    intent.role,
+                    intent.profile_id,
+                    intent.owner_ref
+                ),
+                Err(error) => assert_eq!(
+                    error.to_string(),
+                    refusal,
+                    "{owner_ref}/{template}: a row with no host account mints no \
+                     intent, so the broker reads nothing for it"
+                ),
+            }
+        }
+    }
+
+    /// One declared-row binding, as the bundle carries it.
+    fn declared_binding(row: &str, owner_ref: &str, template: &str) -> ProcessTemplateBinding {
+        serde_json::from_value::<ProcessTemplateBinding>(serde_json::json!({
+            "processRef": row,
+            "ownerRef": owner_ref,
+            "executionRef": "Host/work-host",
+            "template": template,
+            "artifactId": "test-artifact",
+            "binaryRef": "d2b-worker",
+            "artifactDigest": format!("sha256:{}", "a".repeat(64)),
+            "binaryPath": "/nix/store/test-artifact/bin/d2b-worker",
+        }))
+        .expect("declared-row binding")
+    }
+
+    /// A principal is the ids its host account holds, or it is a refusal.
+    ///
+    /// The account that exists answers with its own uid and gid read through
+    /// NSS, which is the same read the state-Volume layout resolver performs
+    /// for a layout principal; the accounts the host does not have are
+    /// refused. A derivation of the caller's own would answer the second
+    /// group with a number in the `50_000..16_777_215` band, and a number no
+    /// process holds is exactly what a grant must never name.
+    #[test]
+    fn the_principal_is_the_host_accounts_own_ids_or_a_refusal() {
+        let Some(account) = nix::unistd::User::from_name("root").ok().flatten() else {
+            return;
+        };
+        assert_eq!(
+            host_account_principal("root"),
+            Ok(ConsumerPrincipal {
+                uid: account.uid.as_raw(),
+                gid: account.gid.as_raw(),
+            }),
+            "an account the host holds resolves to that account's own ids"
+        );
+        for absent in [
+            "d2b-no-such-account-probe",
+            "d2b-work-tpm0-swtpm",
+            "d2b-work-tpm0-swtpm-flush",
+        ] {
             assert_eq!(
-                broker_reads_serving_worker(&intent),
-                expected,
-                "{owner_ref}/{template}: broker spelling over the minted intent \
-                 (role {:?}, profile {:?}, owner {:?})",
-                intent.role,
-                intent.profile_id,
-                intent.owner_ref
+                host_account_principal(absent),
+                Err(AccountRead::Absent),
+                "{absent} is not a host account, so the resolver refuses it \
+                 rather than answering with a number"
             );
         }
     }
 
+    /// The Device TPM worker rows are the rows the host layer provisions an
+    /// account for, and the resolver reaches it under the name that account
+    /// carries: `d2b-<zone>-<device>-swtpm` and its `-flush` sibling
+    /// (`nixos-modules/lib.nix`, `deviceTpmPrincipals`, materialized by
+    /// `host-users.nix`). A row the host has provisioned therefore resolves
+    /// rather than being refused for want of a name, and a row name that has
+    /// drifted from that vocabulary is refused rather than guessed at.
     #[test]
-    fn device_worker_intents_use_the_declared_row_and_template() {
-        use crate::bundle_resolver::{DEVICE_TPM_PROVIDER_REF, DEVICE_WORKER_UMASK};
+    fn a_device_tpm_worker_row_reaches_the_account_the_host_provisioned() {
+        let zone = "work";
+        for (row, account) in [
+            ("Process/swtpm-tpm0", "d2b-work-tpm0-swtpm"),
+            (
+                "EphemeralProcess/swtpm-flush-tpm0",
+                "d2b-work-tpm0-swtpm-flush",
+            ),
+        ] {
+            let binding = declared_binding(row, DEVICE_TPM_PROVIDER_REF, "swtpm-socket");
+            assert_eq!(
+                template_account(zone, &binding),
+                Ok(account.to_owned()),
+                "{row}: the account name the host provisions for this row"
+            );
+        }
+        for row in ["Process/tpm0", "Process/swtpm-", "EphemeralProcess/swtpm-tpm0"] {
+            let binding = declared_binding(row, DEVICE_TPM_PROVIDER_REF, "swtpm-socket");
+            assert_eq!(
+                template_account(zone, &binding),
+                Err(TemplatePrincipalError::Unprovisioned {
+                    row: row.to_owned()
+                }),
+                "{row}: a row name that is not the family's vocabulary has no \
+                 provisioned account, so it is refused rather than guessed at"
+            );
+        }
+    }
+
+    /// Every template row class the host provisions composes exactly one
+    /// account name, and the name is a function of facts both sides of the
+    /// boundary already hold.
+    ///
+    /// The row classes and their accounts are read from
+    /// `tests/unit/nix/cases/host-worker-accounts.json`, the one committed
+    /// table `nixos-modules/lib.nix` (`templateWorkerAccounts`) is evaluated
+    /// against over the same Zone rows, so this test and that eval case cannot
+    /// agree by accident of two careful copies: a name composed differently on
+    /// either side fails the side that composed it. The four Device families
+    /// are per Device and per family; the Provider controller rows are per
+    /// owning Provider, because one Provider is one signed artifact and the
+    /// hashed per-component row name is not a boundary; the two families with
+    /// a single row per Zone carry their own account rather than their
+    /// Provider's controller account.
+    #[test]
+    fn every_provisioned_row_class_composes_its_host_account_name() {
+        // The table is a runfile rather than a compiled-in copy, so the Nix
+        // eval case over the same file and this test cannot drift apart
+        // without one of them reading the other's version.
+        let path = std::env::var("D2B_HOST_WORKER_ACCOUNTS")
+            .expect("the row-class table is a declared runfile of this test");
+        let table: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&path).expect("the row-class table is readable"),
+        )
+        .expect("the row-class table parses");
+        let zone = table["zone"]
+            .as_str()
+            .expect("the table names the Zone it binds");
+        let rows = table["rows"]
+            .as_array()
+            .expect("the table lists the rows the compiler projects");
+        assert!(!rows.is_empty(), "the row-class table is not empty");
+
+        let mut composed = std::collections::BTreeSet::new();
+        for row in rows {
+            let reference = row["row"].as_str().expect("a row reference");
+            let owner = row["owner"].as_str().expect("a binding owner reference");
+            let template = row["template"].as_str().expect("a binding template");
+            let account = row["account"].as_str();
+            let binding = declared_binding(reference, owner, template);
+            match account {
+                Some(account) => {
+                    assert_eq!(
+                        template_account(zone, &binding),
+                        Ok(account.to_owned()),
+                        "{reference}: the account the host provisions for this row class"
+                    );
+                    assert!(
+                        account.len() <= ACCOUNT_NAME_LIMIT,
+                        "{reference}: every provisioned account fits the bound the \
+                         host account database carries"
+                    );
+                    assert!(
+                        composed.insert(account.to_owned()),
+                        "{reference}: two row classes never compose one account"
+                    );
+                }
+                None => assert_eq!(
+                    template_account(zone, &binding),
+                    Err(TemplatePrincipalError::Unprovisioned {
+                        row: reference.to_owned()
+                    }),
+                    "{reference}: a row class outside the provisioned vocabulary has \
+                     no account to resolve through"
+                ),
+            }
+        }
+
+        // The GPU authority admission refuses a video principal equal to the
+        // GPU principal (`PrincipalNotSeparated`), so one Device's two
+        // families stay two accounts: a shared one would make that refusal
+        // unreachable.
+        let gpu = declared_binding("Process/gpu-gpu0", DEVICE_GPU_PROVIDER_REF, "gpu-worker");
+        let video =
+            declared_binding("Process/video-gpu0", DEVICE_GPU_PROVIDER_REF, "video-worker");
+        assert_ne!(
+            template_account(zone, &gpu),
+            template_account(zone, &video),
+            "the GPU worker and its video sidecar are separated accounts"
+        );
+    }
+
+    /// A row class whose composed name is past the host account database's
+    /// bound is bounded to one it holds, and a Zone name long enough that
+    /// nothing fits is refused rather than truncated into another identity.
+    #[test]
+    fn a_composed_name_past_the_account_bound_is_bounded_or_refused() {
+        // Bounded: the readable prefix of the row-class token survives, the
+        // digest of the whole name keeps it distinct from the row class beside
+        // it, and the result is a name the host can hold.
+        assert_eq!(
+            bounded_account_name("work", "controller-runtime-cloud-hypervisor"),
+            Some("d2b-work-controller-ru-f0691444".to_owned()),
+            "a Provider name that overflows the bound is shortened, not refused"
+        );
+        assert_ne!(
+            bounded_account_name("work", "controller-volume-local"),
+            bounded_account_name("work", "controller-volume-virtiofs"),
+            "two row classes that overflow together stay two accounts"
+        );
+        for (zone, body) in [
+            ("work", "controller-device-tpm"),
+            ("work", "tpm0-swtpm-flush"),
+            ("work", "virtiofsd"),
+        ] {
+            assert_eq!(
+                bounded_account_name(zone, body),
+                Some(format!("d2b-{zone}-{body}")),
+                "a name that fits is used exactly as composed"
+            );
+        }
+
+        // Refused: no prefix of any row-class token fits under a Zone name
+        // this long, so no account exists to resolve through.
+        let long_zone = "workzone-with-a-deliberately-long-name";
+        let row = "Process/controller-0f5c9d0a1b2c3d4e";
+        let binding =
+            declared_binding(row, "Provider/provider-with-a-long-name", CONTROLLER_TEMPLATE_PREFIX);
+        assert_eq!(
+            template_account(long_zone, &binding),
+            Err(TemplatePrincipalError::Unprovisioned {
+                row: row.to_owned()
+            }),
+            "a Zone whose accounts cannot be named is refused rather than truncated"
+        );
+    }
+
+    /// A template principal that does not resolve to a real host account is
+    /// refused, and no ACL named-user entry is produced for it.
+    ///
+    /// `consumer_principals_of` is what the broker's grant path reads
+    /// (`d2b-broker`'s `ops::consumer_principal`, and through it
+    /// `ops::endpoint_access`), so a missing entry is what stops the grant:
+    /// the broker answers its own closed `RowUnresolved` instead of being
+    /// handed a uid. The launch path refuses the same row with the same
+    /// reason, so the number that was never granted is also never run as.
+    #[test]
+    fn a_row_with_no_host_account_is_refused_and_grants_nothing() {
+        let row = "Process/console";
+        let binding = declared_binding(row, "Provider/runtime-cloud-hypervisor", "controller");
+        let templates = BTreeMap::from([("work".to_owned(), vec![binding])]);
+
+        let principals = consumer_principals_of(&templates);
+        assert!(
+            principals
+                .get("work")
+                .expect("the Zone's entry")
+                .get(row)
+                .is_none(),
+            "a row with no host account must produce no ACL named-user entry, so \
+             the broker's grant path resolves nothing for it"
+        );
+        assert_eq!(
+            resolver_refusal(&templates, "work", row),
+            Some(TemplatePrincipalError::Unprovisioned {
+                row: row.to_owned()
+            }),
+            "both callers refuse the row with the same named reason"
+        );
+    }
+
+    /// The same refusal, one row class over: a Device TPM worker row the host
+    /// has not provisioned is refused *by the account name it looked for*, so
+    /// a reader learns which account to provision. Where the host has
+    /// provisioned it, the row runs as that account's own ids - the answer is
+    /// the account database's either way.
+    #[test]
+    fn a_device_tpm_row_the_host_has_not_provisioned_is_refused_by_account_name() {
+        let row = "Process/swtpm-tpm0";
+        let account = "d2b-work-tpm0-swtpm";
+        let binding = declared_binding(row, DEVICE_TPM_PROVIDER_REF, "swtpm-socket");
+        let templates = BTreeMap::from([("work".to_owned(), vec![binding])]);
+        let provisioned = nix::unistd::User::from_name(account).ok().flatten();
+        match provisioned {
+            Some(entry) => {
+                assert_eq!(
+                    consumer_principals_of(&templates)["work"][row],
+                    ConsumerPrincipal {
+                        uid: entry.uid.as_raw(),
+                        gid: entry.gid.as_raw(),
+                    },
+                    "a provisioned row runs as the account's own ids"
+                );
+                assert_eq!(
+                    resolver_refusal(&templates, "work", row),
+                    None,
+                    "a provisioned row mints its intent"
+                );
+            }
+            None => {
+                assert_eq!(
+                    resolver_refusal(&templates, "work", row),
+                    Some(TemplatePrincipalError::AccountAbsent {
+                        account: account.to_owned(),
+                        row: row.to_owned()
+                    }),
+                    "an unprovisioned row is refused, naming the account the host \
+                     would have to provision"
+                );
+                assert!(
+                    !consumer_principals_of(&templates)["work"].contains_key(row),
+                    "and no ACL named-user entry is produced for it"
+                );
+            }
+        }
+    }
+
+    /// The typed refusal the launch path answers with, for one declared row.
+    fn resolver_refusal(
+        templates: &BTreeMap<String, Vec<ProcessTemplateBinding>>,
+        zone: &str,
+        row: &str,
+    ) -> Option<TemplatePrincipalError> {
+        let binding = templates[zone]
+            .iter()
+            .find(|binding| binding.process_ref().to_canonical_string() == row)
+            .expect("the declared row");
+        mint_template_intent(zone, binding, TemplateIntentShape::of(binding)).err()
+    }
+
+    /// Each declared Device worker row is refused under the account that row
+    /// runs as, and two Devices that share a template never share an account.
+    ///
+    /// The intent this used to read carried the row identity, the posture and
+    /// the launch arguments for each row, and the lookup discriminated a wrong
+    /// template, a wrong row type, an undeclared row and a wrong execution
+    /// target. The launch identity and the ACL entry now both resolve through
+    /// the host account, so a host that provisions none of these rows refuses
+    /// every one of them at the same point and that discrimination is no
+    /// longer observable here. What survives is per-row: three declared rows
+    /// across two Devices each name their own account, so the row - not the
+    /// template - is what the host has to provision.
+    #[test]
+    fn declared_device_worker_rows_are_refused_by_their_own_account_name() {
+        use crate::bundle_resolver::DEVICE_TPM_PROVIDER_REF;
 
         let zone = ZoneId::parse("dev").expect("zone");
         let host_ref = ResourceRef::parse("Host/dev-host").expect("host ref");
@@ -7233,7 +8070,6 @@ mod tests {
                 bundle_version: 11,
                 schema_version: "v2".to_owned(),
 
-                privileges_path: "privileges.json".to_owned(),
                 storage_path: None,
 
                 realm_workloads_launcher_v2_path: None,
@@ -7258,92 +8094,48 @@ mod tests {
             )]),
         );
 
-        // The declared row is the launch identity: two Devices on one Host
-        // share the template but never the row, so each row resolves to its
-        // own intent.
-        let tpm = resolver
-            .find_device_worker_intent(
-                &ResourceRef::parse("Process/swtpm-tpm").expect("row ref"),
-                "Host/dev-host",
-                ProcessExecutionDomain::System,
-                None,
-                "swtpm-socket",
-            )
-            .expect("swtpm intent");
-        assert_eq!(tpm.role, ProcessRole::Swtpm);
-        assert_eq!(tpm.role_id, "swtpm-tpm");
-        assert_eq!(tpm.profile_id, "swtpm-socket");
-        assert_eq!(tpm.vm_name, "dev-host");
-        assert_eq!(tpm.execution_ref, "Host/dev-host");
-        assert_eq!(tpm.owner_ref.as_deref(), Some(DEVICE_TPM_PROVIDER_REF));
-        assert_eq!(tpm.seccomp_policy_ref.as_deref(), Some("w1-swtpm"));
-        assert_eq!(tpm.umask, Some(DEVICE_WORKER_UMASK));
-        assert_eq!(tpm.cgroup_placement.subtree, "d2b.slice/dev-host/swtpm-tpm");
-        assert_eq!(tpm.argv, vec!["swtpm".to_owned()]);
-        assert_eq!(
-            tpm.binary_path,
-            PathBuf::from("/nix/store/device-tpm/bin/swtpm")
-        );
-        assert!(tpm.accepts_launch_args);
-        assert!(tpm.user_namespace.is_some());
-        assert!(tpm.namespaces.mount && tpm.namespaces.pid && tpm.namespaces.user);
-        assert!(tpm.uid >= 50_000 && tpm.uid == tpm.gid);
-        let second = resolver
-            .find_device_worker_intent(
-                &ResourceRef::parse("Process/swtpm-tpm2").expect("row ref"),
-                "Host/dev-host",
-                ProcessExecutionDomain::System,
-                None,
-                "swtpm-socket",
-            )
-            .expect("second swtpm intent");
-        assert_eq!(second.role_id, "swtpm-tpm2");
-        assert_ne!(second.uid, tpm.uid, "each row mints its own principal");
-        let flush = resolver
-            .find_device_worker_intent(
-                &ResourceRef::parse("EphemeralProcess/swtpm-flush-tpm").expect("flush ref"),
-                "Host/dev-host",
-                ProcessExecutionDomain::System,
-                None,
-                "swtpm-init-flush",
-            )
-            .expect("flush intent");
-        assert_eq!(flush.role, ProcessRole::SwtpmPreStartFlush);
-        assert_eq!(flush.argv, vec!["swtpm-ioctl".to_owned()]);
-        assert!(flush.user_namespace.is_none(), "flush has no user namespace");
-        assert!(!flush.namespaces.user);
-        // The declared template is the only admitted one, and the row type is
-        // an exact fence.
-        for (row_ref, template) in [
-            ("Process/swtpm-tpm", "gpu-worker"),
-            ("Process/swtpm-tpm", "swtpm-init-flush"),
-            ("Process/swtpm-other", "swtpm-socket"),
-            ("Endpoint/swtpm-tpm", "swtpm-socket"),
+        for (row, account) in [
+            ("Process/swtpm-tpm", "d2b-dev-tpm-swtpm"),
+            (
+                "EphemeralProcess/swtpm-flush-tpm",
+                "d2b-dev-tpm-swtpm-flush",
+            ),
+            ("Process/swtpm-tpm2", "d2b-dev-tpm2-swtpm"),
         ] {
+            let binding = declared_binding(row, DEVICE_TPM_PROVIDER_REF, "swtpm-socket");
+            assert_eq!(
+                template_account("dev", &binding),
+                Ok(account.to_owned()),
+                "{row}: the account the host has to provision for this row"
+            );
+            assert_eq!(
+                mint_template_intent("dev", &binding, TemplateIntentShape::of(&binding)).err(),
+                Some(TemplatePrincipalError::AccountAbsent {
+                    account: account.to_owned(),
+                    row: row.to_owned()
+                }),
+                "{row}: an unprovisioned row mints no intent and says which \
+                 account is missing"
+            );
+            let row_ref = ResourceRef::parse(row).expect("row ref");
+            assert_eq!(
+                resolver.consumer_principal("dev", &row_ref),
+                None,
+                "{row}: and the broker's grant path resolves no principal for it"
+            );
             assert!(
                 resolver
                     .find_device_worker_intent(
-                        &ResourceRef::parse(row_ref).expect("row ref"),
+                        &row_ref,
                         "Host/dev-host",
                         ProcessExecutionDomain::System,
                         None,
-                        template,
+                        "swtpm-socket",
                     )
                     .is_none(),
-                "{row_ref} must not resolve through {template}"
+                "{row}: and no launch policy resolves it either"
             );
         }
-        assert!(
-            resolver
-                .find_device_worker_intent(
-                    &ResourceRef::parse("Process/swtpm-tpm").expect("row ref"),
-                    "Host/other-host",
-                    ProcessExecutionDomain::System,
-                    None,
-                    "swtpm-socket",
-                )
-                .is_none()
-        );
     }
 
     /// The Volume a Device-owned worker row may bind read-write is named
@@ -7400,178 +8192,6 @@ mod tests {
                 .collect::<String>(),
             device_volume_scope("dev", "tpm0")
         );
-    }
-
-    /// A declared read-write binding becomes exactly the host path the
-    /// broker's own fence resolves for that Volume, and a row that declares
-    /// no read-write binding still mints an empty grant.
-    #[test]
-    fn declared_read_write_binding_mints_its_resolved_host_path() {
-        let own = format!("device-{}-tpm-state", device_volume_scope("dev", "tpm0"));
-        let state_dir = PathBuf::from("/var/lib/d2b/tpm-state").join(&own);
-        let read_write = serde_json::json!({
-            "volumeRef": format!("Volume/{own}"),
-            "view": "swtpm-process",
-            "mountPath": "/state",
-            "access": "read-write",
-            "required": true,
-        });
-        let read_only = serde_json::json!({
-            "volumeRef": "Volume/device-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-tpm-state",
-            "view": "swtpm-process",
-            "mountPath": "/state",
-            "access": "read-only",
-            "required": true,
-        });
-
-        for (case, mounts, expected) in [
-            ("read-write", vec![read_write.clone()], vec![state_dir.clone()]),
-            ("read-only", vec![read_only.clone()], Vec::new()),
-            ("undeclared", Vec::new(), Vec::new()),
-        ] {
-            let mut resolver = device_worker_resolver(&mounts);
-            resolver.set_storage(storage_contract(Some(
-                "/var/lib/d2b/tpm-state".to_owned(),
-            )));
-            let intent = resolver
-                .find_device_worker_intent(
-                    &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
-                    "Host/dev-host",
-                    ProcessExecutionDomain::System,
-                    None,
-                    "swtpm-socket",
-                )
-                .unwrap_or_else(|| panic!("{case}: the declared row must still resolve"));
-            let granted: Vec<&str> = intent
-                .mount_policy
-                .writable_paths
-                .iter()
-                .map(|writable| writable.path.as_str())
-                .collect();
-            assert_eq!(
-                granted,
-                expected
-                    .iter()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .collect::<Vec<String>>(),
-                "{case}: the granted path set"
-            );
-            assert_eq!(
-                intent.mount_policy.read_only_paths,
-                vec!["/nix/store".to_owned()],
-                "{case}: nothing else in the policy moved"
-            );
-        }
-    }
-
-    /// A declared read-write binding the storage contract cannot resolve is
-    /// fail-closed: the worker keeps no intent at all rather than launching
-    /// with a silently smaller grant.
-    #[test]
-    fn an_unresolvable_declared_grant_refuses_the_worker() {
-        let own = format!("device-{}-tpm-state", device_volume_scope("dev", "tpm0"));
-        let mounts = vec![serde_json::json!({
-            "volumeRef": format!("Volume/{own}"),
-            "view": "swtpm-process",
-            "mountPath": "/state",
-            "access": "read-write",
-            "required": true,
-        })];
-        let mut resolver = device_worker_resolver(&mounts);
-        resolver.set_storage(storage_contract(None));
-        assert!(
-            resolver
-                .find_device_worker_intent(
-                    &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
-                    "Host/dev-host",
-                    ProcessExecutionDomain::System,
-                    None,
-                    "swtpm-socket",
-                )
-                .is_none(),
-            "a read-write grant the storage contract cannot resolve must not \
-             survive as a worker with an empty policy"
-        );
-    }
-
-
-    /// A declared read-write binding naming a Volume scoped to a *different*
-    /// Device is fail-closed at the resolver too, not only at compile time:
-    /// the grant the closed posture does not admit removes the worker's intent
-    /// rather than leaving a worker that launches with an empty policy.
-    #[test]
-    fn a_foreign_device_volume_binding_refuses_the_worker() {
-        let foreign = format!(
-            "device-{}-tpm-state",
-            device_volume_scope("dev", "tpm1")
-        );
-        let mounts = vec![serde_json::json!({
-            "volumeRef": format!("Volume/{foreign}"),
-            "view": "swtpm-process",
-            "mountPath": "/state",
-            "access": "read-write",
-            "required": true,
-        })];
-        let mut resolver = device_worker_resolver(&mounts);
-        // The trusted row resolves, so the refusal below is the ownership
-        // check alone and not an absent storage contract.
-        resolver.set_storage(storage_contract(Some(
-            "/var/lib/d2b/tpm-state".to_owned(),
-        )));
-        assert!(
-            resolver
-                .find_device_worker_intent(
-                    &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
-                    "Host/dev-host",
-                    ProcessExecutionDomain::System,
-                    None,
-                    "swtpm-socket",
-                )
-                .is_none(),
-            "a Volume scoped to another Device must not survive as a worker \
-             with an empty policy"
-        );
-    }
-
-    /// The form a declarative projection can actually spell: the row names
-    /// the child by role, and the framework composes the concrete Volume from
-    /// the row's own owning Device. Two Devices declare the identical bytes
-    /// and reach two different directories, so what separates one Device's
-    /// private state from its sibling's is the owner, never the declaration.
-    #[test]
-    fn an_own_child_volume_binding_resolves_against_the_declaring_device() {
-        for device in ["tpm0", "tpm1"] {
-            let mounts = vec![serde_json::json!({
-                "ownVolumeSuffix": "tpm-state",
-                "view": "swtpm-process",
-                "mountPath": "/state",
-                "access": "read-write",
-                "required": true,
-            })];
-            let mut resolver = device_worker_resolver_named(device, &mounts);
-            resolver.set_storage(storage_contract(Some(
-                "/var/lib/d2b/tpm-state".to_owned(),
-            )));
-            assert_eq!(
-                resolver
-                    .find_device_worker_intent(
-                        &ResourceRef::parse(&format!("Process/swtpm-{device}")).expect("row ref"),
-                        "Host/dev-host",
-                        ProcessExecutionDomain::System,
-                        None,
-                        "swtpm-socket",
-                    )
-                    .unwrap_or_else(|| panic!("{device}: the declared child must resolve"))
-                    .mount_policy
-                    .writable_paths[0]
-                    .path,
-                format!(
-                    "/var/lib/d2b/tpm-state/device-{}-tpm-state",
-                    device_volume_scope("dev", device)
-                ),
-                "{device}: the granted path is this Device's own child Volume"
-            );
-        }
     }
 
     /// The structural form does not widen what a row can reach: it names a
@@ -7634,58 +8254,6 @@ mod tests {
         );
     }
 
-    /// A declared read-write mount the resolver cannot resolve is refused for
-    /// the same reason whether a contract is attached and cannot resolve it or
-    /// none is attached at all: the worker does not survive as an intent whose
-    /// grant is an empty set it never declared.
-    #[test]
-    fn an_absent_storage_contract_refuses_the_worker_rather_than_emptying_its_grant() {
-        let own = format!("device-{}-tpm-state", device_volume_scope("dev", "tpm0"));
-        let mounts = vec![serde_json::json!({
-            "volumeRef": format!("Volume/{own}"),
-            "view": "swtpm-process",
-            "mountPath": "/state",
-            "access": "read-write",
-            "required": true,
-        })];
-        let resolver = device_worker_resolver(&mounts);
-        assert!(
-            resolver
-                .find_device_worker_intent(
-                    &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
-                    "Host/dev-host",
-                    ProcessExecutionDomain::System,
-                    None,
-                    "swtpm-socket",
-                )
-                .is_none(),
-            "a declared read-write grant with nothing to resolve it against \
-             must not survive as a worker with an empty policy"
-        );
-
-        // A contract that does resolve it mints the grant, so a host that
-        // attaches its reconciled scope later still launches the worker.
-        let mut attached = device_worker_resolver(&mounts);
-        attached.set_storage(storage_contract(Some(
-            "/var/lib/d2b/tpm-state".to_owned(),
-        )));
-        assert_eq!(
-            attached
-                .find_device_worker_intent(
-                    &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
-                    "Host/dev-host",
-                    ProcessExecutionDomain::System,
-                    None,
-                    "swtpm-socket",
-                )
-                .expect("the attached contract resolves the declared grant")
-                .mount_policy
-                .writable_paths
-                .len(),
-            1
-        );
-    }
-
     /// The uid-scoped name is a controller-composed child's identity, and the
     /// whole name is what says so. A DECLARED Volume that merely embeds the
     /// uid in some other shape is a Volume somebody authored, so it is not
@@ -7715,44 +8283,6 @@ mod tests {
             ),
             "the controller's own naming is still this Device's child"
         );
-    }
-
-    /// The state directory a declared binding resolves to is character for
-    /// character the directory the broker's own swtpm fence composes from the
-    /// bundle: the same trusted storage row, joined with the same Volume name.
-    #[test]
-    fn the_granted_path_is_the_directory_the_broker_fence_resolves() {
-        let own = format!("device-{}-tpm-state", device_volume_scope("dev", "tpm0"));
-        let mounts = vec![serde_json::json!({
-            "volumeRef": format!("Volume/{own}"),
-            "view": "swtpm-process",
-            "mountPath": "/state",
-            "access": "read-write",
-            "required": true,
-        })];
-        let mut resolver = device_worker_resolver(&mounts);
-        resolver.set_storage(storage_contract(Some(
-            "/var/lib/d2b/tpm-state".to_owned(),
-        )));
-        let granted = resolver
-            .find_device_worker_intent(
-                &ResourceRef::parse("Process/swtpm-tpm0").expect("row ref"),
-                "Host/dev-host",
-                ProcessExecutionDomain::System,
-                None,
-                "swtpm-socket",
-            )
-            .expect("swtpm intent")
-            .mount_policy
-            .writable_paths[0]
-            .path
-            .clone();
-        // The broker's state-directory grant: the trusted `path:tpm-state`
-        // row's root joined with the state Volume name
-        // (`resource_backed_identity` + `trusted_state_dir` in
-        // `packages/d2b-broker/src/ops/swtpm_identity.rs`).
-        let fence_state_root = PathBuf::from("/var/lib/d2b/tpm-state");
-        assert_eq!(granted, fence_state_root.join(&own).to_string_lossy());
     }
 
     /// The 32-hex segment a Device-owned resource's name carries: the owning
@@ -7829,54 +8359,6 @@ mod tests {
             degraded_states: Vec::new(),
             remediations: Vec::new(),
         }
-    }
-
-    /// One Zone bundle declaring the TPM Device `tpm0`, its `swtpm-socket`
-    /// worker row, and the template binding that carries the row's declared
-    /// mounts.
-    fn device_worker_resolver(mounts: &[serde_json::Value]) -> BundleResolver {
-        device_worker_resolver_named("tpm0", mounts)
-    }
-
-    /// The same bundle with the Device - and so the row that owns it - named
-    /// `device_name`, so a case can show which Device a declared mount
-    /// resolves against.
-    fn device_worker_resolver_named(
-        device_name: &str,
-        mounts: &[serde_json::Value],
-    ) -> BundleResolver {
-        let resource_bundle = device_worker_resource_bundle("dev", device_name, mounts);
-        let host = serde_json::from_str::<HostJson>(HOST_JSON_FIXTURE).expect("host fixture");
-        let manifest = ManifestV04::from_slice(
-            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
-        )
-        .expect("manifest fixture");
-        BundleResolver::from_artifacts_with_zone_resource_bundles(
-            Bundle {
-                bundle_version: 11,
-                schema_version: "v2".to_owned(),
-                privileges_path: "privileges.json".to_owned(),
-                storage_path: None,
-                realm_workloads_launcher_v2_path: None,
-                generation: BundleGeneration {
-                    generator: "test".to_owned(),
-                    source_revision: None,
-                    generated_at: None,
-                },
-                bundle_hash: Some("sha256:bundle".to_owned()),
-                artifact_hashes: None,
-            },
-            host,
-            ProcessesJson {
-                schema_version: "v2".to_owned(),
-                vms: Vec::new(),
-            },
-            manifest,
-            BTreeMap::from([(
-                "dev".to_owned(),
-                serde_json::to_vec(&resource_bundle).expect("resource bundle bytes"),
-            )]),
-        )
     }
 
     /// The Zone resource-bundle *bytes* the same fixture builds, so the
@@ -7991,16 +8473,13 @@ mod tests {
     /// [`Self::set_storage`] anywhere in sight.
     ///
     /// This is the only construction `d2bd` ever runs for the Device-worker
-    /// launch (`BundleResolver::load` in `composition.rs`), and it differs
-    /// from the in-memory fixture in every way the grant depends on: the
-    /// Zone-keyed tables are re-derived from the artifact-hash keys, the
-    /// storage contract arrives with the load instead of a later
-    /// `set_storage`, and the grant therefore has to fire from inside the
-    /// constructor. A resolver that mints the state dir here mints it on the
-    /// policy the Process provider's `SpawnRunner` handler forwards to the
-    /// broker.
+    /// launch (`BundleResolver::load` in `composition.rs`), so it is where the
+    /// launch identity is decided. The host account it resolves through is
+    /// what the row runs as, and a host that has provisioned no account for the
+    /// row gets no intent and no consumer principal out of this load at all -
+    /// the storage contract arriving with the load does not change that.
     #[test]
-    fn the_daemon_construction_path_grants_the_declared_state_directory() {
+    fn the_daemon_construction_path_refuses_a_row_with_no_host_account() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let zone = "work";
@@ -8068,7 +8547,6 @@ mod tests {
             "artifactHashes": serde_json::Value::Null,
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "storagePath": "storage.json",
             "zones": [{ "zone": zone, "path": zone_bundle_key.as_str() }],
             "generation": {
@@ -8099,45 +8577,47 @@ mod tests {
             resolver.storage().is_some(),
             "the loaded bundle carries the host storage contract"
         );
-        let own = format!(
-            "device-{}-{own_child}",
-            device_volume_scope(zone, device)
-        );
-        let intent = resolver
-            .find_device_worker_intent(
-                &ResourceRef::parse(&format!("Process/swtpm-{device}")).expect("row ref"),
-                &format!("Host/{zone}-host"),
-                ProcessExecutionDomain::System,
-                None,
-                "swtpm-socket",
-            )
-            .expect("the declared Device-worker row resolves on the loaded bundle");
+        let account = format!("d2b-{zone}-{device}-swtpm");
+        let row_ref =
+            ResourceRef::parse(&format!("Process/swtpm-{device}")).expect("row ref");
         assert_eq!(
-            intent
-                .mount_policy
-                .writable_paths
-                .iter()
-                .map(|writable| writable.path.as_str())
-                .collect::<Vec<_>>(),
-            vec![format!("/var/lib/d2b/tpm-state/{own}")],
-            "the daemon's resolver mints the granted state dir at construction, \
-             with no set_storage pass"
+            resolver.consumer_principal(zone, &row_ref),
+            None,
+            "the daemon's own load grants no ACL named-user entry for a row \
+             whose host has no account"
+        );
+        assert!(
+            resolver
+                .find_device_worker_intent(
+                    &row_ref,
+                    &format!("Host/{zone}-host"),
+                    ProcessExecutionDomain::System,
+                    None,
+                    "swtpm-socket",
+                )
+                .is_none(),
+            "and the declared Device-worker row resolves to no launch policy, \
+             even though the bundle carries the storage contract that would \
+             have granted its state directory"
+        );
+        let binding = declared_binding(
+            &row_ref.to_canonical_string(),
+            DEVICE_TPM_PROVIDER_REF,
+            "swtpm-socket",
+        );
+        assert_eq!(
+            mint_template_intent(zone, &binding, TemplateIntentShape::of(&binding)).err(),
+            Some(TemplatePrincipalError::AccountAbsent {
+                account,
+                row: row_ref.to_canonical_string(),
+            }),
+            "the refusal names the account the host has to provision"
         );
 
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// The uid a Device-owned worker row runs as is minted from the
-    /// `<owner>:<row>:<execution>` triple, and the host layer provisions the
-    /// matching `d2b-<zone>-<device>-swtpm` account with it
-    /// (`nixos-modules/lib.nix`, `deviceWorkerPrincipalId`, reached through
-    /// `host-users.nix`): every ACL the state Volume's layout effect applies
-    /// is granted to that account by name, so a principal that is not this
-    /// id leaves the worker unable to open the directory it was granted.
-    ///
-    /// The Nix mirror is pinned by `nix-unit-provider-device-tpm`
-    /// (`packages/d2b-provider-device-tpm/nix/tests/default.nix`); the two
         fn build_personal_dev_bundle(root: &Path) -> BundleResolver {
         build_personal_dev_bundle_with_fixture_network(root, true)
     }
@@ -8374,7 +8854,6 @@ mod tests {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
 
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
 
             realm_workloads_launcher_v2_path: None,
@@ -8447,7 +8926,6 @@ mod tests {
             "artifactHashes": null,
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "sitePath": "site.json",
             "zones": [],
             "generation": {
@@ -8716,7 +9194,6 @@ mod tests {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
 
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
 
             realm_workloads_launcher_v2_path: None,
@@ -8781,7 +9258,6 @@ mod tests {
             bundle_version: 1,
             schema_version: "v3".to_owned(),
 
-            privileges_path: "privileges.json".to_owned(),
             storage_path: None,
 
             realm_workloads_launcher_v2_path: None,
@@ -10503,7 +10979,7 @@ mod tests {
     }
     #[test]
     fn zone_native_index_accepts_optional_storage_path() {
-        let base = r#"{"artifactHashes":{},"bundleHash":"x","bundleVersion":1,"schemaVersion":"v3","privilegesPath":"/etc/d2b/privileges.json","zones":[],"generation":{"generator":"t","sourceRevision":null,"generatedAt":null}}"#;
+        let base = r#"{"artifactHashes":{},"bundleHash":"x","bundleVersion":1,"schemaVersion":"v3","zones":[],"generation":{"generator":"t","sourceRevision":null,"generatedAt":null}}"#;
         let without: ZoneNativeBundleIndex =
             serde_json::from_str(base).expect("pre-storage index parses");
         assert!(without.storage_path.is_none());

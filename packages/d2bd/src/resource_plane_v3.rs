@@ -40,13 +40,15 @@ use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, StoreSyncRequest,
 };
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
+    AuthoritySubject, AuthoritySubjectKind, ControllerGeneration, ResourceGeneration, ResourceRef,
+    ResourceUid, ZoneId, ZoneRevision,
     execution_policy::BoundedToken,
     volume::{SourceKind, VolumeSpec},
     volume_binding::VolumeBindingSpec,
 };
 use d2b_contracts_zone_session::v3::resource_bundle::{BundleResource, ResourceBundle};
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedStoreViewIntent, intent_id_store_view};
+use d2b_core::resource_authority::AuthorityRowKind;
 use d2b_provider_activation_nixos::{
     ACTIVATION_EFFECTS_SERVICE, ActivationDriverArgs, ActivationEffectFacets,
     ActivationEffectsServiceFactory, activation_descriptor,
@@ -71,9 +73,12 @@ use d2b_provider_process::{
 use d2b_provider_telemetry_binding::telemetry_binding_descriptor;
 use d2b_provider_telemetry_service::telemetry_service_descriptor;
 // The registered provider families and their declared services, generated
-// from the per-crate `registrations.json` declarations (the composition
-// root composes the table instead of naming families).
-include!("generated/provider_registrations.rs");
+// from the per-crate `registrations.json` declarations and staged under the
+// repository's `generated/new-graph/` closure - the one byte the daemon's
+// composition root compiles (it composes the table instead of naming
+// families). `cargo xtask gen-new-graph` renders it and drift-gates it byte
+// for byte; `cargo xtask check-provider-crate-layout --fix` installs it.
+include!("../../../generated/new-graph/provider_registrations.rs");
 use d2b_provider_volume::{
     VOLUME_EFFECTS_SERVICE, VolumeDriverArgs, VolumeEffectFacets, VolumeEffectsServiceFactory,
     VolumeRuntime, volume_descriptor,
@@ -85,20 +90,23 @@ use d2b_provider_volume_binding::{
 use d2b_provider_volume_local::{
     AnchoredVolumeEffectAdapter, VolumeLocalController, VolumeLocalProfile,
 };
-use d2b_provider_volume_virtiofs::{MAX_SOCKET_PATH_BYTES, SocketIdentity, StoredBinding};
+use d2b_provider_volume_virtiofs::{SocketIdentity, StoredBinding};
 use d2b_resource_api::manager_backend::nix_bundle_subject;
+use d2b_resource_runtime::AuthorityPublisher;
 use d2b_resource_runtime::context::{ManagerEndpoint, SpecDecoder};
 use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::manager::{
-    DesiredResource, ManagerActorEndpoint, ResourceManager, ResourceManagerArgs,
+    AdmissionDecision, AdmissionOp, DesiredResource, ManagerActorEndpoint, MutationAdmission,
+    MutationRequest, MutationSubject, ResourceManager, ResourceManagerArgs,
     ResourceManagerClient, ResourceManagerMsg, ResourceSelector, ResourceView,
 };
 use d2b_resource_runtime::revision::RuntimeRevision;
 use d2b_resource_runtime::spec_store::{SpecSelector, SpecStore, StoredDesiredResource};
 use d2b_resource_runtime::GuestTargetControl;
 use d2b_resource_runtime::target::{TargetDirectory, TargetRef, TargetResolver};
+use d2b_resource_runtime::relations::RelationExtractors;
 use d2b_resource_runtime::watch::{
     ChangeSource, DEFAULT_RING_CAPACITY, RevisionExpired, WatchDelivery, WatchHub, WatchRegistration,
     WatchSelector,
@@ -107,7 +115,6 @@ use d2b_resource_types::DriverDescriptor;
 use d2bd_runtime::resource_runtime_support::NewPlaneReadinessState;
 use d2bd_runtime::target_runtime::DaemonMode;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
-use sha2::{Digest, Sha256};
 
 use d2b_provider_credential::{
     CREDENTIAL_EFFECTS_SERVICE, CredentialDriverArgs, CredentialEffectFacets,
@@ -138,7 +145,6 @@ use d2b_provider_process_systemd::effects_service::{
     PROCESS_SYSTEMD_EFFECTS_SERVICE, SystemdEffectsServiceFactory,
 };
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
-use d2b_provider_command::command_descriptor;
 use d2b_provider_emergency_policy::emergency_policy_descriptor;
 use d2b_provider_operation::operation_descriptor;
 use d2b_provider_provider::{
@@ -149,6 +155,7 @@ use d2b_provider_resource_export::resource_export_descriptor;
 use d2b_provider_resource_import::resource_import_descriptor;
 use d2b_provider_role::role_descriptor;
 use d2b_provider_role_binding::role_binding_descriptor;
+use d2b_provider_execution_policy::execution_policy_descriptor;
 use d2b_provider_seccomp_profile::seccomp_profile_descriptor;
 use d2b_provider_zone::zone_descriptor;
 use d2b_provider_zone_link::zone_link_descriptor;
@@ -189,6 +196,20 @@ fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
 /// Preserved reconcile backoff for the plane's resource actors (R13).
 const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 
+/// The whole-exchange budget one authority publication round trip gets. It
+/// matches the coordinator the providers already publish their bootstrap
+/// authority over, so one Zone presents one bound to the broker.
+const AUTHORITY_PUBLICATION_ROUND_TRIP: Duration = Duration::from_secs(20);
+
+/// The identity every authority publication of this daemon runs under.
+///
+/// It is the verified deployment identity this daemon authenticates as, never
+/// the row a candidate mutates: a publisher that presented a candidate's own
+/// identity would be letting a row authorize its own introduction.
+fn authority_publication_subject() -> AuthoritySubject {
+    AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap)
+}
+
 /// The id a `User/<name>` or `Group/<name>` principal resolves to.
 ///
 /// The closed Volume contract requires these principals to be real host
@@ -196,9 +217,10 @@ const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 /// that "each principal must be a real host account the state-layout effect
 /// resolves through NSS", and `host-users.nix` materializes exactly those
 /// accounts from `d2bLib.deviceTpmPrincipals`, with the uid the worker row
-/// actually runs as (`deviceWorkerPrincipalId`, the triple-derived id
-/// `mint_template_intent` mirrors). A name that does not resolve is a
-/// provisioning gap, not something to paper over.
+/// actually runs as - the id the host pinned on that account, which the
+/// runtime now reads back through the same NSS lookup rather than deriving a
+/// second time (`mint_template_intent`, `d2b-core`). A name that does not
+/// resolve is a provisioning gap, not something to paper over.
 ///
 /// An earlier revision fell back to a name-derived stable id here. That was
 /// wrong twice over: the accounts do exist, so the fallback never ran; and on
@@ -1033,10 +1055,14 @@ async fn reload_anchor_rows(
 // Production socket effect closures (binding/endpoint legs)
 // ---------------------------------------------------------------------------
 
-/// Mirror of the provider's `PrivateSocketPath::derive` (frozen v1 worker
-/// contract): the private virtiofs socket path for one (volume, guest)
-/// serving pair. The rendered accessor is crate-private in the provider
-/// today; U14 collapses this mirror behind a provider-owned probe.
+/// The private virtiofs socket path for one (volume, guest) serving pair.
+///
+/// The derivation itself belongs to the Provider that owns the frozen v1
+/// worker socket contract, and both sides of one relationship go through
+/// it: the daemon's serving launch composes `--socket-path` from the same
+/// function this probe, presence check, and removal use, so the socket the
+/// worker binds and the socket this surface waits for cannot be two
+/// different paths.
 pub(crate) fn serving_socket_path(
     socket_runtime_dir: &Path,
     zone: &BoundedToken,
@@ -1048,40 +1074,15 @@ pub(crate) fn serving_socket_path(
     {
         return None;
     }
-    let root = socket_runtime_dir.to_string_lossy().into_owned();
-    if !root.starts_with('/')
-        || root.ends_with('/')
-        || root.contains('\0')
-        || root.contains('\\')
-        || root
-           .split('/')
-           .skip(1)
-           .any(|component| component.is_empty() || component == "." || component == "..")
-    {
-        return None;
-    }
-    let mut hasher = Sha256::new();
-    hasher.update(zone.as_str().as_bytes());
-    hasher.update([0u8]);
-    hasher.update(volume_ref.name().as_str().as_bytes());
-    hasher.update([0u8]);
-    hasher.update(execution_ref.name().as_str().as_bytes());
-    let digest = hasher.finalize();
-    let mut tag = String::with_capacity(8);
-    for byte in digest[..4].iter().copied() {
-        tag.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-        tag.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
-    }
-    let rendered = format!(
-        "{}/vms/{}/vol-{}.vfd.sock",
-        root,
-        execution_ref.name().as_str(),
-        tag
-    );
-    if rendered.len() > MAX_SOCKET_PATH_BYTES {
-        return None;
-    }
-    Some(PathBuf::from(rendered))
+    let volume = BoundedToken::parse(volume_ref.name().as_str().to_owned()).ok()?;
+    let guest = BoundedToken::parse(execution_ref.name().as_str().to_owned()).ok()?;
+    d2b_provider_volume_virtiofs::derive_serving_socket_path(
+        socket_runtime_dir,
+        zone,
+        &volume,
+        &guest,
+    )
+    .ok()
 }
 
 async fn socket_is_present(path: &Path) -> bool {
@@ -1167,7 +1168,7 @@ impl GuestMountSource for PlaneGuestMountSource {
     }
 }
 
-/// Production Endpoint socket surface (transport-unix virtiofsd case):
+/// Production Endpoint socket surface (the local Unix virtiofsd case):
 /// the daemon's host socket facet the Endpoint family's effects service
 /// drives (U6). The worker Process child binds the private socket; the
 /// facet's `ensure` waits a bounded budget for the bind and reports a
@@ -1913,6 +1914,24 @@ pub struct ConstructionInputs {
     /// through the composition root. The family never receives a
     /// daemon-built effect port (R2).
     pub activation_facets: ActivationEffectFacets,
+    /// U31: the verified deployment graph the composition published for this
+    /// process, when it published one.
+    ///
+    /// A family's driver reads the accepted graph to confirm this deployment
+    /// published its own compiled implementation before it plans a runner
+    /// or dispatches an effect. `None` is the pre-cutover construction; the
+    /// cutover makes the publication mandatory in the same step.
+    pub deployment_graph:
+        Option<std::sync::Arc<d2b_provider_activation_nixos::AcceptedDeploymentGraph>>,
+    /// U18: the daemon state a family's privileged broker dispatch is built
+    /// over.
+    ///
+    /// The Endpoint family's delivery reaches the exact-endpoint ACL helpers
+    /// over the broker socket, which only the daemon holds. Handing the
+    /// driver the daemon's own state keeps the socket, the caller role, and
+    /// the broker path daemon-hosted: the family receives a dispatch facet
+    /// and never a socket, a path, or a numerical principal (R2).
+    pub server_state: Option<std::sync::Arc<crate::ServerState>>,
     /// The daemon-supplied facet set the User family's effects implementation
     /// is built from (U5): the crate's own bounded local-account probe,
     /// supplied through the composition root. Every probe input is host
@@ -1969,6 +1988,14 @@ pub user_facets: UserEffectFacets,
     /// binds the set; a test or context-free deployment leaves it unbound
     /// and nothing is published.
     pub trusted_context_publication: Option<TrustedContextPublication>,
+    /// The broker half of this Zone's durable authority mutations, when a
+    /// caller binds one itself.
+    ///
+    /// `None` is the production composition: the plane binds the coordinator
+    /// over its own origination leg and its own store incarnation. A test or
+    /// a context-free deployment binds a publisher directly, because a plane
+    /// with no fence has no way to commit a desired mutation at all.
+    pub authority_publisher: Option<Arc<dyn AuthorityPublisher>>,
     /// The hosting factories the composition root registered for the
     /// services the plane's providers declare (U3, R5), keyed by service
     /// identity. The composition point applies every entry to the provider
@@ -1981,6 +2008,26 @@ pub user_facets: UserEffectFacets,
     /// authority's home - and leaves it clear for every zone-local plane, so
     /// a system-homed row can never be written outside the seed.
     pub foundation: Option<FoundationInputs>,
+    /// The Zone's verified Nix bundle, applied before the manager spawns.
+    ///
+    /// The plane commits the rows this graph reads as authority - the
+    /// `Role` and `RoleBinding` rows an accepted graph is built from -
+    /// through the same fenced store path the foundation seed uses, so they
+    /// are durable, published, and acknowledged before the manager exists
+    /// (F1). The manager's own `pre_start` then loads them, so a Zone never
+    /// reaches a reader - the broker's per-Zone projection included - as an
+    /// empty Zone while its own declared authority is still in flight.
+    ///
+    /// Every other bundle row keeps arriving through
+    /// [`ResourcePlaneV3::ingest_nix_bundle`] after the plane opens: only the
+    /// authority rows are read by anything that exists before the manager
+    /// spawns, and staging the rest here would move every resource actor's
+    /// first reconcile without any boundary being ready to decide it.
+    ///
+    /// `None` is a plane that was given no bundle to apply, which is the
+    /// test shape: a plane with no declared authority commits no authority
+    /// row of its own.
+    pub bundle: Option<ResourceBundle>,
 }
 
 /// The declarations one foundation plane seeds before its manager spawns.
@@ -2099,6 +2146,15 @@ impl ConstructionInputs {
                     Arc::clone(state),
                 )),
             },
+            // U20: the bounded helper leg and the claim port. Both refuse by
+            // name and grant nothing, because the daemon has no legitimate
+            // source of `BindingAuthorization` or a `FreshnessTuple` at the
+            // effects seam yet: the verified deployment graph is per-deployment
+            // and this admission is per-Zone. A USB binding whose device
+            // cannot be proven is visibly unadmitted rather than served from a
+            // fabricated grant.
+            admission: Arc::new(d2b_provider_device_usbip::facets::UnwiredUsbipHelperLegs),
+            claims: Arc::new(d2b_provider_device_usbip::facets::UnwiredUsbipClaimPorts),
         };
         let security_key_facets =
             d2b_provider_device_security_key::facets::SecurityKeyEffectFacets {
@@ -2106,10 +2162,26 @@ impl ConstructionInputs {
                     as Arc<
                         dyn d2b_provider_device_security_key::facets::SecurityKeyRuntime,
                     >,
+                // U20: as for USB, the helper leg and claim port refuse by
+                // name until the daemon can produce real binding authority.
+                admission: Arc::new(
+                    d2b_provider_device_security_key::facets::UnwiredSecurityKeyHelperLegs,
+                ),
+                claims: Arc::new(
+                    d2b_provider_device_security_key::facets::UnwiredSecurityKeyClaimPorts,
+                ),
             };
         let device_facets = d2b_provider_device::facets::DeviceEffectFacets {
             runtime: Arc::clone(&shared_provider_effects)
                 as Arc<dyn d2b_provider_device::facets::DeviceRuntime>,
+            inventory: Arc::clone(&shared_provider_effects)
+                as Arc<dyn d2b_provider_device::facets::DeviceInventorySource>,
+            // U16: the authority evidence a committed DeviceBinding's
+            // presence is decided against. The shared provider effects are
+            // the daemon's own read of the authority journal and the standing
+            // relationships, so the family never reads them itself.
+            authority: Arc::clone(&shared_provider_effects)
+                as Arc<dyn d2b_provider_device::facets::DeviceBindingAuthoritySource>,
         };
         let tpm_facets = d2b_provider_device_tpm::facets::TpmEffectFacets {
             runtime: Arc::clone(&shared_provider_effects)
@@ -2241,6 +2313,8 @@ Arc::new(DaemonAudioMediatorSource {
             Arc::clone(&registry),
         );
         Ok(Self {
+        deployment_graph: None,
+            server_state: None,
             zone: zone.clone(),
             zone_token,
             spec_store_dir,
@@ -2278,6 +2352,9 @@ Arc::new(DaemonAudioMediatorSource {
                     controller_generation.get(),
                 ),
             ),
+            // Production binds no publisher here: the plane builds the
+            // coordinator over its own origination leg and store incarnation.
+            authority_publisher: None,
             // The registered families' declared effects services are hosted
             // from the families' own implementations over this zone's facet
             // sets, one entry per service the registration table declares.
@@ -2298,6 +2375,7 @@ Arc::new(DaemonAudioMediatorSource {
                 &volume_facets,
             ),
             foundation: None,
+            bundle: None,
         })
     }
 }
@@ -2491,13 +2569,16 @@ impl AudioMediatorSource for DaemonAudioMediatorSource {
             capability.host_enforcement =
                 d2b_core::provider_capabilities::AudioHostEnforcementKind::None;
         }
+        // U25: the v3 composition reaches the host audio session only
+        // through the endpoint relationships the Zone graph admitted. This
+        // surface has no admitted audio relationship to hand the mediator
+        // yet, so it passes none and the host side reports unavailable
+        // rather than reaching for an ambient PipeWire environment.
+        let _ = &self.state;
         Some(Box::new(crate::audio_dispatch::DaemonAudioMediator::new(
-            &self.state,
             vm_name,
             capability,
-            d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid {
-                uid: self.state.daemon_uid,
-            },
+            None,
         )))
     }
 }
@@ -2650,8 +2731,139 @@ impl d2b_provider_guest::CloudHypervisorGuestRuntime for PlaneCloudHypervisorGue
 // path (U8) presents the api caller subject, owned cascades present the
 // resource-owner subject. U14 retired the Phase A type partition, so the
 // manager serves every type; the DriverFactory's registered directory is
-// the only gate on which types can spawn actors. The manager's default
-// [`AllowAll`] admission is therefore the whole policy.
+// the only gate on which types can spawn actors. The plane therefore still
+// installs the system-homed write fence, which is the whole policy on the
+// unchanged entry point (U34 replaces it with [`GraphMutationAdmission`] and
+// deletes the string-subject path atomically).
+
+// ---------------------------------------------------------------------------
+// New-graph mutation admission (U6, KTD4)
+// ---------------------------------------------------------------------------
+
+/// The manager-boundary admission of the new graph construction (U6, KTD4).
+///
+/// This is the composition's whole contribution to the decision: it names the
+/// Zone, the transport, and the subject the manager boundary already
+/// established, and defers every rule to the one pure evaluator in
+/// `d2b_core::resource_authority`. It holds no policy of its own, and it never
+/// reads a name out of the request to decide anything - `principal` is used
+/// only to recover the initiating subject's exact reference, and a request
+/// whose principal names no resolvable reference is refused rather than
+/// evaluated.
+///
+/// U40 installed this in place of the system-homed write fence
+/// for the [`ResourceManagerMsg::AuthenticatedApply`] entry point, and deletes
+/// the unchanged string-subject entry points in the same step.
+pub struct GraphMutationAdmission {
+    accepted: std::sync::Arc<d2b_core::resource_authority::AcceptedGraph>,
+    zone: d2b_contracts_resource::v3::ZoneId,
+    transport: d2b_core::resource_authority::TransportIdentity,
+}
+
+impl GraphMutationAdmission {
+    /// Construct the plane's admission from the prior accepted graph.
+    pub fn new(
+        accepted: std::sync::Arc<d2b_core::resource_authority::AcceptedGraph>,
+        zone: d2b_contracts_resource::v3::ZoneId,
+        transport: d2b_core::resource_authority::TransportIdentity,
+    ) -> Self {
+        Self { accepted, zone, transport }
+    }
+
+    /// The prior accepted graph this admission evaluates against.
+    pub fn accepted(&self) -> &d2b_core::resource_authority::AcceptedGraph {
+        &self.accepted
+    }
+}
+
+impl MutationAdmission for GraphMutationAdmission {
+    fn admit(&self, subject: &MutationSubject, request: &MutationRequest) -> AdmissionDecision {
+        use d2b_contracts_resource::v3::{
+            AdmissionDecision as GraphDecision, AuthoritySubject, AuthoritySubjectKind,
+        };
+        use d2b_core::resource_authority::{
+            GraphAuthority, GraphMutation, MutationKind, MutationSubjectEvidence,
+        };
+
+        // The authenticated entry points render the subject either as an exact
+        // reference or as the one of the two bootstrap-class tokens the
+        // runtime renders for a subject that names no resource. Anything else
+        // is display text an in-process caller wrote, and display text decides
+        // nothing.
+        let initiating = match d2b_contracts_resource::v3::ResourceRef::parse(&subject.principal)
+        {
+            Ok(reference) => match
+                d2b_resource_runtime::manager::authority_subject_kind(&reference)
+            {
+                Some(kind) => AuthoritySubject::named(kind, reference.clone()),
+                None => {
+                    return AdmissionDecision::Deny(format!(
+                        "graph admission: {} has no admitted authority class",
+                        subject.principal
+                    ));
+                }
+            },
+            Err(_) => match subject.principal.as_str() {
+                "bootstrap" => AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+                "operator" => AuthoritySubject::unresourced(AuthoritySubjectKind::Operator),
+                // The Nix bundle subject. `nix_bundle_subject`
+                // (`d2b-resource-api/src/manager_backend.rs:255`) is the only
+                // producer of this spelling, it renders the prefix from a
+                // bundle identity rather than from a caller's words, and it
+                // pairs the prefix with `ResourceProvenance::Nix`. Requiring
+                // BOTH is what makes the prefix unforgeable from the API: an
+                // API caller's principal must parse as a `ResourceRef`, and
+                // `nix:<identity>` has no `/` so it never can. A subject that
+                // spells the prefix without the matching origin is display
+                // text and decides nothing.
+                _ if subject.origin
+                    == d2b_resource_runtime::spec_store::ResourceProvenance::Nix
+                    && subject.principal.starts_with("nix:")
+                    && subject.principal.len() > "nix:".len() =>
+                {
+                    AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap)
+                }
+                _ => {
+                    return AdmissionDecision::Deny(
+                        "graph admission: the caller principal is neither an exact resource \
+                         reference nor a bootstrap-class token"
+                            .to_owned(),
+                    );
+                }
+            },
+        };
+        let kind = match request.op {
+            AdmissionOp::Ensure => MutationKind::Create,
+            AdmissionOp::Remove => MutationKind::Delete,
+        };
+        // A key the typed reference cannot spell names no row the graph could
+        // authorize, so it is refused rather than approximated with a different
+        // target.
+        let Ok(target) = d2b_contracts_resource::v3::ResourceRef::parse(&format!(
+            "{}/{}",
+            request.key.type_name, request.key.name
+        )) else {
+            return AdmissionDecision::Deny(format!(
+                "graph admission: {}/{} is not an exact resource reference",
+                request.key.type_name, request.key.name
+            ));
+        };
+        let mutation = GraphMutation::new(
+            self.zone.clone(),
+            MutationSubjectEvidence::new(initiating, self.transport),
+            kind,
+            target,
+        );
+        match GraphAuthority::admit_mutation(&mutation, &self.accepted) {
+            GraphDecision::Admitted => AdmissionDecision::Allow,
+            GraphDecision::Refused { stage, reason } => AdmissionDecision::Deny(format!(
+                "graph admission refused at {}: {}",
+                serde_json::to_string(&stage).unwrap_or_else(|_| "authorize".to_owned()),
+                serde_json::to_string(&reason).unwrap_or_else(|_| "identity-not-authorized".to_owned()),
+            )),
+        }
+    }
+}
 
 /// Default spec decode hook for rows no per-type decoder covers (a row whose
 /// type has no driver never spawns an actor, so this only ever sees
@@ -2737,12 +2949,26 @@ pub enum PlaneError {
     ManagerSpawn(#[from] ractor::SpawnErr),
     #[error("manager rpc failed: {0}")]
     ManagerRpc(#[from] ResourceError),
+    /// The Zone still owed an outcome for a transaction a previous boot left
+    /// outstanding, and recovery could not resolve it. The Zone stays fenced
+    /// and the start is refused; nothing is released against authority the
+    /// broker has not accepted.
+    #[error("zone recovery refused: {0}")]
+    ZoneRecovery(String),
     #[error("zone authority inputs invalid: {0}")]
     Authority(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("target layer refused: {0}")]
     Target(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("bundle invalid: {0}")]
     Bundle(#[from] d2b_contracts_zone_session::v3::resource_bundle::ResourceBundleError),
+    /// The authority refused a row the plane applies before its manager
+    /// spawns. The plane does not open without it: a Zone whose declared
+    /// authority was not accepted is a Zone every authority reader would see
+    /// as unestablished.
+    #[error("declared authority row refused: {0}")]
+    AuthorityPublication(
+        #[source] d2b_resource_runtime::authority_publish::PublishError,
+    ),
 }
 
 /// The canonical core Host target every non-guest resource realizes on
@@ -2831,6 +3057,10 @@ impl ResourcePlaneV3 {
         // bound one, the rendezvous publishes this Zone's attestation
         // values over the origination leg the moment the set is published.
         set = set.with_trusted_context_publication(inputs.trusted_context_publication.clone());
+        // U7: the verified deployment graph's authority rides the same
+        // origination leg, so the broker socket is the one the
+        // trusted-context publication already resolved.
+        set = set.with_authority_publication(inputs.trusted_context_publication.as_ref().map(|publication| publication.broker_socket().to_path_buf()));
         // The composition root's registered service factories ride the set
         // too (U3, R5): a provider that declares a service is hosted behind
         // its factory, and a declared service with no registered factory
@@ -2872,10 +3102,13 @@ impl ResourcePlaneV3 {
             family_declaration("role-binding"),
             vec![role_binding_descriptor()],
         );
-        set = set.with(family_declaration("quota"), vec![quota_descriptor()]);
+        set = set.with(
+            family_declaration("quota"),
+            vec![quota_descriptor(inputs.zone.clone())],
+        );
         set = set.with(
             family_declaration("emergency-policy"),
-            vec![emergency_policy_descriptor()],
+            vec![emergency_policy_descriptor(inputs.zone.clone())],
         );
         set = set.with(
             family_declaration("resource-export"),
@@ -2888,7 +3121,6 @@ impl ResourcePlaneV3 {
         // The policy types are declared with their drivers; their rows commit
         // with the committed policy rows, and the presence obligation is what
         // keeps a plane from opening without their drivers.
-        set = set.with(family_declaration("command"), vec![command_descriptor()]);
         set = set.with(
             family_declaration("operation"),
             vec![operation_descriptor()],
@@ -2896,6 +3128,10 @@ impl ResourcePlaneV3 {
         set = set.with(
             family_declaration("seccomp-profile"),
             vec![seccomp_profile_descriptor()],
+        );
+        set = set.with(
+            family_declaration("execution-policy"),
+            vec![execution_policy_descriptor()],
         );
         // The six interaction types start through the generated registration
         // table (U12): each type's row names its provider identity, and the
@@ -2930,11 +3166,21 @@ impl ResourcePlaneV3 {
             })),
             // The Network family: the driver builds its effects from the
             // declared facets; no externally built port appears here (R2).
-            "network-local" => vec![network_descriptor(NetworkDriverArgs {
-                zone: inputs.zone.clone(),
-                controller_generation: inputs.authority.controller_generation,
-                facets: inputs.network_facets.clone(),
-            })],
+            "network-local" => vec![
+                // The NetworkBinding row type this family also serves (U17):
+                // the relationships whose membership the fabric render
+                // writes, read back from the plane's own committed rows.
+                d2b_provider_network_local::network_binding_descriptor(
+                    d2b_provider_network_local::NetworkBindingDriverArgs {
+                        zone: inputs.zone.clone(),
+                    },
+                ),
+                network_descriptor(NetworkDriverArgs {
+                    zone: inputs.zone.clone(),
+                    controller_generation: inputs.authority.controller_generation,
+                    facets: inputs.network_facets.clone(),
+                }),
+            ],
 // The Host family (U5): the driver builds its effects from the
             // daemon-supplied facet set; no externally built port appears at
             // this construction site (R2).
@@ -2945,6 +3191,13 @@ impl ResourcePlaneV3 {
             "activation-nixos" => vec![activation_descriptor(ActivationDriverArgs {
                 zone: inputs.zone.as_str().to_owned(),
                 facets: inputs.activation_facets.clone(),
+                // U31: the verified deployment graph this plane published,
+                // when the composition published one. A graph that does not
+                // name this family's implementation refuses the family's
+                // reconcile before any runner is planned; a plane built
+                // before the cutover carries `None` and keeps the
+                // pre-cutover behaviour until the cutover installs it.
+                deployment_graph: inputs.deployment_graph.clone(),
             })],
             // The six interaction types (U12): each type's driver is built
             // over the family's shared effects value (the family's own
@@ -3006,11 +3259,23 @@ impl ResourcePlaneV3 {
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.security_key_facets.clone(),
             })),
-            "device" => vec![device_descriptor(DeviceDriverArgs {
-                zone: inputs.zone.clone(),
-                controller_generation: inputs.authority.controller_generation,
-                facets: inputs.device_facets.clone(),
-            })],
+            "device" => vec![
+                device_descriptor(DeviceDriverArgs {
+                    zone: inputs.zone.clone(),
+                    controller_generation: inputs.authority.controller_generation,
+                    facets: inputs.device_facets.clone(),
+                }),
+                // The DeviceBinding row type this family also serves (U16):
+                // built from the same daemon-supplied facet set, so the row
+                // and its parent are driven through one set (R2).
+                d2b_provider_device::device_binding_descriptor(
+                    d2b_provider_device::DeviceBindingDriverArgs {
+                        zone: inputs.zone.clone(),
+                        controller_generation: inputs.authority.controller_generation,
+                        facets: inputs.device_facets.clone(),
+                    },
+                ),
+            ],
             // The VolumeBinding family (U6): the driver builds its effects
             // from the daemon-supplied facet set; no externally built port
             // appears at this construction site (R2).
@@ -3022,18 +3287,57 @@ impl ResourcePlaneV3 {
             // The Endpoint family (U6): the driver builds its effects from
             // the daemon-supplied facet set; no externally built port
             // appears at this construction site (R2).
-            "endpoint" => vec![endpoint_descriptor(EndpointDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                facets: inputs.endpoint_facets.clone(),
-            })],
+            "endpoint" => {
+                // The Endpoint family (U6): the driver builds its effects from
+                // the daemon-supplied facet set; no externally built port
+                // appears at this construction site (R2).
+                let mut drivers = vec![endpoint_descriptor(EndpointDriverArgs {
+                    zone: inputs.zone.as_str().to_owned(),
+                    facets: inputs.endpoint_facets.clone(),
+                })];
+                // The EndpointBinding row type this family also serves (U18).
+                //
+                // Its privileged delivery reaches the exact-endpoint ACL
+                // helpers over the broker socket, which only the daemon holds,
+                // so the driver is always registered and the dispatch is the
+                // daemon's when the plane carries one. A plane without a
+                // daemon gets the family's own unwired dispatch, which refuses
+                // every verb by name: the type stays covered by the registry
+                // and the relationship reports undelivered rather than
+                // silently having no driver (R2).
+                drivers.push(
+                    d2b_provider_endpoint::endpoint_binding_descriptor(
+                        d2b_provider_endpoint::EndpointBindingDriverArgs {
+                            zone: inputs.zone.clone(),
+                            access: match inputs.server_state.clone() {
+                                Some(state) => Arc::new(
+                                    crate::DaemonEndpointAccessDispatch::new(state),
+                                ),
+                                None => Arc::new(d2b_provider_endpoint::UnwiredEndpointAccess),
+                            },
+                        },
+                    ),
+                );
+                drivers
+            }
             // The Credential family (U8): the driver builds its effects from
             // the daemon-supplied facet set; no externally built port
             // appears at this construction site (R2).
-            "credential" => vec![credential_descriptor(CredentialDriverArgs {
-                zone: inputs.zone.clone(),
-                controller_generation: inputs.authority.controller_generation,
-                facets: inputs.credential_facets.clone(),
-            })],
+            "credential" => vec![
+                // The CredentialBinding row type this family also serves (U37).
+                d2b_provider_credential::credential_binding_descriptor(
+                    d2b_provider_credential::CredentialBindingDriverArgs {
+                        zone: inputs.zone.clone(),
+                        controller_generation: inputs.authority.controller_generation,
+                        facets: inputs.credential_facets.clone(),
+                    },
+                ),
+                credential_descriptor(CredentialDriverArgs {
+                    zone: inputs.zone.clone(),
+                    controller_generation: inputs.authority.controller_generation,
+                    facets: inputs.credential_facets.clone(),
+                }),
+            ],
             // The Volume family (U7): the driver builds its effects from the
             // declared facets; no externally built port appears here (R2).
             "volume" => vec![volume_descriptor(VolumeDriverArgs {
@@ -3055,10 +3359,16 @@ impl ResourcePlaneV3 {
         set.start().await.map_err(PlaneError::ProviderStartup)
     }
 
-    /// Open the store, register the converted-type factories, and
-    /// spawn the manager. Initial-load completion is a separate step so the
-    /// readiness checklist is observable stage by stage; [`Self::open`]
-    /// composes both.
+    /// Open the store, register the converted-type factories, apply the
+    /// Zone's declared authority rows, and spawn the manager.
+    /// Initial-load completion is a separate step so the readiness checklist
+    /// is observable stage by stage; [`Self::open`] composes both.
+    ///
+    /// The declared authority rows are applied HERE, before the spawn, and
+    /// not after it: a `Role` or `RoleBinding` row is an input an accepted
+    /// graph is built from, so a manager that spawned first and ingested
+    /// afterwards left every authority reader that runs before the ingest
+    /// looking at an empty Zone.
     ///
     /// Every stage here is async work the constructor awaits; the only
     /// synchronous work left is the store's own half (a directory create and
@@ -3131,18 +3441,134 @@ impl ResourcePlaneV3 {
         // materialized spawn operations, and the operator bindings - before
         // its manager spawns, so every seeded row's actor starts from a
         // committed row (F1). The manager's pre_start loads them.
+        // KTD6: the manager's fence. It is bound from this plane's own store
+        // incarnation and the origination leg, not from the deployment
+        // document's generation: the broker refuses a publication session
+        // whose store generation is not the store the rows live in, and a
+        // document generation would silently fence every candidate this store
+        // ever stages. The publication subject is the verified deployment
+        // identity this daemon authenticates as, never the row being mutated -
+        // a candidate that presented its own identity would be authorizing its
+        // own introduction.
+        let incarnation = store.store_incarnation().await.map_err(PlaneError::from)?;
+        let authority: Arc<dyn AuthorityPublisher> = match &inputs.authority_publisher {
+            Some(bound) => Arc::clone(bound),
+            None => {
+                let broker_socket = inputs
+                    .trusted_context_publication
+                    .as_ref()
+                    .map(|publication| publication.broker_socket().to_path_buf())
+                    .ok_or_else(|| PlaneError::Authority(
+                        "this plane has no origination leg and no bound publisher, so no \
+                         desired mutation has a fence to commit against"
+                            .into(),
+                    ))?;
+                let coordinator = Arc::new(
+                    crate::authority_publication::AuthorityPublicationCoordinator::new(
+                        inputs.zone.as_str(),
+                        incarnation.clone(),
+                        authority_publication_subject(),
+                        Arc::new(crate::authority_publication::OriginationPublicationLink::new(
+                            broker_socket.clone(),
+                            AUTHORITY_PUBLICATION_ROUND_TRIP,
+                        )),
+                    ),
+                );
+                let publisher = crate::authority_publication::CoordinatorPublisher::new(
+                    coordinator,
+                    incarnation.clone(),
+                    authority_publication_subject(),
+                );
+                // The seed homes its rows in the system Zone, so that Zone
+                // needs its own coordinator: a coordinator carries the Zone
+                // its session is bound to and that Zone's accepted cursor, and
+                // a seeded row fenced under the plane's own Zone would leave
+                // the store's per-Zone sequence and the broker's per-Zone
+                // projection describing different authorities.
+                if inputs.foundation.is_some() {
+                    publisher.with_zone(Arc::new(
+                        crate::authority_publication::AuthorityPublicationCoordinator::new(
+                            crate::foundation_seed::SYSTEM_ZONE,
+                            incarnation,
+                            authority_publication_subject(),
+                            Arc::new(crate::authority_publication::OriginationPublicationLink::new(
+                                broker_socket,
+                                AUTHORITY_PUBLICATION_ROUND_TRIP,
+                            )),
+                        ),
+                    ))
+                } else {
+                    publisher
+                }
+            }
+        };
+        if inputs.foundation.is_some() {
+            // The seed homes its rows in the system Zone, which is not this
+            // plane's own Zone, so the manager's own restart adoption never
+            // covers it. A previous boot that died between staging a seeded
+            // row and settling it would otherwise leave that Zone owing an
+            // outcome forever, and every boot after it would be refused by
+            // the one-outstanding-transaction rule before the seed wrote
+            // anything. Adopt first, through the same recovery the manager
+            // uses, so the Zone is settled or explicitly refused here rather
+            // than wedged at the seed's first publish.
+            d2b_resource_runtime::authority_publish::adopt_outstanding(
+                &store,
+                crate::foundation_seed::SYSTEM_ZONE,
+                authority.as_ref(),
+            )
+            .await
+            .map_err(|error| PlaneError::ZoneRecovery(error.to_string()))?;
+            // The seed's Zone is reconciled the same way the manager reconciles
+            // its own, and for the same reason: a broker restart moves it to
+            // reconciling too, and the plane rather than any manager is what
+            // publishes for it. Adoption first, then the reconciliation, and
+            // only then does the seed write anything.
+            d2b_resource_runtime::authority_publish::resynchronize(
+                &store,
+                crate::foundation_seed::SYSTEM_ZONE,
+                authority.as_ref(),
+            )
+            .await
+            .map_err(|error| PlaneError::ZoneRecovery(error.to_string()))?;
+        }
         if let Some(foundation) = &inputs.foundation {
             let seed = crate::foundation_seed::FoundationSeed::new(
                 foundation.declarations.clone(),
                 foundation.allocation.clone(),
             );
-            let report = seed.run(&store, &providers).await?;
+            let report = seed.run(&store, &providers, authority.as_ref()).await?;
             tracing::info!(
                 zone = %inputs.zone.as_str(),
                 committed = report.committed.len(),
                 materialized = report.materialized.len(),
                 unchanged = report.unchanged,
                 "foundation seed committed the policy rows"
+            );
+        }
+        // The Zone's own declared authority is applied before the manager
+        // spawns, in the same place and through the same fenced store path
+        // the foundation seed just used. Ordering is the whole point: a
+        // `Role` or `RoleBinding` row is the input an accepted graph is
+        // built from, so a plane that spawned its manager first and ingested
+        // afterwards published the Zone while every authority reader that
+        // runs before the ingest - the broker's per-Zone projection, the
+        // session layer, the manager-boundary admission - still saw an empty
+        // Zone. The rows are durable and acknowledged here, and the manager's
+        // own `pre_start` loads them, so its actors start from a committed row
+        // (F1) exactly as the seeded rows do.
+        let committed_authority = Self::commit_declared_authority_rows(
+            &store,
+            inputs.bundle.as_ref(),
+            &inputs.zone,
+            authority.as_ref(),
+        )
+        .await?;
+        if !committed_authority.is_empty() {
+            tracing::info!(
+                zone = %inputs.zone.as_str(),
+                committed = committed_authority.len(),
+                "the zone's declared authority rows committed before the manager spawn"
             );
         }
         providers.mark_plane_open();
@@ -3169,20 +3595,84 @@ impl ResourcePlaneV3 {
         // so the registry is the authority: the plane wires no decoder table
         // of its own.
         let decoders = providers.decoders();
+        // U40: the manager-boundary admission, and the two facts it would
+        // read: the Zone's own prior accepted graph, and the Zone's accepted
+        // ceilings and reduction, which the two family drivers republish as
+        // their rows commit. A limits snapshot taken here would hold only
+        // what existed at the spawn and would never enforce a ceiling an
+        // operator commits afterwards, which is why the holder below is the
+        // live one.
+        //
+        // The two per-Zone runtimes are installed BEFORE the manager spawns,
+        // so a family's driver finds its runtime on its first reconcile. The
+        // census is counted from the plane's own committed rows by the Quota
+        // driver, because `MutationAdmission::admit` is synchronous and cannot
+        // read the store per mutation.
+        d2b_provider_quota::install(Arc::new(d2b_provider_quota::ZoneQuotaRuntime::new(
+            inputs.zone.clone(),
+            Arc::new(crate::PlaneZoneUsage { store: Arc::clone(&store), zone: inputs.zone.clone() }),
+        )));
+        d2b_provider_emergency_policy::install(Arc::new(
+            d2b_provider_emergency_policy::ZoneEmergencyRuntime::new(
+                inputs.zone.clone(),
+                Arc::new(crate::PlaneZoneOpenUse {
+                    store: Arc::clone(&store),
+                    zone: inputs.zone.clone(),
+                }),
+            ),
+        ));
+        // U40: the manager-boundary admission is still NOT installed, and the
+        // reason is no longer the graph.
+        //
+        // The per-Zone accepted graph this admission needs now EXISTS at this
+        // point: `commit_declared_authority_rows` committed the Zone's own
+        // `Role` and `RoleBinding` rows above, through the store's fenced
+        // path, before this manager spawns, so the graph built from them is
+        // rooted at THIS Zone and is not the deployment's system-Zone graph.
+        //
+        // What still blocks the install is the subject every other mutating
+        // entry point presents. `GraphMutationAdmission` decides a mutation
+        // from the initiating subject alone, and it refuses a principal that
+        // is neither an exact `Type/name` reference nor one of the
+        // bootstrap-class tokens. The owned-cascade boundaries render their
+        // subject as `ResourceKey`'s display form - `zone/Type/name` - which
+        // is not an exact reference (both the child bridge and the manager's
+        // own cascade do this), and no Zone bundle declares the RoleBindings
+        // that would grant a cascade subject even once it parsed. Installing
+        // the identity arm today therefore refuses every owned-child commit in
+        // every Zone, which is strictly worse than the gap it closes.
+        //
+        // What IS installed is only the fence below. The per-Zone runtimes
+        // and the drain finalizer the families drive are real and wired, but
+        // no committed ceiling or reduction reaches a mutation until the
+        // admission that reads them is installed, so nothing here should be
+        // read as enforcement that is live today.
+        // The foundation plane is the one that carries the seeded system-homed
+        // rows; every other plane is zone-local and the fence refuses those
+        // three types on it.
+        let admission: Arc<dyn MutationAdmission> = Arc::new(
+            crate::foundation_seed::SystemZoneWriteFence::new(inputs.foundation.is_some()),
+        );
         let args = ResourceManagerArgs {
             zone: inputs.zone.as_str().to_owned(),
             store: Arc::clone(&store),
+            authority,
             providers,
             hub: Arc::clone(&hub),
-            admission: Arc::new(crate::foundation_seed::SystemZoneWriteFence::new(
-                inputs.foundation.is_some(),
-            )),
+            admission,
             decoders,
             default_decoder: Arc::new(PassthroughDecoder),
             targets: Arc::clone(&targets),
             host_target,
             target_resolver: Arc::new(DeclaredExecutionRef),
             backoff: PLANE_BACKOFF,
+            // Relation indexing (U6, R3/R4): the plane registers no per-type
+            // projection yet, so the manager's derived index carries ownership
+            // only - exactly the relationship class the unchanged entry point
+            // already relies on. The canonical projections arrive with each
+            // converted declaration family and the new admission construction
+            // is installed with them at the U34 cutover.
+            relation_extractors: RelationExtractors::new(),
         };
         let (actor, _join) = ractor::Actor::spawn(None, ResourceManager::new(), args).await?;
         readiness.set_manager_started(true);
@@ -3244,6 +3734,100 @@ impl ResourcePlaneV3 {
         let plane = Self::prepare(inputs).await?;
         plane.complete_initial_load().await?;
         Ok(plane)
+    }
+
+    /// Commit the Zone bundle's declared authority rows, before the manager
+    /// exists.
+    ///
+    /// These are the rows an accepted graph is built from: a `Role` states
+    /// the rules one grant draws on and a `RoleBinding` states which subject
+    /// holds them, so anything that decides a mutation reads them. The class
+    /// comes from [`AuthorityRowKind::of_reference`] rather than from a local
+    /// table of type names, so the plane and the evaluator cannot disagree
+    /// about what counts as authority.
+    ///
+    /// The write is the store's only fenced path - staged, frozen, committed,
+    /// published, acknowledged - and it is the same call the foundation seed
+    /// makes for the rows it homes in the system Zone, so a seeded row and a
+    /// Zone-declared row are committed by one authority rather than two.
+    ///
+    /// Nothing is overwritten. A row this store already holds is left exactly
+    /// as it stands, whatever its provenance: an API-created row keeps the
+    /// provenance it was created under (R26), a row already retiring keeps
+    /// that mark, and [`ResourcePlaneV3::ingest_nix_bundle`] partitions both
+    /// the same way once the plane is open. An authority row that declares an
+    /// owner is left to that ingest too, because linking an owned child is
+    /// the manager's own deferral sweep and this step does not second-guess
+    /// it.
+    async fn commit_declared_authority_rows(
+        store: &SpecStore,
+        bundle: Option<&ResourceBundle>,
+        zone: &ZoneId,
+        authority: &dyn AuthorityPublisher,
+    ) -> Result<Vec<ResourceKey>, PlaneError> {
+        let Some(bundle) = bundle else {
+            return Ok(Vec::new());
+        };
+        bundle.verify()?;
+        let mut committed = Vec::new();
+        for row in &bundle.resources {
+            let key = bundle_row_key(zone, row);
+            let Ok(reference) = ResourceRef::parse(&format!(
+                "{}/{}",
+                key.type_name, key.name
+            )) else {
+                continue;
+            };
+            if !AuthorityRowKind::of_reference(&reference).is_authority()
+                || row.metadata().owner_ref().is_some()
+            {
+                continue;
+            }
+            // Any row this store already holds is left exactly as it stands,
+            // including one already retiring: an ensure against a deleting
+            // row is refused by the store, and the ingest partitions a
+            // retiring row as a skip anyway.
+            if store
+                .list(SpecSelector {
+                    zone: Some(zone.as_str().to_owned()),
+                    type_name: Some(key.type_name.clone()),
+                    owner_uid: None,
+                })
+                .await?
+                .iter()
+                .any(|held| held.key.name == key.name)
+            {
+                continue;
+            }
+            let desired = bundle_desired(zone, row);
+            store
+                .publish(
+                    d2b_resource_runtime::DesiredMutation::Ensure(StoredDesiredResource {
+                        uid: d2b_resource_runtime::manager::deterministic_uid(&key),
+                        key: key.clone(),
+                        generation: 1,
+                        owner_uid: None,
+                        provenance: d2b_resource_runtime::identity::ResourceProvenance::Nix,
+                        deleting: false,
+                        spec: desired.spec,
+                        metadata: desired.metadata,
+                        created_at: 0,
+                    }),
+                    authority,
+                )
+                .await
+                .map_err(|error| {
+                    tracing::error!(
+                        zone = %zone.as_str(),
+                        reference = %key,
+                        error = ?error,
+                        "the zone's declared authority row was refused"
+                    );
+                    PlaneError::AuthorityPublication(error)
+                })?;
+            committed.push(key);
+        }
+        Ok(committed)
     }
 
     /// The providers this zone started, in the order they started.
@@ -3592,6 +4176,8 @@ use d2b_provider_system_core::MinijailPlatformGate;
     use d2b_resource_runtime::revision::ManualClock;
     use d2b_resource_runtime::watch::{ChangeKind, ChangeNotice, WatchHubConfig};
 
+    use d2b_core::resource_authority::{AcceptedGraph, ProjectionRow, TransportIdentity};
+
     /// A principal that is not a real host account must be refused, not
     /// resolved to a guessed id. The closed contract requires these
     /// principals to be real accounts, and `host-users.nix` materializes the
@@ -3669,8 +4255,24 @@ use d2b_provider_system_core::MinijailPlatformGate;
 
     /// One committed Volume row the subscription's per-row registration reads.
     async fn commit_volume_row(store: &SpecStore, key: &ResourceKey) {
+        // No broker in these fixtures: the recording publisher fences and
+        // accepts what the store publishes.
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
+        commit_volume_row_with(store, key, publisher.as_ref()).await
+    }
+
+    async fn commit_binding_row(store: &SpecStore, key: &ResourceKey) {
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
+        commit_binding_row_with(store, key, publisher.as_ref()).await
+    }
+
+    async fn commit_volume_row_with(
+        store: &SpecStore,
+        key: &ResourceKey,
+        publisher: &dyn d2b_resource_runtime::AuthorityPublisher,
+    ) {
         store
-           .ensure(StoredDesiredResource {
+           .publish(d2b_resource_runtime::DesiredMutation::Ensure(StoredDesiredResource {
                 key: key.clone(),
                 uid: d2b_resource_runtime::manager::deterministic_uid(key),
                 generation: 1,
@@ -3681,7 +4283,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
                    .expect("volume spec"),
                 metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
                 created_at: 0,
-            })
+            }), publisher)
            .await
            .expect("volume row committed");
     }
@@ -3693,20 +4295,30 @@ use d2b_provider_system_core::MinijailPlatformGate;
             "executionRef": "Guest/acceptance-guest",
             "view": "controller",
             "access": "read-only",
-            "mountPath": "/state",
+            "presentation": { "presentation": "filesystem", "destination": "/state" },
+            "slot": "state",
+            "source": {
+                "admittedRights": ["consume"],
+                "arbitration": "shared",
+                "realizedFacets": ["filesystem-presentation"],
+            },
         })
     }
 
     /// One committed VolumeBinding row, as the Volume driver mints it
     /// (the serving Provider reference rides in the stored envelope).
-    async fn commit_binding_row(store: &SpecStore, key: &ResourceKey) {
+    async fn commit_binding_row_with(
+        store: &SpecStore,
+        key: &ResourceKey,
+        publisher: &dyn d2b_resource_runtime::AuthorityPublisher,
+    ) {
         let mut envelope = binding_spec().as_object().cloned().expect("object");
         envelope.insert(
             "providerRef".to_owned(),
             serde_json::Value::String("Provider/volume-virtiofs".to_owned()),
         );
         store
-           .ensure(StoredDesiredResource {
+           .publish(d2b_resource_runtime::DesiredMutation::Ensure(StoredDesiredResource {
                 key: key.clone(),
                 uid: d2b_resource_runtime::manager::deterministic_uid(key),
                 generation: 1,
@@ -3716,7 +4328,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
                 spec: serde_json::to_vec(&envelope).expect("envelope"),
                 metadata: Vec::new(),
                 created_at: 0,
-            })
+            }), publisher)
            .await
            .expect("binding row committed");
     }
@@ -3822,11 +4434,40 @@ use d2b_provider_system_core::MinijailPlatformGate;
         )
     }
 
+    /// The plane inputs over a caller-chosen Guest facet set, so a test can
+    /// observe the Cloud Hypervisor controller-session calls the composed
+    /// Guest driver's effects make through the same facets the plane builds
+    /// the family's effects service from.
+    fn test_inputs_with_guest_facets(
+        guest_facets: d2b_provider_guest::facets::GuestEffectFacets,
+    ) -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
+        test_inputs_over(
+            d2b_provider_wayland_policy::test_support::scripted_facets(
+                ZoneId::parse("test").unwrap(),
+            ),
+            guest_facets,
+        )
+    }
+
+
     /// The plane inputs over a caller-chosen interaction facet set, so a
     /// test can seed the family's audio registry through the same facets the
     /// plane hosts the declared service from.
     fn test_inputs_with_interaction_facets(
         interaction_facets: d2b_provider_wayland_policy::InteractionEffectFacets,
+    ) -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
+        test_inputs_over(
+            interaction_facets,
+            d2b_provider_guest::test_support::ScriptedFacets::new().facet_set(),
+        )
+    }
+
+    /// The plane inputs over both caller-chosen facet sets: the interaction
+    /// family's and the Guest family's, each the value the production
+    /// composition root builds its family's effects service from.
+    fn test_inputs_over(
+        interaction_facets: d2b_provider_wayland_policy::InteractionEffectFacets,
+        guest_facets: d2b_provider_guest::facets::GuestEffectFacets,
     ) -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let spec_store_dir = dir.path().join("daemon-state/zones/test");
@@ -3866,9 +4507,8 @@ use d2b_provider_system_core::MinijailPlatformGate;
             d2b_provider_user::test_support::ScriptedProbe::new(),
         );
         // U10: the plane tests build the Guest family's facet set from the
-        // scripted facets double, exactly as the production composition
-        // root builds it from the daemon's runtime.
-        let guest_facets = d2b_provider_guest::test_support::ScriptedFacets::new().facet_set();
+        // caller's scripted facets double, exactly as the production
+        // composition root builds it from the daemon's runtime.
         // U1/U5/U10/U14: the plane hosts the Process, Network, Host,
         // Activation, and Guest families' declared effects services from the
         // same facet sets their driver factories are built from, exactly as
@@ -3944,6 +4584,8 @@ host_facets: host_facets.clone(),
                 binding_facets: binding_facets.clone(),
                 endpoint_facets: endpoint_facets.clone(),
                 activation_facets: activation_facets.clone(),
+            deployment_graph: None,
+            server_state: None,
                 usbip_facets: usbip_facets.clone(),
                 security_key_facets: security_key_facets.clone(),
                 device_facets: device_facets.clone(),
@@ -3959,6 +4601,7 @@ user_facets: user_facets.clone(),
                 guest_facets: guest_facets.clone(),
                 interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
+                authority_publisher: Some(d2b_resource_runtime::test_support::RecordingPublisher::new()),
 // U1/U14/U5/U7: the plane hosts the Process, Network, Host,
                 // Activation, and Volume families' declared effects services
 // U1/U14/U5/U8: the plane hosts the Process, Network, Host,
@@ -4073,6 +4716,7 @@ HOST_EFFECTS_SERVICE.id,
                     ),
                 ]),
                 foundation: None,
+                bundle: None,
             },
             readiness,
         )
@@ -5320,9 +5964,9 @@ HOST_EFFECTS_SERVICE.id,
             "emergency-policy",
             "resource-export",
             "resource-import",
-            "command",
             "operation",
             "seccomp-profile",
+            "execution-policy",
         ]);
         assert_eq!(runtime.startup_order(), expected);
         runtime.drain().await.expect("the providers drain");
@@ -5348,6 +5992,62 @@ HOST_EFFECTS_SERVICE.id,
             }
             other => panic!("wrong failure: {other}"),
         }
+    }
+
+    /// Every service the generated registration closure declares is hosted by
+    /// the production composition, and it hosts nothing else.
+    ///
+    /// The table is the committed `generated/new-graph/` byte the daemon
+    /// compiles, and the factories come from `ConstructionInputs::production`,
+    /// the same construction a real Zone's plane takes. A declaration that
+    /// adds a service makes this fail before any Zone starts, because the
+    /// hosting side would otherwise refuse the service by name at startup and
+    /// the composition would have drifted from the generated closure.
+    #[test]
+    fn every_service_the_generated_closure_declares_is_hosted_by_the_composition() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let declared: BTreeSet<(&'static str, &'static str)> = PROVIDER_REGISTRATIONS
+            .iter()
+            .flat_map(|registration| {
+                registration
+                    .services
+                    .iter()
+                    .map(move |service| (registration.provider_ref, *service))
+            })
+            .collect();
+        let declared_services: BTreeSet<&'static str> =
+            declared.iter().map(|(_, service)| *service).collect();
+
+        let unhosted: Vec<&str> = declared_services
+            .iter()
+            .filter(|service| !inputs.effect_service_factories.contains_key(*service))
+            .copied()
+            .collect();
+        assert!(
+            unhosted.is_empty(),
+            "the generated closure declares services the composition does not host: {unhosted:?}",
+        );
+
+        let undeclared: Vec<&str> = inputs
+            .effect_service_factories
+            .keys()
+            .filter(|service| !declared_services.contains(*service))
+            .copied()
+            .collect();
+        assert!(
+            undeclared.is_empty(),
+            "the composition hosts services the generated closure does not declare: {undeclared:?}",
+        );
+
+        let families: BTreeSet<&str> = PROVIDER_REGISTRATIONS
+            .iter()
+            .map(|registration| registration.provider_ref)
+            .collect();
+        assert_eq!(
+            families.len(),
+            PROVIDER_REGISTRATIONS.len(),
+            "a generated registration row names a family identity twice",
+        );
     }
 
     /// KTD7: the committed Provider identities the composition resolves are
@@ -5424,7 +6124,13 @@ HOST_EFFECTS_SERVICE.id,
             "executionRef": execution_ref.to_canonical_string(),
             "view": "controller",
             "access": "read-only",
-            "mountPath": "/state",
+            "presentation": { "presentation": "filesystem", "destination": "/state" },
+            "slot": "state",
+            "source": {
+                "admittedRights": ["consume"],
+                "arbitration": "shared",
+                "realizedFacets": ["filesystem-presentation"],
+            },
         });
         // The stored envelope is the neutral binding plus the serving
         // Provider reference, exactly as the Volume driver mints it.
@@ -5436,9 +6142,12 @@ HOST_EFFECTS_SERVICE.id,
         let uid = [0x42; 16];
         // A row the plane never loaded: exactly the state the manager leaves
         // behind when it ensures a derived child after `open`.
+        // No broker in this fixture: the recording publisher fences and
+        // accepts what the store publishes.
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
         plane
            .store()
-           .ensure(StoredDesiredResource {
+           .publish(d2b_resource_runtime::DesiredMutation::Ensure(StoredDesiredResource {
                 key: ResourceKey::new("test", "VolumeBinding", "vol-binding-derived"),
                 uid,
                 generation: 1,
@@ -5448,7 +6157,7 @@ HOST_EFFECTS_SERVICE.id,
                 spec: serde_json::to_vec(&envelope).expect("envelope"),
                 metadata: Vec::new(),
                 created_at: 0,
-            })
+            }), publisher.as_ref())
            .await
            .expect("binding row");
 
@@ -5995,19 +6704,23 @@ HOST_EFFECTS_SERVICE.id,
        .expect("child envelope")
     }
     /// A system-homed policy row as a caller would submit it.
-    fn command_desired(zone: &str, name: &str) -> DesiredResource {
+    fn operation_desired(zone: &str, name: &str) -> DesiredResource {
         let spec = d2b_contracts_resource::v3::canonical_json_bytes(&serde_json::json!({
-            "exec": "/usr/lib/d2b/libexec/virtiofsd",
-            "argv": ["--socket-path", "{socketPath}"],
-            "params": {
+            "ownerRef": "Role/worker",
+            "payloadSchema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": { "socketPath": { "type": "string" } }
             },
-            "roleRef": "Role/worker",
-            "intent": { "grammar": "<zone>/<name>", "mint": "per-bundle-entry" }
+            "secretAccess": "None",
+            "audit": {
+                "enabled": false,
+                "reasons": [],
+                "retentionDays": 0,
+                "fields": []
+            }
         }))
-       .expect("canonical command spec");
+       .expect("canonical operation spec");
         let metadata = serde_json::to_vec(&serde_json::json!({
             "annotations": {},
             "labels": {},
@@ -6015,7 +6728,7 @@ HOST_EFFECTS_SERVICE.id,
         }))
        .expect("metadata");
         DesiredResource {
-            key: ResourceKey::new(zone, "Command", name),
+            key: ResourceKey::new(zone, "Operation", name),
             spec,
             metadata,
             provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Api,
@@ -6027,40 +6740,6 @@ HOST_EFFECTS_SERVICE.id,
             principal: principal.to_owned(),
             origin: d2b_resource_runtime::spec_store::ResourceProvenance::Api,
         }
-    }
-
-    /// A zone-local plane is not the foundation plane: a system-homed row is
-    /// refused terminally, naming the type and the caller.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_zone_local_plane_refuses_a_system_homed_row() {
-        let (_dir, inputs, _readiness) = test_inputs();
-        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
-
-        let error = plane
-           .client()
-           .apply(api_subject("User/alice"), command_desired("test", "worker"))
-           .await
-           .expect_err("a system-homed write is refused");
-        assert!(
-            matches!(
-                &error,
-                d2b_resource_runtime::error::ResourceError::AdmissionDenied {
-                    type_name,
-                    principal,
-                   ..
-                } if type_name == "Command" && principal == "User/alice"
-            ),
-            "unexpected refusal: {error:?}"
-        );
-        assert!(
-            error.to_string().contains("wrong plane"),
-            "the refusal keeps the named shape: {error}"
-        );
-        // The refused row never reached the durable store.
-        assert!(plane.store().list(SpecSelector::default()).await.expect("list")
-           .iter()
-           .all(|row| row.key.type_name != "Command"));
     }
 
     /// The foundation plane commits the seeded policy rows before its manager
@@ -6097,51 +6776,281 @@ HOST_EFFECTS_SERVICE.id,
         // The system-homed write is admitted on this plane.
         plane
            .client()
-           .apply(api_subject("User/alice"), command_desired("system", "worker"))
+           .apply(api_subject("User/alice"), operation_desired("system", "worker"))
            .await
            .expect("the foundation plane admits the write");
     }
 
-    /// The one declared spawn command, under the seed's publisher role.
-    fn seeded_command(name: &str) -> crate::foundation_seed::SeedCommand {
-        let spec = d2b_contracts_resource::v3::canonical_json_bytes(&serde_json::json!({
-            "exec": "/usr/lib/d2b/libexec/virtiofsd",
-            "argv": ["--socket-path", "{socketPath}"],
-            "params": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": { "socketPath": { "type": "string" } }
-            },
-            "roleRef": "Role/operation-publisher",
-            "intent": { "grammar": "<zone>/<name>", "mint": "per-bundle-entry" }
-        }))
-       .expect("canonical command spec");
-        crate::foundation_seed::SeedCommand {
-            name: name.to_owned(),
-            spec: serde_json::from_slice(&spec).expect("command spec"),
+    /// The authority rows a Zone bundle declares, in the Zone's own words: one
+    /// `Role` over the types that Zone's operator may write, and one
+    /// `RoleBinding` naming that operator. This is the exact pair an accepted
+    /// graph is built from, and the pair the manager boundary's identity arm
+    /// decides against.
+    fn declared_authority_rows(role_name: &str, subject: &str) -> Vec<BundleResource> {
+        let zone = ZoneId::parse("test").expect("the fixture zone");
+        let role = d2b_contracts_zone_session::v3::role::AuthorizedRole::new(
+            vec![d2b_contracts_zone_session::v3::RoleRule::new(
+                vec![d2b_contracts_resource::v3::ResourceTypeName::parse("Volume")
+                    .expect("a standard type")],
+                vec![
+                    d2b_contracts_zone_session::v3::RoleResourceVerb::Create,
+                    d2b_contracts_zone_session::v3::RoleResourceVerb::Delete,
+                ],
+                Vec::new(),
+                Vec::new(),
+                vec![zone],
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("the role rule validates")],
+            Vec::new(),
+        )
+        .expect("the role validates");
+        let binding = d2b_contracts_zone_session::v3::RoleBindingSpec::new(
+            ResourceRef::parse(&format!("Role/{role_name}")).expect("a canonical role"),
+            vec![ResourceRef::parse(subject).expect("a canonical subject")],
+            None,
+            None,
+        )
+        .expect("the role binding validates");
+        vec![
+            bundle_row(
+                "Role",
+                role_name,
+                serde_json::to_value(&role).expect("role row bytes"),
+            ),
+            bundle_row(
+                "RoleBinding",
+                &format!("{role_name}-holders"),
+                serde_json::to_value(&binding).expect("binding row bytes"),
+            ),
+        ]
+    }
+
+    /// The prior accepted graph one Zone's admission reads, rebuilt from the
+    /// rows this plane's own store committed - through the same
+    /// [`AcceptedGraph::from_canonical_rows`] call, over the same stored
+    /// bytes, that the broker's `prior_graph` makes.
+    async fn plane_accepted_graph(plane: &ResourcePlaneV3) -> AcceptedGraph {
+        let zone = ZoneId::parse("test").expect("the fixture zone");
+        let rows = plane
+           .store()
+           .list(SpecSelector {
+                zone: Some(zone.as_str().to_owned()),
+                type_name: None,
+                owner_uid: None,
+            })
+           .await
+           .expect("store rows");
+        let mut decoded: Vec<(ResourceRef, CanonicalJsonObject)> = Vec::new();
+        for row in rows {
+            let Ok(reference) =
+                ResourceRef::parse(&format!("{}/{}", row.key.type_name, row.key.name))
+            else {
+                continue;
+            };
+            if !AuthorityRowKind::of_reference(&reference).is_authority() {
+                continue;
+            }
+            let Ok(admitted) = serde_json::from_slice::<CanonicalJsonObject>(&row.spec) else {
+                continue;
+            };
+            decoded.push((reference, admitted));
+        }
+        let projection = decoded
+           .iter()
+           .map(|(reference, admitted)| ProjectionRow::new(reference, admitted));
+        AcceptedGraph::from_canonical_rows(
+            zone,
+            plane
+               .store()
+               .store_incarnation()
+               .await
+               .expect("store incarnation"),
+            AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
+            projection,
+        )
+        .expect("the committed authority rows decode")
+    }
+
+    /// One API mutation of `Type/name` in the fixture Zone, as the manager
+    /// boundary presents it.
+    fn api_mutation(type_name: &str, name: &str) -> MutationRequest {
+        MutationRequest {
+            key: ResourceKey::new("test", type_name, name),
+            op: AdmissionOp::Ensure,
+            spec: Vec::new(),
+            metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
         }
     }
 
-    /// The seed's own vocabulary, plus one declared command so the controller
-    /// materializes an `Operation` row to resolve.
-    fn seeded_declarations(command: &str) -> crate::foundation_seed::FoundationDeclarations {
-        let mut declarations = crate::foundation_seed::core_declarations();
-        let command = seeded_command(command);
-        declarations.roles[0].spec = serde_json::from_value(serde_json::json!({
-            "rules": [{
-                "resourceTypes": ["Operation"],
-                "verbs": ["create"],
-                "subresources": [],
-                "resourceNames": [],
-                "zones": [],
-                "executionRefs": [],
-                "sessionVerbs": []
-            }],
-            "commandRefs": [format!("Command/{}", command.name)],
-        }))
-       .expect("publisher role scoped to the declared command");
-        declarations.commands = vec![command];
-        declarations
+    /// A cold start in a Zone-local plane applies that Zone's declared
+    /// authority BEFORE the manager spawns, so the per-Zone accepted graph
+    /// the manager boundary reads already carries the Zone's own grants the
+    /// first time it reads it - and a mutation the Zone granted is admitted
+    /// rather than refused for want of a graph.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_zone_local_cold_start_applies_its_declared_authority_before_the_manager_spawns() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        inputs.bundle = Some(test_bundle(declared_authority_rows("volume-writer", "User/alice")));
+        // No ingest call: everything asserted below was committed by the
+        // plane's own open, before its manager existed.
+        let plane = ResourcePlaneV3::prepare(inputs).await.expect("plane");
+        plane.complete_initial_load().await.expect("initial load");
+
+        for (type_name, name) in
+            [("Role", "volume-writer"), ("RoleBinding", "volume-writer-holders")]
+        {
+            let committed = plane
+               .store()
+               .list(SpecSelector {
+                    zone: Some("test".to_owned()),
+                    type_name: Some(type_name.to_owned()),
+                    owner_uid: None,
+                })
+               .await
+               .expect("store rows")
+               .into_iter()
+               .any(|row| row.key.name == name);
+            assert!(committed, "{type_name}/{name} was not committed before the manager spawned");
+            // The manager's own pre_start loaded it, so the row is served
+            // from the manager and not only from the store.
+            assert!(
+                plane
+                   .client()
+                   .get_row(ResourceKey::new("test", type_name, name))
+                   .await
+                   .expect("manager row")
+                   .is_some(),
+                "{type_name}/{name} is durable but the manager never loaded it"
+            );
+        }
+
+        let graph = plane_accepted_graph(&plane).await;
+        assert_eq!(
+            graph.zone().as_str(),
+            "test",
+            "the graph is rooted at the Zone whose rows it holds, not the deployment's"
+        );
+        let admission = GraphMutationAdmission::new(
+            Arc::new(graph),
+            ZoneId::parse("test").expect("the fixture zone"),
+            TransportIdentity::ComponentSession,
+        );
+        assert!(
+            matches!(
+                admission.admit(&api_subject("User/alice"), &api_mutation("Volume", "state")),
+                AdmissionDecision::Allow
+            ),
+            "a Zone-local cold start refused a mutation its own declared RoleBinding grants"
+        );
+        plane.shutdown().await;
+    }
+
+    /// The same admission is not a rubber stamp: a mutation naming a row the
+    /// accepted graph does not cover is refused, on the target axis and on
+    /// the subject axis, while the granted one still passes beside them.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_zone_local_admission_refuses_a_row_its_graph_does_not_cover() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        inputs.bundle = Some(test_bundle(declared_authority_rows("volume-writer", "User/alice")));
+        let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
+        let admission = GraphMutationAdmission::new(
+            Arc::new(plane_accepted_graph(&plane).await),
+            ZoneId::parse("test").expect("the fixture zone"),
+            TransportIdentity::ComponentSession,
+        );
+
+        // The granted mutation, so neither refusal below can be an admission
+        // that denies everything.
+        assert!(matches!(
+            admission.admit(&api_subject("User/alice"), &api_mutation("Volume", "state")),
+            AdmissionDecision::Allow
+        ));
+        // The target the Zone's Role does not name.
+        let refused_type = admission.admit(
+            &api_subject("User/alice"),
+            &api_mutation("Guest", "work"),
+        );
+        assert!(
+            matches!(&refused_type, AdmissionDecision::Deny(refusal) if refusal.contains("identity-not-authorized")),
+            "a type the graph grants nothing was admitted: {refused_type:?}"
+        );
+        // The subject no RoleBinding in this Zone names.
+        let refused_subject =
+            admission.admit(&api_subject("User/mallory"), &api_mutation("Volume", "state"));
+        assert!(
+            matches!(&refused_subject, AdmissionDecision::Deny(refusal) if refusal.contains("identity-not-authorized")),
+            "a subject the graph never names was admitted: {refused_subject:?}"
+        );
+        plane.shutdown().await;
+    }
+
+    /// A publication transaction the system Zone still owes an outcome for is
+    /// resolved before the foundation seed publishes.
+    ///
+    /// The seed homes its rows in the system Zone, which is not this plane's
+    /// own Zone, so the manager's own restart adoption does not cover it. A
+    /// previous boot that died between staging a seeded row and settling it
+    /// therefore has to be adopted here: without it the seed's first publish
+    /// is refused by the one-outstanding-transaction rule and the plane never
+    /// opens, which is a permanent wedge rather than a retryable refusal.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_foundation_plane_adopts_the_system_zone_before_it_seeds() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        inputs.foundation = Some(FoundationInputs {
+            declarations: crate::foundation_seed::core_declarations(),
+            allocation: crate::principal_allocation::PrincipalAllocation::committed()
+               .expect("committed allocation"),
+        });
+        let store_path = ResourcePlaneV3::spec_store_path(&inputs.spec_store_dir);
+        {
+            let previous_boot = SpecStore::open(&store_path).expect("the store the previous boot opened");
+            previous_boot
+                .stage_mutation(d2b_resource_runtime::DesiredMutation::Ensure(
+                    StoredDesiredResource {
+                        key: ResourceKey::new(
+                            crate::foundation_seed::SYSTEM_ZONE,
+                            "SeccompProfile",
+                            "left-outstanding",
+                        ),
+                        uid: d2b_resource_runtime::manager::deterministic_uid(&ResourceKey::new(
+                            crate::foundation_seed::SYSTEM_ZONE,
+                            "SeccompProfile",
+                            "left-outstanding",
+                        )),
+                        generation: 0,
+                        owner_uid: None,
+                        provenance: d2b_resource_runtime::spec_store::ResourceProvenance::Nix,
+                        deleting: false,
+                        spec: b"{}".to_vec(),
+                        metadata: b"{}".to_vec(),
+                        created_at: 0,
+                    },
+                ))
+                .await
+                .expect("the previous boot stages its seeded candidate");
+            // The boot dies here: the candidate is durable, nothing settled it,
+            // and the store above went out of scope with its writer thread.
+        }
+
+        // The production open path is the restart. It must recover the system
+        // Zone and go on to seed, not refuse the start.
+        let plane = ResourcePlaneV3::open(inputs)
+            .await
+            .expect("the plane recovers the outstanding system-Zone transaction and opens");
+        let recovery = plane
+            .store()
+            .zone_recovery(crate::foundation_seed::SYSTEM_ZONE)
+            .await
+            .expect("the system Zone answers what it owes");
+        assert!(
+            !recovery.has_outstanding(),
+            "the Zone owes nothing once the seed has published: {recovery:?}"
+        );
     }
 
     /// The `Provider` row the seeded self-binding's subject resolves through.
@@ -6155,8 +7064,11 @@ HOST_EFFECTS_SERVICE.id,
         let uid = d2b_resource_runtime::manager::deterministic_uid(&key);
         let store =
             SpecStore::open(ResourcePlaneV3::spec_store_path(&inputs.spec_store_dir)).expect("store");
+        // No broker in this fixture: the recording publisher fences and
+        // accepts what the store publishes.
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
         store
-           .ensure(StoredDesiredResource {
+           .publish(d2b_resource_runtime::DesiredMutation::Ensure(StoredDesiredResource {
                 uid,
                 key,
                 generation: 1,
@@ -6166,7 +7078,7 @@ HOST_EFFECTS_SERVICE.id,
                 spec: b"{}".to_vec(),
                 metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
                 created_at: 0,
-            })
+            }), publisher.as_ref())
            .await
            .expect("provider row committed");
         drop(store);
@@ -6223,7 +7135,6 @@ HOST_EFFECTS_SERVICE.id,
             ResourceVerb,
         };
 
-        let command = "virtiofsd-worker";
         let (_dir, mut inputs, _readiness) = test_inputs();
         // The readers resolve the Zone the seed homes its rows under: two
         // declarations of the reserved name would put the commit and the read
@@ -6233,7 +7144,7 @@ HOST_EFFECTS_SERVICE.id,
             d2b_contracts::identity::SYSTEM_ZONE_NAME,
             "the seed homes its rows in the Zone the readers select",
         );
-        let declarations = seeded_declarations(command);
+        let declarations = crate::foundation_seed::core_declarations();
         let provider_ref = declarations
            .providers
            .first()
@@ -6280,20 +7191,6 @@ HOST_EFFECTS_SERVICE.id,
                    .collect::<Vec<_>>(),
             );
         }
-        // The declared command and the operation it materialized are read back
-        // by reference, the shape an invocation resolves them in.
-        let declared = [
-            format!("Command/{command}"),
-            format!("Operation/process-run-{command}"),
-        ];
-        for reference in &declared {
-            let target = ResourceRef::parse(reference).expect("resource reference");
-            let row = crate::resource_runtime::bridge_manager_row(&view, &target)
-               .await
-               .expect("row read")
-               .unwrap_or_else(|| panic!("the read path resolves {reference}"));
-            assert_eq!(row.zone.as_str(), crate::foundation_seed::SYSTEM_ZONE);
-        }
         // The self-binding's subject resolves through the same read, so the
         // binding is not dropped as unresolved.
         let fingerprints =
@@ -6312,7 +7209,8 @@ HOST_EFFECTS_SERVICE.id,
         );
 
         // The compiled policy installs the grant the chain exists for: the
-        // self-bound provider creates the operation its command materialized.
+        // self-bound provider creates Operation rows. The seeded role narrows
+        // the grant to the `create` subresource and names no resource.
         let snapshot = d2bd_runtime::resource_runtime_support::initial_policy_snapshot()
            .expect("bootstrap snapshot");
         let (policy, state) =
@@ -6337,12 +7235,9 @@ HOST_EFFECTS_SERVICE.id,
                         "Operation".to_owned(),
                     )
                    .expect("operation type"),
-                    resource_name: Some(
-                        ResourceName::parse(format!("process-run-{command}"))
-                           .expect("operation name"),
-                    ),
+                    resource_name: None,
                     verb: ResourceVerb::Create,
-                    subresource: None,
+                    subresource: Some("create".to_owned()),
                     execution_ref: None,
                 }],
             },
@@ -6685,8 +7580,12 @@ HOST_EFFECTS_SERVICE.id,
            .iter()
            .map(|name| ResourceKey::new("test", "Volume", *name))
            .collect();
+        // One publisher for the whole Zone: a Zone has at most one outstanding
+        // publication transaction, so three publishers would refuse two of
+        // these rows rather than commit them.
+        let publisher = d2b_resource_runtime::test_support::RecordingPublisher::new();
         for key in &keys[..2] {
-            commit_volume_row(&rig.store, key).await;
+            commit_volume_row_with(&rig.store, key, publisher.as_ref()).await;
         }
         let state = Arc::new(AnchorSubscriptionState::default());
         let task = spawn_subscription(&rig, &state, rig.hub.snapshot_revision());
@@ -6721,8 +7620,33 @@ HOST_EFFECTS_SERVICE.id,
                 source: ChangeSource::Desired,
             })
            .await;
-        commit_volume_row(&rig.store, &keys[2]).await;
+        // The Missed that ends this live phase is proved by the recovery
+        // reload that follows it, so the third row is committed after that
+        // reload rather than racing it: a row committed while the reload was
+        // already reading would prove nothing about a row committed between
+        // two streams.
         wait_for(|| state.relists.load(Ordering::Relaxed) >= 1).await;
+        commit_volume_row_with(&rig.store, &keys[2], publisher.as_ref()).await;
+        // Now the row is durable with no notice naming it. Ending the live
+        // phase again is what makes the next recovery reload the only path
+        // that can register it.
+        rig.hub
+           .publish(ChangeNotice {
+                key: keys[0].clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        rig.hub
+           .publish(ChangeNotice {
+                key: keys[1].clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        let third = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&keys[2]))
+            .expect("uid");
+        wait_for(|| rig.registry.lookup_anchor(&third).is_some()).await;
         for key in &keys {
             let uid = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(key)).expect("uid");
             assert!(rig.registry.lookup_anchor(&uid).is_some(), "the relist rebuild reflects row {key}");
@@ -7034,4 +7958,750 @@ HOST_EFFECTS_SERVICE.id,
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Production-path coverage for the Guest runtime Providers.
+    //
+    // The plane registers one `Guest` driver for four runtime Providers, and
+    // which Provider serves a row is decided from that row's own
+    // `spec.providerRef`. Nothing outside that split names it, so a Provider
+    // whose branch stopped being taken would leave the row converging as some
+    // other Provider - or not at all - with no failure anywhere. Each test
+    // below starts the plane's own provider set (the `provider_set`
+    // composition the daemon runs), takes the `Guest` driver and the `Guest`
+    // decoder that set registered, and drives stored rows through them, so the
+    // assertions are the composed driver's own behavior.
+    // -----------------------------------------------------------------------
+
+    use d2b_provider_guest::driver::{GUEST_REGISTRATIONS, GuestKind};
+    use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
+    use d2b_resource_runtime::ResourceStatus;
+    use d2b_resource_runtime::context::{ResourceContext, SpecDecoder};
+    use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
+
+    /// The Provider reference one runtime-Provider row of the Guest family's
+    /// own table names.
+    fn runtime_provider_ref(kind: GuestKind) -> &'static str {
+        GUEST_REGISTRATIONS[kind.index()].provider_ref
+    }
+
+    /// The uid the Guest rows these passes drive, and the uid the composed
+    /// driver commits their children under.
+    const GUEST_ROW_UID: [u8; 16] = [
+        0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x41, 0x11, 0x81, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+        0x11,
+    ];
+    /// The `Guest` row name the runtime-Provider passes below drive.
+    const GUEST_ROW_NAME: &str = "worker";
+
+    /// The `Guest` driver factory and spec decoder, as the plane's production
+    /// composition registered them.
+    async fn production_guest_driver(
+        inputs: &ConstructionInputs,
+    ) -> (Arc<dyn ResourceDriverFactory>, Arc<dyn SpecDecoder>) {
+        let mut runtime = ResourcePlaneV3::start_providers(inputs)
+            .await
+            .expect("the production composition starts its providers");
+        let directory = runtime.take_directory();
+        let type_name = d2b_resource_types::WellKnownType::GUEST.to_resource_type_name();
+        let factory = directory
+            .lookup(&type_name)
+            .expect("the production composition registers the Guest type");
+        let decoder = directory
+            .decoders()
+            .get(&type_name)
+            .cloned()
+            .expect("the production composition registers the Guest decoder");
+        runtime.drain().await.expect("the providers drain");
+        (factory, decoder)
+    }
+
+    fn stored_row(type_name: &str, name: &str, spec: serde_json::Value) -> StoredDesiredResource {
+        StoredDesiredResource {
+            key: ResourceKey::new("test", type_name, name),
+            uid: GUEST_ROW_UID,
+            generation: 1,
+            owner_uid: None,
+            provenance: ResourceProvenance::Nix,
+            deleting: false,
+            spec: serde_json::to_vec(&spec).expect("canonical spec bytes"),
+            metadata: br#"{"ownerRef":null,"labels":{},"annotations":{}}"#.to_vec(),
+            created_at: 0,
+        }
+    }
+
+    /// The child surface the composed driver commits through: the manager
+    /// double, keyed into the plane's own zone, with the row's uid as the
+    /// owner its committed children carry.
+    fn guest_manager() -> Arc<RecordingManagerEndpoint> {
+        Arc::new(
+            RecordingManagerEndpoint::new()
+                .with_zone("test")
+                .with_owner_uid(GUEST_ROW_UID),
+        )
+    }
+
+    fn guest_context(
+        row: StoredDesiredResource,
+        decoder: Arc<dyn SpecDecoder>,
+        manager: Arc<RecordingManagerEndpoint>,
+    ) -> ResourceContext {
+        let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
+        ResourceContext::new(
+            row,
+            decoder,
+            manager,
+            Arc::new(RecordingRequeue::default()),
+            effects_tx,
+            notify_tx,
+        )
+    }
+
+    /// The committed children of the driven row, read back through the
+    /// family's own child surface.
+    async fn committed_children(
+        ctx: &mut ResourceContext,
+    ) -> Vec<(String, serde_json::Value)> {
+        ctx.children()
+            .await
+            .expect("the manager answers the owned set")
+            .into_iter()
+            .map(|row| {
+                (
+                    format!("{}/{}", row.key.type_name, row.key.name),
+                    serde_json::from_slice(&row.spec).expect("committed child spec decodes"),
+                )
+            })
+            .collect()
+    }
+
+    /// The Plane inputs whose Guest effects service is built over a scripted
+    /// facet set seeded for the runtime Providers the test drives: the plane's
+    /// own controller generation, a committed identity per driven Provider row,
+    /// and one enrolled controller-session generation.
+    ///
+    /// The three are the runtime fence the family's effects validate before
+    /// any Provider work runs, so without them the effects refuse the row
+    /// before the runtime branch is ever taken.
+    async fn production_guest_inputs(
+        provider_refs: &[&str],
+    ) -> (
+        tempfile::TempDir,
+        ConstructionInputs,
+        Arc<NewPlaneReadinessState>,
+        Arc<d2b_provider_guest::test_support::ScriptedFacets>,
+    ) {
+        let scripted = d2b_provider_guest::test_support::ScriptedFacets::new();
+        for (index, provider_ref) in provider_refs.iter().enumerate() {
+            scripted.add_committed_provider(
+                d2b_contracts_resource::v3::ResourceRef::parse(provider_ref)
+                    .expect("typed provider reference"),
+                d2b_contracts_resource::v3::ResourceUid::parse(format!(
+                    "00000000-0000-4000-8000-0000000000{index:02x}"
+                ))
+                .expect("bounded resource uid"),
+                d2b_contracts_resource::v3::ResourceGeneration::new(1)
+                    .expect("bounded generation"),
+            );
+        }
+        scripted.set_session_generation(Some(
+            d2b_contracts_resource::v3::identity::ReconnectGeneration::new(1)
+                .expect("bounded reconnect generation"),
+        ));
+        for provider_ref in provider_refs {
+            let name = provider_ref
+                .strip_prefix("Provider/")
+                .expect("a runtime Provider reference");
+            scripted
+                .add_row(d2b_provider_guest::test_support::row_fixture(
+                    "test",
+                    "Provider",
+                    name,
+                    serde_json::json!({}),
+                    ResourceStatus::Ready,
+                ))
+                .await;
+        }
+        let inputs = test_inputs_with_guest_facets(d2b_provider_guest::facets::GuestEffectFacets {
+            zone: ZoneId::parse("test").expect("bounded zone"),
+            controller_generation: ControllerGeneration::new(1)
+                .expect("bounded controller generation"),
+            manager: Arc::clone(&scripted)
+                as Arc<dyn d2b_provider_guest::facets::GuestManagerView>,
+            cloud_hypervisor: Arc::clone(&scripted)
+                as Arc<dyn d2b_provider_guest::facets::CloudHypervisorGuestRuntime>,
+        });
+        (inputs.0, inputs.1, inputs.2, scripted)
+    }
+
+    /// The Cloud Hypervisor runtime Provider: the composed driver's effects
+    /// reach this Zone's Cloud Hypervisor controller session for the row, and
+    /// the kind commits no manager children (its fixed child roles belong to
+    /// the controller session).
+    ///
+    /// The facet set is the value the composition root builds the family's
+    /// effects service from, so the recorded calls are the composed driver's
+    /// own: the target session it establishes and the controller reconcile it
+    /// drives.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_guest_driver_drives_the_cloud_hypervisor_controller_session() {
+        let (_dir, inputs, _readiness, scripted) = production_guest_inputs(&[
+            runtime_provider_ref(GuestKind::CloudHypervisor),
+        ])
+        .await;
+        let (factory, decoder) = production_guest_driver(&inputs).await;
+
+        let manager = guest_manager();
+        manager.add(
+            stored_row("Provider", "runtime-cloud-hypervisor", serde_json::json!({})),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = guest_context(
+            stored_row(
+                "Guest",
+                GUEST_ROW_NAME,
+                serde_json::json!({
+                    "providerRef": runtime_provider_ref(GuestKind::CloudHypervisor),
+                }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver reconciles the Cloud Hypervisor row");
+
+        let calls = scripted.call_order();
+        assert!(
+            calls.contains(&"ensure-session:Guest/worker".to_owned()),
+            "the composed driver established no Cloud Hypervisor target session: {calls:?}"
+        );
+        assert!(
+            calls.contains(&"reconcile-ch:Guest/worker".to_owned()),
+            "the composed driver never reached the Cloud Hypervisor controller: {calls:?}"
+        );
+        assert_eq!(
+            committed_children(&mut ctx).await,
+            Vec::new(),
+            "the Cloud Hypervisor kind commits no manager children: its fixed child roles \
+             belong to the controller session"
+        );
+    }
+
+    /// The qemu-media runtime Provider: the composed driver materializes the
+    /// runtime Volume and the qemu worker Process the qemu-media Provider
+    /// derives, and the Process spec is that Provider's own worker template
+    /// over the committed execution reference and runtime mount.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_guest_driver_commits_the_qemu_media_runtime_children() {
+        let (_dir, inputs, _readiness, _scripted) =
+            production_guest_inputs(&[runtime_provider_ref(GuestKind::QemuMedia)]).await;
+        let (factory, decoder) = production_guest_driver(&inputs).await;
+        let manager = guest_manager();
+        manager.add(
+            stored_row(
+                "Provider",
+                "runtime-qemu-media",
+                serde_json::json!({
+                    "config": serde_json::to_value(
+                        d2b_provider_guest_qemu_media::ProviderConfig::new(
+                            "Host/host-system",
+                            "qemu-system-x86-64",
+                            "Provider/network-local",
+                            "Provider/volume-local",
+                            None,
+                        )
+                        .expect("qemu provider config"),
+                    )
+                    .expect("provider config document"),
+                }),
+            ),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = guest_context(
+            stored_row(
+                "Guest",
+                GUEST_ROW_NAME,
+                serde_json::json!({
+                    "providerRef": runtime_provider_ref(GuestKind::QemuMedia),
+                }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver reconciles the qemu-media row");
+
+        assert_eq!(
+            manager.ensure_order(),
+            vec![
+                "ensure:Volume/worker-runtime".to_owned(),
+                "ensure:Process/worker-qemu".to_owned(),
+            ],
+            "the qemu-media kind commits the runtime Volume before the Process that consumes it"
+        );
+        let children = committed_children(&mut ctx).await;
+        let volume = &children
+            .iter()
+            .find(|(key, _)| key == "Volume/worker-runtime")
+            .expect("the runtime Volume child")
+            .1;
+        assert_eq!(volume["providerRef"], "Provider/volume-local");
+        assert_eq!(volume["kind"], "ephemeral");
+        let process = &children
+            .iter()
+            .find(|(key, _)| key == "Process/worker-qemu")
+            .expect("the qemu worker Process child")
+            .1;
+        assert_eq!(
+            process["sandbox"]["seccompClass"], "qemu-media-runner",
+            "the worker Process is the qemu-media Provider's own seccomp template"
+        );
+        assert_eq!(process["processClass"], "worker");
+        assert_eq!(process["providerRef"], "Provider/system-minijail");
+        assert_eq!(process["executionRef"], "Host/host-system");
+        assert_eq!(
+            process["mounts"][0]["volumeRef"], "Volume/worker-runtime",
+            "the worker mounts the runtime Volume the pass committed first"
+        );
+        assert_eq!(process["mounts"][0]["mountPath"], "/run/qemu");
+        assert_eq!(process["mounts"][0]["access"], "read-write");
+    }
+
+    /// The two Azure runtime Providers take different branches of the same
+    /// composed driver: azure-container-apps owns the sandbox-agent control
+    /// Endpoint its provider identity serves, and azure-virtual-machine
+    /// realizes itself through no manager child at all. A row dispatched to
+    /// the wrong branch would swap those two outcomes.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_guest_driver_separates_the_two_azure_runtime_providers() {
+        let (_dir, inputs, _readiness, _scripted) = production_guest_inputs(&[
+            runtime_provider_ref(GuestKind::AzureContainerApps),
+            runtime_provider_ref(GuestKind::AzureVirtualMachine),
+        ])
+        .await;
+        let (factory, decoder) = production_guest_driver(&inputs).await;
+
+        let container_apps = guest_manager();
+        container_apps.add(
+            stored_row(
+                "Provider",
+                "runtime-azure-container-apps",
+                serde_json::json!({
+                    "config": runtime_provider_ref(GuestKind::AzureContainerApps),
+                }),
+            ),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = guest_context(
+            stored_row(
+                "Guest",
+                GUEST_ROW_NAME,
+                serde_json::json!({
+                    "providerRef": runtime_provider_ref(GuestKind::AzureContainerApps),
+                }),
+            ),
+            Arc::clone(&decoder),
+            Arc::clone(&container_apps),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        let _ = driver.reconcile(&mut ctx).await;
+        let children = committed_children(&mut ctx).await;
+        let control = children
+            .iter()
+            .find(|(key, _)| key == "Endpoint/worker-sandbox-agent")
+            .map(|(_, spec)| spec.clone())
+            .expect("the azure-container-apps kind commits its sandbox-agent control Endpoint");
+        assert_eq!(
+            control["providerRef"],
+            runtime_provider_ref(GuestKind::AzureContainerApps)
+        );
+        assert_eq!(control["endpointClass"], "control");
+        assert_eq!(control["purpose"], "aca-sandbox-agent");
+        assert_eq!(
+            control["consumerPolicy"]["allowedSubjects"],
+            serde_json::json!([runtime_provider_ref(GuestKind::AzureContainerApps)]),
+            "the control Endpoint admits exactly its own Provider identity"
+        );
+
+        let virtual_machine = guest_manager();
+        virtual_machine.add(
+            stored_row(
+                "Provider",
+                "runtime-azure-virtual-machine",
+                serde_json::json!({}),
+            ),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = guest_context(
+            stored_row(
+                "Guest",
+                GUEST_ROW_NAME,
+                serde_json::json!({
+                    "providerRef": runtime_provider_ref(GuestKind::AzureVirtualMachine),
+                }),
+            ),
+            Arc::clone(&decoder),
+            Arc::clone(&virtual_machine),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        let _ = driver.reconcile(&mut ctx).await;
+        assert_eq!(
+            virtual_machine.ensure_order(),
+            Vec::<String>::new(),
+            "the azure-virtual-machine kind realizes itself through no manager child"
+        );
+        assert_eq!(
+            committed_children(&mut ctx).await,
+            Vec::new(),
+            "the azure-virtual-machine kind committed the container-apps control Endpoint"
+        );
+    }
+
+    /// A Guest row whose `providerRef` names a Provider this family does not
+    /// own is refused by the composed driver, not guessed onto one of the four
+    /// runtime branches.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_guest_driver_refuses_a_provider_the_family_does_not_own() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let (factory, decoder) = production_guest_driver(&inputs).await;
+        let manager = guest_manager();
+        let mut ctx = guest_context(
+            stored_row(
+                "Guest",
+                GUEST_ROW_NAME,
+                serde_json::json!({ "providerRef": "Provider/volume-local" }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        let failure = driver
+            .reconcile(&mut ctx)
+            .await
+            .expect_err("a Provider the Guest family does not own is refused");
+        assert!(failure.to_string().contains("providerRef"), "{failure}");
+        assert_eq!(
+            manager.ensure_order(),
+            Vec::<String>::new(),
+            "a refused row commits nothing"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Production-path coverage for the telemetry rows.
+    //
+    // The plane wires the two telemetry types through the per-type
+    // declarations below the generated registration table rather than through
+    // it, so nothing in the generated closure names them and a family that
+    // stopped being wired would leave both rows unserved with no failure
+    // anywhere. These tests take the drivers that wiring registered and drive
+    // stored rows through them.
+    // -----------------------------------------------------------------------
+
+    /// The driver factory and spec decoder one resource type's production
+    /// registration served.
+    async fn production_driver_for(
+        inputs: &ConstructionInputs,
+        type_name: &str,
+    ) -> (Arc<dyn ResourceDriverFactory>, Arc<dyn SpecDecoder>) {
+        let mut runtime = ResourcePlaneV3::start_providers(inputs)
+            .await
+            .expect("the production composition starts its providers");
+        let directory = runtime.take_directory();
+        let name = ResourceTypeName::new(type_name);
+        let factory = directory
+            .lookup(&name)
+            .unwrap_or_else(|| panic!("the production composition registers {type_name}"));
+        let decoder = directory
+            .decoders()
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| panic!("the production composition decodes {type_name}"));
+        runtime.drain().await.expect("the providers drain");
+        (factory, decoder)
+    }
+
+    fn telemetry_context(
+        row: StoredDesiredResource,
+        decoder: Arc<dyn SpecDecoder>,
+        manager: Arc<RecordingManagerEndpoint>,
+    ) -> ResourceContext {
+        let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
+        ResourceContext::new(
+            row,
+            decoder,
+            manager,
+            Arc::new(RecordingRequeue::default()),
+            effects_tx,
+            notify_tx,
+        )
+    }
+
+    /// The `TelemetryBinding` row the production-registered driver realizes:
+    /// the Serving Provider's own collector Process and its ingest Endpoint,
+    /// named by that Provider's declared child set.
+    ///
+    /// The Service row the Binding admits must itself be observed Ready
+    /// through the manager, so an absent or unready Service leaves the row
+    /// fenced with no child committed.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_telemetry_binding_driver_materializes_the_serving_provider_children() {
+        const BINDING_TYPE: &str = "telemetry.d2bus.org.TelemetryBinding";
+        const SERVICE_TYPE: &str = "telemetry.d2bus.org.TelemetryService";
+        let (_dir, inputs, _readiness) = test_inputs();
+        let (factory, decoder) = production_driver_for(&inputs, BINDING_TYPE).await;
+
+        let manager = Arc::new(
+            RecordingManagerEndpoint::new()
+                .with_zone("test")
+                .with_owner_uid(GUEST_ROW_UID),
+        );
+        manager.add(
+            stored_row(
+                SERVICE_TYPE,
+                "ingest",
+                serde_json::json!({
+                    "providerRef": "Provider/observability-otel",
+                    "serviceRole": "authority",
+                    "ingestEndpointRefs": ["Endpoint/ingest"],
+                    "signals": ["metrics"],
+                    "quota": {},
+                    "policy": {},
+                }),
+            ),
+            ResourceStatus::Ready,
+        );
+        manager.add(
+            stored_row("Zone", "test", serde_json::json!({})),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = telemetry_context(
+            stored_row(
+                BINDING_TYPE,
+                "metrics",
+                serde_json::json!({
+                    "providerRef": "Provider/observability-otel",
+                    "serviceRef": format!("{SERVICE_TYPE}/ingest"),
+                    "producerRef": "Zone/test",
+                }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver reconciles the telemetry Binding row");
+
+        let children = committed_children(&mut ctx).await;
+        let endpoint = children
+            .iter()
+            .find(|(key, _)| key.starts_with("Endpoint/"))
+            .map(|(key, spec)| (key.clone(), spec.clone()))
+            .expect("the collector's ingest Endpoint child");
+        assert!(
+            endpoint.0.ends_with("-ingest-endpoint"),
+            "the Endpoint child is the Serving Provider's declared ingest endpoint: {}",
+            endpoint.0
+        );
+        assert_eq!(
+            endpoint.1["providerRef"], "Provider/observability-otel",
+            "the ingest Endpoint is served by the telemetry Serving Provider"
+        );
+        assert_eq!(endpoint.1["endpointClass"], "service");
+        assert_eq!(endpoint.1["purpose"], "ingest-endpoint");
+        let collector = children
+            .iter()
+            .find(|(key, _)| key.starts_with("Process/"))
+            .map(|(key, spec)| (key.clone(), spec.clone()))
+            .expect("the collector Process child");
+        assert!(
+            collector.0.ends_with("-collector"),
+            "the Process child is the Serving Provider's declared collector: {}",
+            collector.0
+        );
+        assert_eq!(
+            collector.1["providerRef"], "Provider/system-minijail",
+            "the collector is launched by the Process controller under the minijail Provider"
+        );
+        assert_eq!(
+            collector.1["executionRef"], "Host/host-system",
+            "the collector runs on the host the Serving Provider declares"
+        );
+    }
+
+    /// A Service the Serving Provider has not made Ready admits no ingest
+    /// route, so the composed Binding driver fences instead of committing a
+    /// collector whose endpoint relationship was never admitted.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_telemetry_binding_driver_fences_on_an_unadmitted_service() {
+        const BINDING_TYPE: &str = "telemetry.d2bus.org.TelemetryBinding";
+        const SERVICE_TYPE: &str = "telemetry.d2bus.org.TelemetryService";
+        let (_dir, inputs, _readiness) = test_inputs();
+        let (factory, decoder) = production_driver_for(&inputs, BINDING_TYPE).await;
+
+        let manager = Arc::new(
+            RecordingManagerEndpoint::new()
+                .with_zone("test")
+                .with_owner_uid(GUEST_ROW_UID),
+        );
+        manager.add(
+            stored_row(
+                SERVICE_TYPE,
+                "ingest",
+                serde_json::json!({
+                    "providerRef": "Provider/observability-otel",
+                    "serviceRole": "authority",
+                    "ingestEndpointRefs": ["Endpoint/ingest"],
+                    "signals": ["metrics"],
+                    "quota": {},
+                    "policy": {},
+                }),
+            ),
+            ResourceStatus::Pending,
+        );
+        manager.add(
+            stored_row("Zone", "test", serde_json::json!({})),
+            ResourceStatus::Ready,
+        );
+        let mut ctx = telemetry_context(
+            stored_row(
+                BINDING_TYPE,
+                "metrics",
+                serde_json::json!({
+                    "providerRef": "Provider/observability-otel",
+                    "serviceRef": format!("{SERVICE_TYPE}/ingest"),
+                    "producerRef": "Zone/test",
+                }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver fences the row");
+        assert_eq!(
+            manager.ensure_order(),
+            Vec::<String>::new(),
+            "an unadmitted Service admits no ingest route, so no collector is materialized"
+        );
+    }
+
+    /// The `TelemetryService` row: a projection Service publishes its own
+    /// Ready projection from the composed driver, without reading any
+    /// dependency the ResourceContext surface cannot answer.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_telemetry_service_driver_publishes_the_projection_phase() {
+        const SERVICE_TYPE: &str = "telemetry.d2bus.org.TelemetryService";
+        let (_dir, inputs, _readiness) = test_inputs();
+        let (factory, decoder) = production_driver_for(&inputs, SERVICE_TYPE).await;
+
+        let manager = Arc::new(
+            RecordingManagerEndpoint::new()
+                .with_zone("test")
+                .with_owner_uid(GUEST_ROW_UID),
+        );
+        let mut ctx = telemetry_context(
+            stored_row(
+                SERVICE_TYPE,
+                "edge",
+                serde_json::json!({
+                    "providerRef": "Provider/observability-otel",
+                    "serviceRole": "projection",
+                    "ingestEndpointRefs": ["Endpoint/edge"],
+                    "signals": ["traces"],
+                    "quota": {},
+                    "policy": {},
+                }),
+            ),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver reconciles the telemetry Service row");
+        let status = ctx
+            .status::<d2b_provider_telemetry_service::TelemetryServiceStatus>()
+            .expect("the composed driver published the Service status");
+        assert_eq!(
+            status.phase,
+            d2b_provider_telemetry_service::TelemetryServicePhase::Ready,
+            "a projection Service needs no ingest route to be Ready"
+        );
+        assert_eq!(
+            manager.ensure_order(),
+            Vec::<String>::new(),
+            "a Service realizes nothing on a target, so the pass commits no child"
+        );
+    }
+
+
+    // -----------------------------------------------------------------------
+    // Production-path coverage for the display Wayland policy row.
+    //
+    // The display rows carry no Provider selector and no resource children,
+    // so the only thing that decides which family branch a row takes is the
+    // `InteractionType` the composition built its descriptor over. A policy
+    // row wired to the session branch would report Pending against a
+    // dependency set it never declares, with no failure anywhere; a session
+    // row wired to the policy branch would report Ready while realizing
+    // nothing.
+    // -----------------------------------------------------------------------
+
+    /// The composed display policy driver publishes the family's own Ready
+    /// projection and mutates no row.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_production_wayland_policy_driver_publishes_its_own_family_projection() {
+        const POLICY_TYPE: &str = "display-wayland.d2bus.org.WaylandPolicy";
+        let (_dir, inputs, _readiness) = test_inputs();
+        let (factory, decoder) = production_driver_for(&inputs, POLICY_TYPE).await;
+
+        let manager = Arc::new(
+            RecordingManagerEndpoint::new()
+                .with_zone("test")
+                .with_owner_uid(GUEST_ROW_UID),
+        );
+        let mut ctx = telemetry_context(
+            stored_row(POLICY_TYPE, "default", serde_json::json!({})),
+            decoder,
+            Arc::clone(&manager),
+        );
+        let mut driver = factory.create(ctx.key()).await;
+        driver
+            .reconcile(&mut ctx)
+            .await
+            .expect("the composed driver reconciles the display policy row");
+        let status = ctx
+            .status::<d2b_provider_wayland_policy::interaction::InteractionDriverStatus>()
+            .expect("the composed driver published the row status");
+        assert!(
+            status.ready,
+            "a display policy row reaches its own family branch, which realizes nothing and              reports Ready"
+        );
+        assert_eq!(
+            manager.ensure_order(),
+            Vec::<String>::new(),
+            "a display policy row realizes no resource children"
+        );
+    }
 }

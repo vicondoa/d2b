@@ -304,7 +304,7 @@ fn checked_in_contexts_are_nonempty_and_structurally_valid() {
     let paths = closure_paths();
     assert_eq!(
         paths.len(),
-        12,
+        10,
         "expected both systems and all production contexts"
     );
     for path in paths {
@@ -435,9 +435,12 @@ fn target_cfg_and_feature_contexts_are_not_collapsed() {
             closure["features"].to_string(),
         ));
     }
-    assert!(contexts.iter().any(|(_, _, name, features)| {
-        *name == "broker-layer1-bootstrap-tests" && features.contains("layer1-bootstrap")
-    }));
+    assert!(
+        contexts
+            .iter()
+            .any(|(_, _, name, features)| *name == "broker-fake-backends-tests"
+                && features.contains("fake-backends"))
+    );
     assert!(
         contexts
             .iter()

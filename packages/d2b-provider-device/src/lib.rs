@@ -15,6 +15,7 @@
 
 #![deny(missing_docs)]
 
+pub mod binding;
 mod driver;
 pub mod effects_service;
 pub mod facets;
@@ -22,8 +23,18 @@ pub mod facets;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
+pub use binding::{
+    BindingProduction, BindingProductionError, BindingProductionRefusal, DEVICE_BINDING_TYPE_NAME,
+    DeviceBindingDriver, DeviceBindingDriverArgs, DeviceBindingDriverFactory,
+    DeviceBindingDriverStatus, DeviceBindingEffects, DeviceBindingEffectsService,
+    DeviceBindingEvidence, DeviceBindingRow, DeviceDeclaredBindings, UnattachedReason,
+    binding_operation_id, binding_row_name, capability_backed, decide_presence,
+    device_attachment_support, device_binding_descriptor, device_binding_spec_decoder,
+    produce_binding_rows,
+};
 pub use driver::{
     DEVICE_REGISTRATIONS, DEVICE_RESYNC, DEVICE_TYPE_NAME, DeviceComponent, DeviceDriverArgs,
     DeviceDriverEffects, DeviceResourceState, GPU_CONTROLLER_REF, SECURITY_KEY_CONTROLLER_REF,
-    TPM_CONTROLLER_REF, USBIP_CONTROLLER_REF, declared_dependency_refs, device_descriptor,
+    TPM_CONTROLLER_REF, USBIP_CONTROLLER_REF, component_for_provider, declared_dependency_refs,
+    declared_device_functions, device_descriptor, device_effect_operations,
 };

@@ -2,7 +2,6 @@ use crate::environment::{EnvironmentError, ManagerEnvironment};
 use crate::runtime::hex;
 use d2b_contracts_control::unsafe_local_wire::{HelperScopeKind, HelperScopeState, ScopeIdentity};
 use std::fmt;
-use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use zbus::blocking::{Connection, Proxy, connection};
@@ -129,6 +128,15 @@ impl SystemdUserScopeManager {
         unit_name: &str,
         kind: HelperScopeKind,
     ) -> Result<(VerifiedScope, HelperScopeState), ScopeError> {
+        // A scope this helper would not have minted is never adopted, and
+        // therefore never stopped either. The name is minted here from a
+        // prefix the family owns and a random suffix, so a name from a
+        // tampered ledger or a forged frame is refused before any manager
+        // call - a foreign unit in the same user manager is not ours to
+        // touch.
+        if !is_own_scope_name(unit_name, kind) {
+            return Err(ScopeError::IdentityMismatch);
+        }
         let manager = Self::manager_proxy(connection)?;
         let unit_path: OwnedObjectPath = manager
             .call("GetUnit", &(unit_name))
@@ -154,7 +162,7 @@ impl SystemdUserScopeManager {
         let control_group: String = scope_unit
             .get_property("ControlGroup")
             .map_err(map_query_error)?;
-        if !control_group_matches_unit(&control_group, unit_name) {
+        if !control_group_is_own_scope(&control_group, unit_name) {
             return Err(ScopeError::IdentityMismatch);
         }
         let active_state: String = unit.get_property("ActiveState").map_err(map_query_error)?;
@@ -367,41 +375,127 @@ where
     }
 }
 
-fn scope_unit_name(kind: HelperScopeKind) -> Result<String, ScopeError> {
-    let prefix = match kind {
+/// The unit-name prefix one scope kind is minted under.
+fn scope_name_prefix(kind: HelperScopeKind) -> &'static str {
+    match kind {
         HelperScopeKind::LauncherApp => "app",
         HelperScopeKind::WaylandProxy => "proxy",
-    };
-    let mut random = [0u8; 16];
-    getrandom::getrandom(&mut random).map_err(|_| ScopeError::CreateFailed)?;
-    Ok(format!("d2b-unsafe-local-{prefix}-{}.scope", hex(&random)))
+    }
 }
 
-fn control_group_matches_unit(control_group: &str, unit_name: &str) -> bool {
-    !control_group.is_empty()
-        && control_group.starts_with('/')
-        && Path::new(control_group)
-            .file_name()
-            .and_then(|name| name.to_str())
-            == Some(unit_name)
+fn scope_unit_name(kind: HelperScopeKind) -> Result<String, ScopeError> {
+    let mut random = [0u8; 16];
+    getrandom::getrandom(&mut random).map_err(|_| ScopeError::CreateFailed)?;
+    Ok(format!(
+        "d2b-unsafe-local-{}-{}.scope",
+        scope_name_prefix(kind),
+        hex(&random)
+    ))
+}
+
+/// Whether `unit_name` is a name this family mints for `kind`.
+///
+/// The name is `d2b-unsafe-local-<kind>-<32 hex>.scope`, and nothing else
+/// qualifies. A scope in the same user manager that this helper did not mint
+/// is foreign: it is never reported as one of ours, never adopted, and never
+/// stopped, whatever a persisted ledger or a frame claims about it.
+fn is_own_scope_name(unit_name: &str, kind: HelperScopeKind) -> bool {
+    let Some(suffix) = unit_name.strip_prefix(&format!(
+        "d2b-unsafe-local-{}",
+        scope_name_prefix(kind)
+    )) else {
+        return false;
+    };
+    match suffix.split_once('-') {
+        Some((middle, tail)) => {
+            middle.is_empty()
+                && tail.len() == 32 + ".scope".len()
+                && tail.ends_with(".scope")
+                && tail[..32].bytes().all(|byte| byte.is_ascii_hexdigit())
+        }
+        None => false,
+    }
+}
+
+/// Whether the observed control group is this family's own placement of
+/// `unit_name`.
+///
+/// The scope has to sit directly in the `app.slice` the family requests, and
+/// its leaf has to be exactly the unit. A scope placed in any other slice of
+/// the same user manager is foreign even when its leaf happens to match, and
+/// the rule reads the placement rather than the unit name so a renamed or
+/// re-slice'd unit cannot pass as this family's own.
+fn control_group_is_own_scope(control_group: &str, unit_name: &str) -> bool {
+    if control_group.is_empty() || !control_group.starts_with('/') {
+        return false;
+    }
+    let components: Vec<&str> = control_group
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect();
+    components.len() >= 2
+        && components[components.len() - 1] == unit_name
+        && components[components.len() - 2] == "app.slice"
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const OWN_SCOPE: &str = "d2b-unsafe-local-app-0123456789abcdef0123456789abcdef.scope";
+
     #[test]
     fn cgroup_identity_requires_exact_scope_leaf() {
-        let unit = "d2b-unsafe-local-app-0123456789abcdef.scope";
-        assert!(control_group_matches_unit(
-            &format!("/user.slice/user-1000.slice/user@1000.service/app.slice/{unit}"),
-            unit
+        assert!(control_group_is_own_scope(
+            &format!("/user.slice/user-1000.slice/[EMAIL]/app.slice/{OWN_SCOPE}"),
+            OWN_SCOPE
         ));
-        assert!(!control_group_matches_unit(
-            "/user.slice/user-1000.slice/user@1000.service/app.slice/foreign.scope",
-            unit
+        assert!(!control_group_is_own_scope(
+            "/user.slice/user-1000.slice/[EMAIL]/app.slice/foreign.scope",
+            OWN_SCOPE
         ));
-        assert!(!control_group_matches_unit("", unit));
+        assert!(!control_group_is_own_scope("", OWN_SCOPE));
+    }
+
+    /// A scope this helper would not have minted is never adopted and never
+    /// stopped, whatever a persisted ledger claims about it.
+    #[test]
+    fn a_foreign_scope_name_is_not_this_helpers_own() {
+        assert!(is_own_scope_name(OWN_SCOPE, HelperScopeKind::LauncherApp));
+        assert!(!is_own_scope_name(
+            OWN_SCOPE,
+            HelperScopeKind::WaylandProxy
+        ));
+        for foreign in [
+            "d2b-unsafe-local-app-.scope",
+            "d2b-unsafe-local-app-0123456789abcdef0123456789abcde.service",
+            "d2b-unsafe-local-app-0123456789abcdef0123456789abcdefz.scope",
+            "d2b-unsafe-local-app-0123456789abcdef0123456789abcdefff.scope",
+            "d2b-unsafe-local-app-0123456789abcdef0123456789abcdef.scope.extra",
+            "app-0123456789abcdef0123456789abcdef.scope",
+            "d2b-process-0123456789abcdef0123456789abcdef.scope",
+        ] {
+            assert!(
+                !is_own_scope_name(foreign, HelperScopeKind::LauncherApp),
+                "{foreign} is not a name this family mints"
+            );
+        }
+    }
+
+    /// A scope of this user's own manager that is not in the family's own
+    /// `app.slice` placement is foreign too, even with a matching leaf.
+    #[test]
+    fn a_scope_outside_the_family_placement_is_never_adopted() {
+        for foreign in [
+            "/user.slice/user-1000.slice/[EMAIL]/background.slice/{unit}",
+            "/user.slice/user-1000.slice/[EMAIL]/{unit}",
+            "/{unit}",
+        ] {
+            assert!(
+                !control_group_is_own_scope(&foreign.replace("{unit}", OWN_SCOPE), OWN_SCOPE),
+                "{foreign} is not this family's own placement"
+            );
+        }
     }
 
     #[test]

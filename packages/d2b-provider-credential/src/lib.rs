@@ -22,9 +22,21 @@
 //! declare them, and the agent child it mints is declared as a
 //! [`ChildCreation`](d2b_resource_types::ChildCreation) under the minijail
 //! Process Provider's own exported reference.
+//!
+//! The crate also owns the `CredentialBinding` realization
+//! ([`binding`]): the source-side policy a `Credential` row admits delivery
+//! under, the typed private delivery authority that mints a delivery
+//! session only while the admitted audience, operations, component
+//! generation, dependency revisions, and lifetime still hold, and the
+//! derivation the `Credential` driver commits from together with the
+//! admission check every derived row must pass before it is committed. No
+//! credential material leaves that module: the graph spec, the generic
+//! binding status, the audit record, and the publication snapshot carry
+//! identity, policy, and state only.
 
 #![deny(missing_docs)]
 
+mod binding;
 mod driver;
 mod effects_service;
 mod facets;
@@ -33,12 +45,24 @@ mod session;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
+pub use binding::{
+    CREDENTIAL_BINDING_TYPE_NAME, CREDENTIAL_DELIVERY_SLOT, CanonicalCredentialBinding,
+    CredentialBindingAdmission, CredentialBindingCommitRefusal, CredentialBindingDriver,
+    CredentialBindingDriverArgs,
+    CredentialBindingDriverFactory, CredentialBindingDriverStatus,
+    CredentialBindingEffects, CredentialBindingEffectsService, CredentialBindingStatus,
+    CredentialDeliveryAuthority, CredentialDeliveryEvidence, CredentialDeliveryFence,
+    CredentialDeliveryLeg, CredentialDeliveryRefusal, UndeliveredReason, admitted_binding_rows,
+    admitted_delivery_row, canonical_binding_rows, credential_binding_descriptor,
+    credential_binding_row_name, credential_binding_spec_decoder, credential_binding_support,
+    credential_source_decision, delivery_operation,
+};
 pub use driver::{
     CONTROLLER_PROVIDER_GENERATION_ANNOTATION, CONTROLLER_PROVIDER_REF_ANNOTATION,
     CONTROLLER_PROVIDER_UID_ANNOTATION, CREDENTIAL_TYPE_NAME, CredentialDependencyFacts,
     CredentialDriver, CredentialDriverArgs, CredentialDriverEffects, CredentialDriverError,
-    CredentialDriverFactory, CredentialDriverStatus, CredentialLeaseFacts, credential_descriptor,
-    credential_spec_decoder,
+    CredentialDriverFactory, CredentialDriverStatus, CredentialLeaseFacts, CredentialSourcePolicy,
+    credential_descriptor, credential_spec_decoder,
 };
 pub use effects_service::{
     CREDENTIAL_EFFECTS_SERVICE, CredentialEffectsService, CredentialEffectsServiceFactory,
@@ -49,8 +73,8 @@ pub use facets::{
 };
 pub use session::{
     CredentialResourceRuntimeError, CredentialRevocationEvidence, CredentialRevocationInputs,
-    CredentialRevocationOutcome, CredentialRevocationRequest, CredentialSession,
-    credential_provider_kind, is_credential_provider_ref,
+    CredentialRevocationOutcome, CredentialRevocationReport, CredentialRevocationRequest,
+    CredentialSession, credential_provider_kind, is_credential_provider_ref,
 };
 
 /// The wire backend identity of the Entra backend Provider, as declared by

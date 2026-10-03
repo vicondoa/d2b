@@ -315,6 +315,16 @@ rec {
   d2bGuestShellServiceNode =
     { lib, pkgs, ... }:
     let
+      # The Zone this node's Guest is started for. One spelling: the graph
+      # the image delivers names it and `d2bd guest --zone` is handed it, so
+      # the Guest's own Zone gate compares the document against the same
+      # string rather than a restatement of it.
+      guestZone = "local";
+      # The one verified-graph constructor both publications use, imported
+      # here rather than reached through a Host-side publication, so this
+      # node reads the same bytes a production Guest image does.
+      deploymentBootstrap = import ../../nixos-modules/deployment-bootstrap.nix { inherit lib; };
+
       fixtureKeys = pkgs.runCommand "guest-shell-component-session-keys" { } ''
         mkdir -p "$out"
         printf '\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\040' > "$out/guest.key"
@@ -327,7 +337,6 @@ rec {
         mkdir -p "$out"
         printf '%s\n' '{"schemaVersion":"v2","site":{"allowUnsafeEastWest":false},"environments":[],"nftables":{"family":"inet","table":"d2b","chains":[],"tableHashAfterApply":null,"ownershipId":"guest-shell-service"},"networkManager":{"filePath":"/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf","matchCriteria":[],"reloadBehavior":"atomic-reload","ownership":{"owner":"root","group":"root","mode":"0644","driftPolicy":"replace"}},"hostsFile":{"startMarker":"# d2b-managed begin","endMarker":"# d2b-managed end","rule":"replace-managed-block"},"kernelModules":[],"fdOwnership":[],"cloudHypervisorCapabilities":[],"ifNameMappings":[],"ch":null,"firewallCoexistencePolicy":null}' > "$out/host.json"
         printf '%s\n' '{"schemaVersion":"v2","vms":[]}' > "$out/processes.json"
-        printf '%s\n' '{"schemaVersion":"v2","publicOperations":[],"brokerOperations":[]}' > "$out/privileges.json"
         printf '%s\n' '{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"signozUrl":"http://127.0.0.1:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"obsVsockCid":0,"obsVsockHostSocket":"","vmName":""}}' > "$out/vms.json"
         python3 - "$out/bundle.json" <<'PY'
         import hashlib
@@ -341,7 +350,6 @@ rec {
             "artifactHashes": {},
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "zones": [],
             "generation": {
                 "generatedAt": None,
@@ -375,6 +383,18 @@ rec {
             d2b.componentSession = {
               enable = lib.mkForce true;
               guestConfigPath = lib.mkForce null;
+              zone = lib.mkForce guestZone;
+
+              # U31: `d2bd guest` publishes its own target-local authority
+              # before it serves anything, and refuses to serve under any
+              # default authority when its image closure carries no verified
+              # graph naming its own Zone. This is the document
+              # `vm-evaluator.nix`'s `evalGuest` hands a real Guest, from the
+              # one constructor both publications use, so the Guest reads
+              # exactly the bytes a production Guest image delivers.
+              deploymentBootstrap = pkgs.writeText
+                "d2b-guest-deployment-bootstrap-${guestZone}.json"
+                (deploymentBootstrap.documentFor guestZone).documentJson;
             };
 
             # The Guest target agent binds an AF_VSOCK ComponentSession listener.
@@ -403,7 +423,7 @@ rec {
               serviceConfig.Type = "oneshot";
               script = ''
                 install -d -o root -g d2bd -m 0750 /var/lib/d2b/guest-bundle
-                for file in bundle.json host.json processes.json privileges.json; do
+                for file in bundle.json host.json processes.json; do
                   install -o root -g d2bd -m 0640 \
                     ${guestBundle}/"$file" /var/lib/d2b/guest-bundle/"$file"
                 done
@@ -614,7 +634,6 @@ rec {
         {"schemaVersion":"v2","site":{"allowUnsafeEastWest":false},"environments":[],"nftables":{"family":"inet","table":"d2b","chains":[],"tableHashAfterApply":null,"ownershipId":"host-integration"},"networkManager":{"filePath":"/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf","matchCriteria":[],"reloadBehavior":"atomic-reload","ownership":{"owner":"root","group":"root","mode":"0644","driftPolicy":"replace"}},"hostsFile":{"startMarker":"# d2b-managed begin","endMarker":"# d2b-managed end","rule":"replace-managed-block"},"kernelModules":[],"fdOwnership":[],"cloudHypervisorCapabilities":[],"ifNameMappings":[],"ch":null,"firewallCoexistencePolicy":null}
         EOF
         printf '%s\n' '{"schemaVersion":"v2","vms":[]}' > "$out/processes.json"
-        printf '%s\n' '{"schemaVersion":"v2","publicOperations":[],"brokerOperations":[]}' > "$out/privileges.json"
         printf '%s\n' '{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"signozUrl":"http://127.0.0.1:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"obsVsockCid":0,"obsVsockHostSocket":"","vmName":""}}' > "$out/vms.json"
         python3 - "$out/bundle.json" <<'PY'
         import hashlib
@@ -628,7 +647,6 @@ rec {
             "artifactHashes": {},
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "zones": [],
             "generation": {
                 "generatedAt": None,
@@ -705,7 +723,7 @@ rec {
               serviceConfig.Type = "oneshot";
               script = ''
                 install -d -o root -g d2bd -m 0750 /var/lib/d2b/guest-bundle
-                for file in bundle.json host.json processes.json privileges.json; do
+                for file in bundle.json host.json processes.json; do
                   install -o root -g d2bd -m 0640 \
                     ${guestBundle}/"$file" /var/lib/d2b/guest-bundle/"$file"
                 done
@@ -1614,6 +1632,22 @@ rec {
           # the Process controller, and no guest system artifact is declared, so
           # no VMM is ever launched here. Its name is the VM identity of the
           # Devices it owns (`Device.metadata.ownerRef`).
+          #
+          # `providerRef` names `Provider/volume-virtiofs` because this zone
+          # declares no guest system. The Guest family owns only the four
+          # `runtime-*` guest Providers (`d2b_provider_guest::GUEST_REGISTRATIONS`),
+          # so it refuses this row at Validate with the closed
+          # `guest-spec-invalid` refusal, and `Guest/acceptance-guest` stays
+          # terminally `Failed` for the whole run. That is the daemon and the
+          # Nix module agreeing, not disagreeing: naming a Provider this family
+          # does own makes the row demand `spec.systemArtifactId` resolving to a
+          # nixos-system artifact plus a matching private Guest setup
+          # descriptor, and this fixture declares no guest system on purpose.
+          # Nothing on the paths this check measures reads the Guest row's
+          # phase - `tpm_device_is_admitted` reads the Device row, and both it
+          # and the broker derive the VM identity from `Device.metadata.ownerRef`
+          # - so the refused Guest is inert here. See the changelog fragment
+          # for what would have to change to drop the row.
           acceptance-guest = {
             type = "Guest";
             spec = {
@@ -1682,6 +1716,17 @@ rec {
           # Provider's projection declares `Process/swtpm-tpm0`,
           # `EphemeralProcess/swtpm-flush-tpm0`, `Endpoint/tpm-tpm0` and
           # `Endpoint/tpm-ctrl-tpm0` as this Device's children.
+          #
+          # The `Device` contract says an emulated device carries no
+          # selector, and the closed `InventorySelector` union is
+          # discriminated on `busClass`, so an empty object is not a member
+          # of it: spelling the absent selector as `{}` produced a spec that
+          # did not decode, which abandoned this row before its Provider
+          # controller ran. The state Volume the controller owns was then
+          # never committed, the directory its long-lived worker opens by
+          # pathname never landed, and the worker's spawn was refused for an
+          # absent state-directory leaf. An emulated Device therefore leaves
+          # `inventory` empty.
           tpm0 = {
             type = "Device";
             metadata.ownerRef = "Guest/acceptance-guest";
@@ -1690,7 +1735,7 @@ rec {
               deviceClass = "emulated";
               arbitration = "exclusive";
               maxConcurrentClaims = 1;
-              inventory.selector = { };
+              inventory = { };
             };
           };
           # The GPU/video Devices: a full GPU with its video sidecar
@@ -1765,7 +1810,6 @@ rec {
         {"schemaVersion":"v2","site":{"allowUnsafeEastWest":false},"environments":[],"nftables":{"family":"inet","table":"d2b","chains":[],"tableHashAfterApply":null,"ownershipId":"host-integration"},"networkManager":{"filePath":"/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf","matchCriteria":[],"reloadBehavior":"atomic-reload","ownership":{"owner":"root","group":"root","mode":"0644","driftPolicy":"replace"}},"hostsFile":{"startMarker":"# d2b-managed begin","endMarker":"# d2b-managed end","rule":"replace-managed-block"},"kernelModules":[],"fdOwnership":[],"cloudHypervisorCapabilities":[],"ifNameMappings":[],"ch":null,"firewallCoexistencePolicy":null}
         EOF
         printf '%s\n' '{"schemaVersion":"v2","vms":[]}' > "$out/processes.json"
-        printf '%s\n' '{"schemaVersion":"v2","publicOperations":[],"brokerOperations":[]}' > "$out/privileges.json"
         printf '%s\n' '{"_manifest":{"manifestVersion":6},"_observability":{"enabled":false,"signozUrl":"http://127.0.0.1:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318,"obsVsockCid":0,"obsVsockHostSocket":"","vmName":""}}' > "$out/vms.json"
         python3 - "$out/bundle.json" <<'PY'
         import hashlib
@@ -1779,7 +1823,6 @@ rec {
             "artifactHashes": {},
             "bundleVersion": 1,
             "schemaVersion": "v3",
-            "privilegesPath": "privileges.json",
             "zones": [],
             "generation": {
                 "generatedAt": None,
@@ -1856,7 +1899,7 @@ rec {
               serviceConfig.Type = "oneshot";
               script = ''
                 install -d -o root -g d2bd -m 0750 /var/lib/d2b/guest-bundle
-                for file in bundle.json host.json processes.json privileges.json; do
+                for file in bundle.json host.json processes.json; do
                   install -o root -g d2bd -m 0640 \
                     ${guestBundle}/"$file" /var/lib/d2b/guest-bundle/"$file"
                 done

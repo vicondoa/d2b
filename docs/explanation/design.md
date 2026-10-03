@@ -45,10 +45,76 @@ name-based ResourceRefs. Returned UIDs, generations, and revisions fence
 incarnation and adoption.
 
 The Guest controller does not spawn, mount, provision, bind, or call the
-broker. Process, Endpoint, Volume, Network, Device, Credential, and Provider
-controllers are the effect owners. The broker accepts only typed operations
-after the daemon has committed and authorized the corresponding Resource
-intent.
+broker. Process, Endpoint, Volume, Network, Device, Credential, Provider, and
+binding controllers are the effect owners. The broker accepts only typed
+operations after the daemon has committed and authorized the corresponding
+Resource intent.
+
+## Bindings
+
+A binding is a relationship between a source resource - a Volume, Device,
+Network, Endpoint, or Credential - and one consumer component. Those five
+kinds are a closed vocabulary, and each is authored in two halves that never
+merge into one permission bag.
+
+The consumer publishes a typed binding *request*: which source, which rights,
+which stable consumer slot, and where it intends to use it. A request is not
+authority. It names an exact typed reference and a bounded destination, never
+a raw host path, a numerical host principal, secret material, or a free-form
+command line.
+
+The source provider admits that request against its own decision, against
+authorization evidence produced by the `Role` and `RoleBinding` contracts, and
+against the realization its selected backend declares it can enforce. The
+admission names the exact dependency revisions it was evaluated against, so an
+ownership, view, consumer, or provider-assignment change that did not advance a
+generation still invalidates the earlier use.
+
+The admitted relationship is then committed as a row of its own served
+ResourceType - `VolumeBinding`, `DeviceBinding`, `EndpointBinding`,
+`NetworkBinding`, or `CredentialBinding`. A dedicated Provider serves that
+type: it registers the driver, decodes the spec, and reconciles the row into
+the actual host, device, network, or credential realization, releasing it on
+finalize or delete. A source ensures every binding row it derived and retires
+the ones it no longer derives; its readiness reads the child rows' phases
+rather than overriding them, so a relationship that never committed is not
+reported as served.
+
+Each source declares the closed set of presentation facets its selected
+backend can realize. A filesystem presentation, a consumer device slot, a
+device attachment, a namespace interface, a shared fabric, an endpoint
+descriptor, an endpoint pathname, and credential delivery are the whole
+vocabulary. A presentation the backend cannot enforce is refused with a named
+reason: an unapplied mount, an unclaimed device, and an unproven endpoint are
+not successes.
+
+## Execution and authority
+
+An `Operation` row is one externally callable declaration, and its
+implementation is a declared identity rather than a row. It names either a
+method of a declared `Provider` component or a trusted executable template
+that Provider owns. A caller does not choose code, and a provider resource
+that names an untrusted artifact cannot introduce a compiled privileged
+handler; compiling a declared implementation into a callable handler is the
+deployment's job.
+
+Confinement is stated separately from access. An `ExecutionPolicy` row states
+what an execution instance is allowed to be and nothing more: the namespaces
+it runs under, its capability ceiling, whether new privileges are forbidden,
+the identity it may resolve to, its root-filesystem restrictions, the syscall
+filter it must load, and its umask. A `SeccompProfile` row states the syscall
+allowlist and its default action, and nothing else. Neither grants storage,
+device, network, endpoint, or credential access; those are separate typed
+binding relationships, and a policy that named them would be a second
+authority. Composition is field-wise and a conflict is a refusal, never a
+silently relaxed intersection.
+
+`Role` is authorization-only. It states which resource verbs a subject may
+use and which declared `Operation` rows its holder may create. It carries no
+posture, mount, or command facet, and a row that still carries one is rejected
+rather than decoded with its authority dropped. Selecting an `ExecutionPolicy`
+is itself a request: without `Role` and `RoleBinding` evidence the selection
+is refused even when every other rule would admit it.
 
 ## Guest lifecycle
 
@@ -75,6 +141,11 @@ ResourceRefs are Zone-local addresses such as `Guest/work-app`. A Guest name
 does not identify a host process, socket, cgroup, or credential. Private
 runtime identity is derived from immutable Zone and Guest UIDs and Provider
 generations, so same-named Guests in different Zones cannot collide.
+
+One relationship's identity is its Zone, source, consumer, binding kind, and
+stable consumer slot. Rights, destination, and presentation are deliberately
+outside that identity, so changing what a consumer asks for updates the
+existing relationship instead of minting a second one beside it.
 
 Every Resource mutation carries the exact owner, UID, generation, revision,
 assignment, and session evidence required by the current controller. Caller
@@ -166,4 +237,5 @@ code, Zone references, and generated contracts are authoritative.
 - [`../reference/zone-control-nix.md`](../reference/zone-control-nix.md)
 - [`../reference/zone-cli-contract.md`](../reference/zone-cli-contract.md)
 - [`daemon-lifecycle.md`](./daemon-lifecycle.md)
+- [`../adr/0055-unified-resource-graph-bindings-operations-and-authority.md`](../adr/0055-unified-resource-graph-bindings-operations-and-authority.md)
 - [`../contributing/critical-subsystems.md`](../contributing/critical-subsystems.md)

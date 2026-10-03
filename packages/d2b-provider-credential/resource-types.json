@@ -8,6 +8,14 @@
       "execution": ["host", "guest"],
       "exportable": false,
       "reads": ["Process", "Host", "Guest", "Provider"]
+    },
+    {
+      "resourceType": "CredentialBinding",
+      "allowedSources": ["builtin", "startup"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": false,
+      "reads": ["Credential"]
     }
   ],
   "provides": [],

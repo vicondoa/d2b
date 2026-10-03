@@ -445,6 +445,9 @@ _d2b() {
             d2b__subcmd__host,reconcile)
                 cmd="d2b__subcmd__host__subcmd__reconcile"
                 ;;
+            d2b__subcmd__host,reset)
+                cmd="d2b__subcmd__host__subcmd__reset"
+                ;;
             d2b__subcmd__host,status)
                 cmd="d2b__subcmd__host__subcmd__status"
                 ;;
@@ -3855,7 +3858,7 @@ _d2b() {
             return 0
             ;;
         d2b__subcmd__host)
-            opts="-h --zone --json --human --deadline --no-deadline --help get list status prepare destroy doctor reconcile validate"
+            opts="-h --zone --json --human --deadline --no-deadline --help get list status prepare destroy doctor reconcile validate reset"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4017,6 +4020,36 @@ _d2b() {
                 return 0
             fi
             case "${prev}" in
+                --zone)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --deadline)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        d2b__subcmd__host__subcmd__reset)
+            opts="-h --dry-run --apply --state-root --cgroup-root --zone --json --human --deadline --no-deadline --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --state-root)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --cgroup-root)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --zone)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0

@@ -26,6 +26,17 @@ impl WellKnownType {
     pub const VOLUME_BINDING: Self = Self("VolumeBinding");
     /// A reachable transport endpoint.
     pub const ENDPOINT: Self = Self("Endpoint");
+    /// The binding that attaches one named device function to one consumer.
+    pub const DEVICE_BINDING: Self = Self("DeviceBinding");
+
+    /// The binding that joins one consumer to one shared fabric.
+    pub const NETWORK_BINDING: Self = Self("NetworkBinding");
+
+    /// The binding that delivers one credential to one consumer.
+    pub const CREDENTIAL_BINDING: Self = Self("CredentialBinding");
+
+    /// The binding that delivers one exact endpoint to one consumer.
+    pub const ENDPOINT_BINDING: Self = Self("EndpointBinding");
     /// The physical host target.
     pub const HOST: Self = Self("Host");
     /// A host user.
@@ -42,6 +53,13 @@ impl WellKnownType {
     pub const NETWORK: Self = Self("Network");
     /// A host device backing.
     pub const DEVICE: Self = Self("Device");
+    /// The binding that attaches a device capability to a consumer.
+    ///
+    /// The name is in the vocabulary because the per-type driver crate
+    /// declares its descriptor by it. It is deliberately not in [`ALL`]:
+    /// that list is the projection of the generated converted-type
+    /// authority, and registering the type there is the cutover unit's
+    /// change, not a second edit here.
     /// A USB/IP service instance.
     pub const USB_SERVICE: Self = Self("usb.d2bus.org.UsbService");
     /// The binding that attaches a USB backing to a guest.
@@ -80,12 +98,18 @@ impl WellKnownType {
     pub const RESOURCE_EXPORT: Self = Self("ResourceExport");
     /// A resource imported from another zone.
     pub const RESOURCE_IMPORT: Self = Self("ResourceImport");
-    /// A declared launch shape a `Process` instance references.
-    pub const COMMAND: Self = Self("Command");
     /// A committed broker operation with its handler reference.
     pub const OPERATION: Self = Self("Operation");
     /// A committed seccomp posture a role references.
     pub const SECCOMP_PROFILE: Self = Self("SeccompProfile");
+    /// A reusable confinement policy an execution instance selects.
+    ///
+    /// The name is in the vocabulary because the per-type driver crate
+    /// declares its descriptor by it. It is deliberately not in
+    /// [`ALL`]: that list is the projection of the generated converted-type
+    /// authority, and registering the type there is the cutover unit's
+    /// change, not a second edit here.
+    pub const EXECUTION_POLICY: Self = Self("ExecutionPolicy");
 
     /// Every well-known type, in the order of the converted-type authority
     /// list: [`V3_CONVERTED_RESOURCE_TYPES`] is the single declaration the

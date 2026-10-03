@@ -881,6 +881,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "nix 0.29.0",
  "rustix 0.38.44",
  "schemars",
  "semver",
@@ -1044,15 +1045,6 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-misc",
  "wayland-protocols-wlr",
-]
-
-
-[[package]]
-name = "d2b-provider-command"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-resource-types",
- "tokio",
 ]
 
 
@@ -1272,6 +1264,7 @@ name = "d2b-provider-endpoint"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts-broker",
  "d2b-contracts-resource",
  "d2b-resource-runtime",
  "d2b-resource-types",
@@ -1331,6 +1324,17 @@ dependencies = [
  "tokio",
  "tracing",
  "zeroize",
+]
+
+
+[[package]]
+name = "d2b-provider-execution-policy"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts-resource",
+ "d2b-resource-types",
+ "schemars",
+ "serde",
 ]
 
 
@@ -1897,11 +1901,32 @@ dependencies = [
 
 
 [[package]]
+name = "d2b-resource-compiler"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "base64",
+ "d2b-contracts",
+ "d2b-contracts-provider",
+ "d2b-contracts-resource",
+ "d2b-contracts-zone-session",
+ "d2b-core",
+ "regex",
+ "ring",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+
+[[package]]
 name = "d2b-resource-runtime"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "d2b-contracts-resource",
  "parking_lot",
  "ractor",
  "rusqlite",
@@ -2044,7 +2069,6 @@ dependencies = [
  "d2b-provider-audio-pipewire",
  "d2b-provider-audio-service",
  "d2b-provider-clipboard-wayland",
- "d2b-provider-command",
  "d2b-provider-config-nixos",
  "d2b-provider-credential",
  "d2b-provider-credential-entra",
@@ -2058,6 +2082,7 @@ dependencies = [
  "d2b-provider-display-wayland",
  "d2b-provider-emergency-policy",
  "d2b-provider-endpoint",
+ "d2b-provider-execution-policy",
  "d2b-provider-guest",
  "d2b-provider-guest-azure-container-apps",
  "d2b-provider-guest-azure-virtual-machine",
@@ -2097,6 +2122,7 @@ dependencies = [
  "d2b-provider-zone",
  "d2b-provider-zone-link",
  "d2b-resource-api",
+ "d2b-resource-compiler",
  "d2b-resource-runtime",
  "d2b-resource-types",
  "d2b-session",

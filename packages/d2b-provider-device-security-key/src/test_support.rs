@@ -13,7 +13,10 @@ use d2b_provider_toolkit::{
 };
 
 use crate::driver::{SecurityKeyComponent, SecurityKeyDriverEffects};
-use crate::facets::{SecurityKeyEffectFacets, SecurityKeyRuntime};
+use crate::facets::{
+    SecurityKeyClaimPortSource, SecurityKeyEffectFacets, SecurityKeyHelperLegSource,
+    SecurityKeyRuntime, UnwiredSecurityKeyClaimPorts, UnwiredSecurityKeyHelperLegs,
+};
 
 /// The canonical recording double for [`SecurityKeyDriverEffects`].
 ///
@@ -99,5 +102,35 @@ impl SecurityKeyRuntime for RecordingRuntime {
 
 /// Build a security-key facet set from a recording runtime double.
 pub fn recording_facets(runtime: Arc<RecordingRuntime>) -> SecurityKeyEffectFacets {
-    SecurityKeyEffectFacets { runtime }
+    unwired_facets(runtime)
+}
+
+/// Build a security-key facet set over the caller's own converted-path facets.
+///
+/// This is the seam a test drives the converted claim path through: the
+/// helper-leg facet answers with the admitted relationship and bounded leg the
+/// test minted, and the claim-port facet answers with the effects it records.
+/// A plane with neither holds the by-name refusals instead, so a test that
+/// asks for a realization without supplying authority gets a refusal rather
+/// than a silent success.
+pub fn facets(
+    runtime: Arc<RecordingRuntime>,
+    admission: Arc<dyn SecurityKeyHelperLegSource>,
+    claims: Arc<dyn SecurityKeyClaimPortSource>,
+) -> SecurityKeyEffectFacets {
+    SecurityKeyEffectFacets {
+        runtime,
+        admission,
+        claims,
+    }
+}
+
+/// Build a security-key facet set whose converted path holds the by-name
+/// refusals: no graph authority behind it, so nothing is admitted.
+pub fn unwired_facets(runtime: Arc<RecordingRuntime>) -> SecurityKeyEffectFacets {
+    facets(
+        runtime,
+        Arc::new(UnwiredSecurityKeyHelperLegs),
+        Arc::new(UnwiredSecurityKeyClaimPorts),
+    )
 }

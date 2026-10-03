@@ -35,30 +35,6 @@ rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
-rust_library(
-    name = "d2b_broker_composition_layer1_bootstrap",
-    srcs = d2b_broker_composition_srcs,
-    compile_data = ["Cargo.toml"],
-    crate_name = "d2b_broker_composition",
-    crate_features = ["layer1-bootstrap"],
-    deps = [
-        "//packages/d2b-broker:d2b_broker_layer1_bootstrap",
-        "//packages/d2b-broker-fixture-handlers:d2b_broker_fixture_handlers",
-    ] + all_crate_deps(normal = True, cargo_only = True),
-)
-
-rust_binary(
-    name = "d2b-broker-layer1-bootstrap",
-    srcs = ["src/main.rs"],
-    compile_data = ["Cargo.toml"],
-    crate_features = ["layer1-bootstrap"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-broker:d2b_broker_layer1_bootstrap",
-        ":d2b_broker_composition_layer1_bootstrap",
-    ] + all_crate_deps(normal = True, cargo_only = True),
-)
-
 # The fixture handler crates' sources ride along as data so the
 # dependency-surface audit and the registration-time source probes see the
 # same crate trees in the sandbox they see in a cargo checkout.

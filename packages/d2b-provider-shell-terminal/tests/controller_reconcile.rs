@@ -1,7 +1,9 @@
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_provider_shell_terminal::{
     AdoptionDecision, CallerOrigin, ExecutionTarget, InMemoryShellAuthority, OpenSessionRequest,
     PoolSpec, Role, ShellPool, ShellSession, ShellTerminalController, Subject, SupervisorCandidate,
-    SupervisorIdentity,
+    SupervisorIdentity, SupervisorObservation, TerminalStreamBinding,
 };
 use std::sync::Arc;
 
@@ -24,6 +26,32 @@ fn pool() -> ShellPool {
 
 fn controller() -> ShellTerminalController {
     ShellTerminalController::new(Arc::new(InMemoryShellAuthority::new()))
+}
+
+/// The admitted terminal stream relationship one session's stream rides.
+fn terminal_stream(session: &ShellSession) -> TerminalStreamBinding {
+    TerminalStreamBinding::admitted(
+        session.supervisor_process_ref().clone(),
+        ResourceRef::parse("Endpoint/session-terminal").expect("endpoint"),
+        ReconnectGeneration::new(1).expect("reconnect"),
+    )
+}
+
+/// One observed supervisor candidate for `session`, measured through the
+/// session's own `Process` and the admitted stream endpoint.
+fn observed(
+    session: &ShellSession,
+    identity: SupervisorIdentity,
+) -> SupervisorCandidate {
+    SupervisorCandidate::observed(
+        session.name(),
+        SupervisorObservation::observed(
+            session.supervisor_process_ref().clone(),
+            ResourceRef::parse("Endpoint/session-terminal").expect("endpoint"),
+            ReconnectGeneration::new(1).expect("reconnect"),
+        ),
+        identity,
+    )
 }
 
 #[test]
@@ -169,11 +197,9 @@ fn restored_sessions_block_recreation_after_controller_restart() {
         recovered_controller
             .restore_session(
                 opened.session().clone(),
+                &terminal_stream(opened.session()),
                 &identity,
-                &[SupervisorCandidate::new(
-                    opened.session().name(),
-                    identity.clone(),
-                )],
+                &[observed(opened.session(), identity.clone())],
             )
             .unwrap(),
         AdoptionDecision::Adopted
@@ -396,11 +422,9 @@ fn recovery_authorities_refuse_different_pool_or_session() {
         session_recovery
             .restore_session(
                 foreign_session.clone(),
+                &terminal_stream(&foreign_session),
                 &identity,
-                &[SupervisorCandidate::new(
-                    foreign_session.name(),
-                    identity.clone(),
-                )],
+                &[observed(&foreign_session, identity.clone())],
             )
             .unwrap(),
         AdoptionDecision::Ambiguous
@@ -432,8 +456,9 @@ fn ambiguous_recovery_cannot_advance_daemon_session_generation() {
         recovered_controller
             .restore_session(
                 opened.session().clone(),
+                &terminal_stream(opened.session()),
                 &expected,
-                &[SupervisorCandidate::new(opened.session().name(), stale)],
+                &[observed(opened.session(), stale)],
             )
             .unwrap(),
         AdoptionDecision::StaleGeneration
@@ -680,11 +705,9 @@ fn daemon_authority_fences_separate_controller_and_supervisor_processes() {
         recovered_controller
             .restore_session(
                 opened.session().clone(),
+                &terminal_stream(opened.session()),
                 &identity,
-                &[SupervisorCandidate::new(
-                    opened.session().name(),
-                    identity.clone(),
-                )],
+                &[observed(opened.session(), identity.clone())],
             )
             .unwrap(),
         AdoptionDecision::Adopted
@@ -751,11 +774,9 @@ fn daemon_authority_replays_capabilities_once_across_supervisors() {
         recovered_controller
             .restore_session(
                 opened.session().clone(),
+                &terminal_stream(opened.session()),
                 &identity,
-                &[SupervisorCandidate::new(
-                    opened.session().name(),
-                    identity.clone(),
-                )],
+                &[observed(opened.session(), identity.clone())],
             )
             .unwrap(),
         AdoptionDecision::Adopted

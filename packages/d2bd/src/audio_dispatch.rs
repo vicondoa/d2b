@@ -12,7 +12,6 @@
 //! public responses. Volume/gain values never appear in audit records,
 //! metric labels, or log messages.
 
-use std::sync::Arc;
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_control::public_wire::{
@@ -41,8 +40,10 @@ use serde_json::Value;
 use crate::ServerState;
 use crate::{TypedError, error_source};
 use crate::audio_host_controller::{
-    HostAudioController, PipeWireHostController, QemuAudioController,
+    AdmittedPipeWireHostController, AudioSessionPinningSources, HostAudioController,
+    PipeWireHostController, QemuAudioController,
 };
+use d2b_provider_audio_pipewire::{AudioBindingFence, AudioSessionPlan};
 // ── Provider capability resolution ───────────────────────────────────────────
 
 /// Resolve the audio capability row for a VM manifest entry.
@@ -148,6 +149,39 @@ fn build_host_controller(
 /// gap). Returns `Failed` when the controller is present but enforcement failed
 /// (subprocess error, credential failure, etc.) so callers know the host
 /// boundary was NOT sealed for `off` requests.
+/// The audio host sessions the Zone graph admitted for one target.
+///
+/// Each channel's effect rides its own exact `EndpointBinding`, and the
+/// observed fences are re-checked immediately before an effect runs. The
+/// pinning is what the endpoint owner resolved for that relationship, so the
+/// host session is never selected by a runtime environment value.
+pub(crate) type AdmittedAudioHostSessions =
+    (AudioSessionPlan, Vec<AudioBindingFence>, AudioSessionPinningSources);
+
+/// Build the graph-admitted host controller for a target.
+///
+/// The v3 composition reaches the host audio session only this way: it has no
+/// broker audio operation to fall back on, so a target whose graph has not
+/// admitted an audio endpoint relationship for a channel reports that
+/// channel's host enforcement as unavailable rather than reaching for an
+/// ambient PipeWire environment.
+fn build_admitted_host_controller(
+    vm_name: &str,
+    cap: &AudioProviderCapability,
+    admitted: Option<&AdmittedAudioHostSessions>,
+) -> Option<Box<dyn HostAudioController>> {
+    if cap.host_enforcement != AudioHostEnforcementKind::PipeWireVhostUserSound {
+        return None;
+    }
+    let (plan, observed, pinning) = admitted?;
+    Some(Box::new(AdmittedPipeWireHostController::new(
+        vm_name,
+        plan.clone(),
+        observed.clone(),
+        pinning.clone(),
+    )) as Box<dyn HostAudioController>)
+}
+
 pub fn enforce_host_grant(
     state: &ServerState,
     vm_name: &str,
@@ -210,10 +244,11 @@ fn state_to_vm_state(
 /// controllers, which keep PipeWire mutations broker-owned. Target-side
 /// effects are represented by the signed Process child resources.
 pub(crate) struct DaemonAudioMediator {
-    state: Arc<ServerState>,
     vm_name: String,
     capability: AudioProviderCapability,
-    caller_role: BrokerCallerRole,
+    /// The admitted host sessions this target's channels ride, when the Zone
+    /// graph has admitted them.
+    admitted: Option<AdmittedAudioHostSessions>,
 }
 
 impl std::fmt::Debug for DaemonAudioMediator {
@@ -227,17 +262,21 @@ impl std::fmt::Debug for DaemonAudioMediator {
 }
 
 impl DaemonAudioMediator {
+    /// Build the mediator over the host sessions the Zone graph admitted.
+    ///
+    /// Without admitted sessions the mediator reports host readiness as
+    /// unavailable and refuses every host channel effect: an absent admission
+    /// is an absence of evidence, never a fallback to an ambient PipeWire
+    /// environment.
     pub(crate) fn new(
-        state: &ServerState,
         vm_name: impl Into<String>,
         capability: AudioProviderCapability,
-        caller_role: BrokerCallerRole,
+        admitted: Option<AdmittedAudioHostSessions>,
     ) -> Self {
         Self {
-            state: Arc::new(state.clone()),
             vm_name: vm_name.into(),
             capability,
-            caller_role,
+            admitted,
         }
     }
 
@@ -269,14 +308,14 @@ impl AudioMediator for DaemonAudioMediator {
         grant: ProviderAudioGrant,
     ) -> Result<(), AudioMediatorError> {
         let wire_channel = Self::wire_channel(channel);
-        let host = enforce_host_grant(
-            &self.state,
+        let host = match build_admitted_host_controller(
             &self.vm_name,
             &self.capability,
-            self.caller_role.clone(),
-            core_audio_grant(grant),
-            wire_channel,
-        );
+            self.admitted.as_ref(),
+        ) {
+            Some(ctrl) => ctrl.enforce_grant(core_audio_grant(grant), wire_channel),
+            None => HostEnforcementResult::Failed,
+        };
         self.host_error(host)
     }
 
@@ -291,14 +330,14 @@ impl AudioMediator for DaemonAudioMediator {
     ) -> Result<(), AudioMediatorError> {
         let wire_channel = Self::wire_channel(channel);
         let level = core_audio_level(level)?;
-        let host = enforce_host_level(
-            &self.state,
+        let host = match build_admitted_host_controller(
             &self.vm_name,
             &self.capability,
-            self.caller_role.clone(),
-            level,
-            wire_channel,
-        );
+            self.admitted.as_ref(),
+        ) {
+            Some(ctrl) => ctrl.enforce_level(level, wire_channel),
+            None => HostEnforcementResult::Failed,
+        };
         self.host_error(host)
     }
 
@@ -310,18 +349,16 @@ impl AudioMediator for DaemonAudioMediator {
     }
 
     fn host_readiness(&self) -> HostAudioReadiness {
-        if self.capability.host_enforcement == AudioHostEnforcementKind::None
-            || build_host_controller(
-                &self.state,
-                &self.vm_name,
-                &self.capability,
-                self.caller_role.clone(),
-            )
-            .is_some()
+        if self.capability.host_enforcement == AudioHostEnforcementKind::None {
+            return HostAudioReadiness::Ready;
+        }
+        match self
+            .admitted
+            .as_ref()
+            .is_some_and(|(plan, observed, _)| plan.all_current(observed))
         {
-            HostAudioReadiness::Ready
-        } else {
-            HostAudioReadiness::Unavailable
+            true => HostAudioReadiness::Ready,
+            false => HostAudioReadiness::Unavailable,
         }
     }
 
@@ -468,7 +505,8 @@ fn resolve_vm_audio_status(
     })?;
 
     let mut vm_state = state_to_vm_state(vm_name, &audio_state, &cap);
-    let mediator = DaemonAudioMediator::new(state, vm_name, cap.clone(), caller_role.clone());
+    let _ = caller_role;
+    let mediator = DaemonAudioMediator::new(vm_name, cap.clone(), None);
     vm_state.enforcement = match (mediator.host_readiness(), mediator.guest_readiness()) {
         (HostAudioReadiness::Ready, GuestAudioReadiness::Ready) => public_enforcement_posture(&cap),
         (HostAudioReadiness::Ready, GuestAudioReadiness::Unavailable) => {
@@ -708,6 +746,8 @@ fn dispatch_audio_mute(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use d2b_provider_audio_pipewire::{AudioGrant, AudioPolicyState};
 

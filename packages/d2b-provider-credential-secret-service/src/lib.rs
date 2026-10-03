@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod controller;
+mod delivery;
 mod service;
 
 use std::collections::{BTreeMap, BTreeSet};

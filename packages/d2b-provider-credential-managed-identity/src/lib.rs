@@ -10,6 +10,7 @@
 mod agent;
 mod audit;
 mod controller;
+mod delivery;
 mod service;
 mod telemetry;
 

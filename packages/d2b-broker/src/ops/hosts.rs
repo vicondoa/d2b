@@ -24,18 +24,21 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "the hosts managed-block update op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub struct UpdateHostsRequest {
     pub hosts_path: PathBuf,
     pub entries: Vec<HostsEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code, reason = "the hosts managed-block update op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub struct UpdateHostsResult {
     pub before_hash: String,
     pub after_hash: String,
     pub replaced: bool,
 }
 
+#[allow(dead_code, reason = "the hosts managed-block update op is not routed by any dispatch arm; this module's tests are its only drivers")]
 pub fn update_hosts_file(req: &UpdateHostsRequest) -> io::Result<UpdateHostsResult> {
     path_safe::refuse_world_writable_parent(&req.hosts_path)?;
     path_safe::refuse_symlink(&req.hosts_path)?;
@@ -60,6 +63,7 @@ pub fn update_hosts_file(req: &UpdateHostsRequest) -> io::Result<UpdateHostsResu
     })
 }
 
+#[allow(dead_code, reason = "the hosts managed-block update op is not routed by any dispatch arm; this module's tests are its only drivers")]
 fn splice_managed_block(existing: &str, new_block: &str) -> String {
     splice_marker_block(
         existing,
@@ -93,6 +97,7 @@ fn splice_marker_block(existing: &str, new_block: &str, begin: &str, end: &str) 
     out
 }
 
+#[allow(dead_code, reason = "called only by update_hosts_file, which is itself unrouted")]
 fn stable_hash(s: &str) -> String {
     stable_hash_str(s)
 }

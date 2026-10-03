@@ -12,9 +12,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildIntent;
-use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{
+    BindingSlot, EndpointAttachmentKind, EndpointBindingRequest, ResourceRef, ZoneId,
+    execution_policy::BoundedToken,
+};
 use d2b_provider_audio_pipewire::{
-    AUDIO_REPAIR_INTERVAL_SECS, AudioBindingController, AudioBindingSpec, FakeAudioMediator,
+    AUDIO_CHANNELS, AUDIO_REPAIR_INTERVAL_SECS, AudioBindingController, AudioBindingSpec,
+    AudioChannel, AudioServiceSpec, FakeAudioMediator, service_backing_endpoint,
+    service_declares_channel, validate_audio_binding,
 };
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
 use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
@@ -33,6 +38,79 @@ pub const AUDIO_BINDING_PROVIDER_REF: &str = d2b_provider_audio_pipewire::PROVID
 
 /// The preserved reconcile resync cadence of the type.
 pub const AUDIO_BINDING_RESYNC: Duration = Duration::from_secs(AUDIO_REPAIR_INTERVAL_SECS);
+
+/// One exact endpoint relationship one AudioBinding requests.
+///
+/// The request is what the binding asks the graph to admit: it names the
+/// Service's own backing `Endpoint`, the Guest the binding attaches to, the
+/// channel's stable consumer slot, the connect attachment, and the channel's
+/// declared purpose. Nothing in it names a socket path, a runtime directory,
+/// or a tool, so no runtime environment can redirect the request at a
+/// neighbouring session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioEndpointBindingRequest {
+    /// The stream direction this relationship serves.
+    pub channel: AudioChannel,
+    /// The exact relationship requested from the graph.
+    pub request: EndpointBindingRequest,
+}
+
+impl AudioEndpointBindingRequest {
+    /// The relationship this request serves.
+    pub const fn channel(&self) -> AudioChannel {
+        self.channel
+    }
+
+    /// The exact relationship requested from the graph.
+    pub const fn request(&self) -> &EndpointBindingRequest {
+        &self.request
+    }
+}
+
+/// The exact endpoint relationships one AudioBinding requests.
+///
+/// One relationship per channel, each on the Service's own backing
+/// `Endpoint`, so the two stream directions are admitted, observed, and
+/// revoked independently. Every channel the binding's grants actually use
+/// must be declared by the Service row, and a Service with no local backing
+/// `Endpoint` (a ResourceImport projection) has nothing to request, so an
+/// imported Service cannot be reached through this path to mint a local
+/// backing grant.
+///
+/// # Errors
+///
+/// Returns `ServiceChannelUndeclared` when the Service row does not declare
+/// the operation behind a requested channel and `ServiceHasNoBackingEndpoint`
+/// when the row is not a locally owned Service.
+pub fn requested_endpoint_bindings(
+    binding: &AudioBindingSpec,
+    service: &AudioServiceSpec,
+) -> Result<Vec<AudioEndpointBindingRequest>, InteractionEffectError> {
+    validate_audio_binding(binding).map_err(|_| InteractionEffectError::InvalidResource)?;
+    let Some(endpoint) = service_backing_endpoint(service) else {
+        return Err(InteractionEffectError::InvalidResource);
+    };
+    let mut requested = Vec::with_capacity(AUDIO_CHANNELS.len());
+    for channel in AUDIO_CHANNELS {
+        if !service_declares_channel(service, channel) {
+            return Err(InteractionEffectError::InvalidResource);
+        }
+        let purpose =
+            BoundedToken::parse(channel.declared_purpose()).map_err(|_| InteractionEffectError::InvalidResource)?;
+        let slot = BindingSlot::parse(channel.binding_slot())
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
+        let request = EndpointBindingRequest::new(
+            endpoint.clone(),
+            binding.target_ref.clone(),
+            slot,
+            EndpointAttachmentKind::Connect,
+            purpose,
+        )
+        .map_err(|_| InteractionEffectError::InvalidResource)?;
+        requested.push(AudioEndpointBindingRequest { channel, request });
+    }
+    Ok(requested)
+}
 
 /// Everything the audio Provider's controller needs to declare one binding's
 /// children.
