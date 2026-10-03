@@ -1157,7 +1157,21 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
     // The restart boundary: the same runner process, and a Guest whose session
     // generation advanced behind it.
     control.stage("restart-adoption");
-    control.succeed(&[DAEMON_RESTART], None)?;
+    control.diag_run(
+        "restart-adoption/restart-daemon",
+        DAEMON_RESTART,
+        &[
+            (
+                "d2bd service status",
+                "systemctl status d2bd.service --no-pager 2>&1 | tail -n 80 || true",
+            ),
+            (
+                "daemon and controller processes",
+                "ps -eo pid=,ppid=,stat=,etime=,args= --no-headers 2>/dev/null | grep -E 'd2bd|controller-' || true",
+            ),
+        ],
+        &[("d2bd.service", ""), ("d2b-broker.service", "")],
+    )?;
     control.diag_unit("daemon-restarted", "d2bd.service", DAEMON_BOUND)?;
     control.wait_for_file("/run/d2b/public.sock", SOCKET_BOUND)?;
     control.diag_wait(
