@@ -7172,7 +7172,10 @@ impl ControllerSessionCoordinator {
                     // The controller retries its bootstrap send forever;
                     // re-arm so the next reconcile pass answers it instead
                     // of orphaning the controller.
-                    providers.rearm_controller_bootstrap(endpoint);
+                    providers
+                        .rearm_controller_bootstrap(endpoint)
+                        .await
+                        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
                     tracing::warn!(
                         provider = %context.provider_owner_ref().to_canonical_string(),
                         stage = error.stage,
@@ -11718,9 +11721,9 @@ mod tests {
         )
     }
 
-    #[test]
+    #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn readable_pending_controller_bootstrap_wakes_coordinator_to_active() {
+    async fn pending_and_rearmed_controller_bootstrap_wake_coordinator_to_active() {
         let zone = ZoneId::parse("work").unwrap();
         let providers = test_controller_session_providers();
         let process_ref = ResourceRef::parse("Process/provider-controller").unwrap();
@@ -11735,29 +11738,11 @@ mod tests {
         )
         .unwrap();
         let wake_count = Arc::new(AtomicUsize::new(0));
-        let callback_providers = Arc::downgrade(&providers);
-        let callback_zone = zone.clone();
-        let callback_process_ref = process_ref.clone();
         let callback_wake_count = Arc::clone(&wake_count);
         providers
             .set_controller_session_waker(
                 zone.clone(),
                 Arc::new(move || {
-                    let providers = callback_providers
-                        .upgrade()
-                        .expect("providers remain while the wake is delivered");
-                    assert!(providers
-                        .controller_bootstrap_ready(&callback_zone, &callback_process_ref));
-                    let context = providers
-                        .controller_bootstrap_contexts(&callback_zone)
-                        .into_iter()
-                        .find(|context| context.process_ref() == &callback_process_ref)
-                        .expect("readable Pending endpoint context");
-                    let endpoint = providers
-                        .begin_controller_bootstrap_if_matches(&callback_zone, &context)
-                        .expect("readable Pending endpoint must be claimed");
-                    let context = endpoint.context().clone();
-                    assert!(providers.activate_controller_bootstrap(&context));
                     callback_wake_count.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 }),
@@ -11784,14 +11769,27 @@ mod tests {
             .unwrap();
 
         assert_eq!(wake_count.load(Ordering::SeqCst), 1);
+        assert!(providers.controller_bootstrap_ready(&zone, &process_ref));
+        let context = providers
+            .controller_bootstrap_contexts(&zone)
+            .into_iter()
+            .find(|context| context.process_ref() == &process_ref)
+            .expect("readable Pending endpoint context");
+        let endpoint = providers
+            .begin_controller_bootstrap_if_matches(&zone, &context)
+            .expect("readable Pending endpoint must be claimed");
+        assert!(!providers.controller_bootstrap_ready(&zone, &process_ref));
+        providers.rearm_controller_bootstrap(endpoint).await.unwrap();
         assert_eq!(
-            providers
-                .controller_bootstrap_contexts(&zone)
-                .into_iter()
-                .map(|context| context.process_ref().clone())
-                .collect::<Vec<_>>(),
-            vec![process_ref.clone()]
+            wake_count.load(Ordering::SeqCst),
+            2,
+            "rearming a failed bootstrap must wake the coordinator again"
         );
+        assert!(providers.controller_bootstrap_ready(&zone, &process_ref));
+        let endpoint = providers
+            .begin_controller_bootstrap_if_matches(&zone, &context)
+            .expect("rearmed Pending endpoint must be claimed");
+        assert!(providers.activate_controller_bootstrap(endpoint.context()));
         assert!(!providers.controller_bootstrap_ready(&zone, &process_ref));
     }
 

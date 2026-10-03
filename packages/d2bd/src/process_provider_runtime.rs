@@ -2127,27 +2127,26 @@ impl ProductionProcessProviders {
     /// Pending state, so the next reconcile pass retries with the same
     /// pre-armed socket. The controller retries its send for as long as
     /// it lives; without this, one failed receive orphans it forever.
-    pub(crate) fn rearm_controller_bootstrap(
+    pub(crate) async fn rearm_controller_bootstrap(
         &self,
         endpoint: ControllerBootstrapEndpoint,
-    ) -> bool {
-        let Ok(mut markers) = self.controller_bootstrap.try_lock() else {
-            return false;
-        };
+    ) -> Result<(), String> {
+        let zone = endpoint.context().zone().clone();
         let key = (
-            endpoint.context().zone().clone(),
+            zone.clone(),
             endpoint.context().process_ref().clone(),
         );
-        if matches!(
+        let mut markers = self.controller_bootstrap.lock().await;
+        if !matches!(
             markers.get(&key),
             Some(ControllerBootstrapMarker::Establishing(current))
                 if *current == *endpoint.context()
         ) {
-            markers.insert(key, ControllerBootstrapMarker::Pending(endpoint));
-            true
-        } else {
-            false
+            return Err("provider-controller-bootstrap-state-changed".to_owned());
         }
+        markers.insert(key, ControllerBootstrapMarker::Pending(endpoint));
+        drop(markers);
+        self.wake_controller_session_reconcile(&zone)
     }
 
     pub(crate) fn fail_controller_bootstrap(&self, context: &ControllerBootstrapContext) -> bool {
