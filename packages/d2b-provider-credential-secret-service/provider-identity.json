@@ -1,0 +1,30 @@
+{
+  "crate": "d2b-provider-credential-secret-service",
+  "family": "credential-secret-service",
+  "roles": ["product", "runtime"],
+  "product": {
+    "identity": "credential-secret-service",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-credential-secret-service/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "credential-secret-service",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "nixos-modules/options-resources.nix",
+        "symbol": "credentialAssertions"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

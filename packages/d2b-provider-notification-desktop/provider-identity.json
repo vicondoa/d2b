@@ -1,0 +1,30 @@
+{
+  "crate": "d2b-provider-notification-desktop",
+  "family": "notification-desktop",
+  "roles": ["product", "session"],
+  "product": {
+    "identity": "notification-desktop",
+    "sharesIdentityWith": ["session"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-notification-desktop/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": "notification-desktop",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-notification-desktop/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "blockers": []
+}

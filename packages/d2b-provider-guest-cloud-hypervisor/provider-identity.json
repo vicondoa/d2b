@@ -1,0 +1,34 @@
+{
+  "crate": "d2b-provider-guest-cloud-hypervisor",
+  "family": "runtime-cloud-hypervisor",
+  "roles": ["product", "runtime"],
+  "product": {
+    "identity": "runtime-cloud-hypervisor",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-guest-cloud-hypervisor/src/descriptor.rs",
+        "symbol": "CLOUD_HYPERVISOR_PROVIDER_REF"
+      },
+      {
+        "path": "nixos-modules/provider-runtime-contracts.nix",
+        "symbol": "runtimeProviderRefs"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "runtime-cloud-hypervisor",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "nixos-modules/provider-runtime-contracts.nix",
+        "symbol": "runtimeProviderRefs"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

@@ -1,0 +1,30 @@
+{
+  "crate": "d2b-provider-network-local",
+  "family": "network-local",
+  "roles": ["product", "runtime"],
+  "product": {
+    "identity": "network-local",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-network-local/src/driver.rs",
+        "symbol": "NETWORK_PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "network-local",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "packages/d2bd/src/resource_plane_v3.rs",
+        "symbol": "registered_drivers"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

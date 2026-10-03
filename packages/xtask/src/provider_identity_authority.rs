@@ -35,12 +35,12 @@
 //! malformed, duplicated, unexplained, unevidenced, or matrix-sourced
 //! declaration is a refusal, not a row with defaults.
 //!
-//! The coverage gate that requires every provider crate to carry the
-//! declaration is [`Declaration::ProviderIdentity`]'s absence ratchet, and the
-//! declaration kind itself is not yet mandatory for the workspace: the
-//! authority lands here first and the per-crate declarations land with the
-//! unit that writes them, so the table in `authority_common` still records
-//! every crate as owning no `provider-identity.json`.
+//! The coverage gate requires every provider crate to carry the
+//! declaration: [`Declaration::ProviderIdentity`] is a mandatory declaration
+//! kind, so a provider-prefixed crate that arrives without a
+//! `provider-identity.json` is refused by name rather than dropped from
+//! every join below, and each crate's `BUILD.bazel` names the file so the
+//! Bazel runfiles closure carries it into every drift action.
 //!
 //! [`Declaration::ProviderIdentity`]: crate::authority_common::Declaration::ProviderIdentity
 
@@ -162,8 +162,15 @@ pub(crate) enum Role {
     /// The crate declares a driver another family's registration runs, so it
     /// owns the identity that driver serves and shares it outward.
     SharedDriver,
-    /// The crate owns a fixed-bootstrap Provider identity: one the daemon
-    /// registers at startup, outside ordinary Process projection.
+    /// The crate owns a fixed-bootstrap Provider identity: a packaged
+    /// product identity the deployment registers at startup, outside ordinary
+    /// Process projection and outside the ProviderSet runtime registrations.
+    ///
+    /// The identity lives on the product surface because that is where the
+    /// artifact it names is shipped; its startup is a deployment fact about
+    /// that artifact, not a runtime Provider registration. A fixed-bootstrap
+    /// crate therefore owns no runtime identity, which is what keeps the
+    /// generation cutover from minting a ProviderSet row for it.
     FixedBootstrap,
     /// The crate owns a ResourceType vocabulary and no Provider identity of
     /// its own.
@@ -476,15 +483,15 @@ impl ProviderIdentities {
     }
 
     /// Every `(crate, identity)` pair a fixed-bootstrap crate declares on the
-    /// runtime surface, in crate-name order.
+    /// product surface, in crate-name order.
     ///
     /// The load gates the pair: a crate that claims fixed-bootstrap ownership
-    /// without a runtime identity never reaches this join.
+    /// without a product identity never reaches this join.
     pub(crate) fn fixed_bootstrap_identities(&self) -> Vec<(&str, &str)> {
         self.declarations
             .iter()
             .filter_map(|(crate_name, declaration)| {
-                let identity = declaration.slot(Surface::Runtime).identity()?;
+                let identity = declaration.slot(Surface::Product).identity()?;
                 declaration
                     .has_role(Role::FixedBootstrap)
                     .then_some((crate_name.as_str(), identity))
@@ -723,10 +730,10 @@ fn role_errors(crate_name: &str, declaration: &IdentityDeclaration) -> Vec<Strin
         }
     }
     if declaration.has_role(Role::FixedBootstrap)
-        && declaration.slot(Surface::Runtime).identity().is_none()
+        && declaration.slot(Surface::Product).identity().is_none()
     {
         errors.push(format!(
-            "fixed-bootstrap-without-runtime: crate {crate_name} claims fixed-bootstrap ownership but declares no runtime identity; a fixed-bootstrap Provider is one the daemon registers at startup"
+            "fixed-bootstrap-without-product: crate {crate_name} claims fixed-bootstrap ownership but declares no product identity; a fixed-bootstrap Provider identity is a packaged product identity whose startup is a deployment fact, not a ProviderSet runtime registration"
         ));
     }
     if declaration.has_role(Role::SharedDriver) && !owns_any {
@@ -929,6 +936,11 @@ fn evidence_errors(
                 anchor.symbol()
             ));
         }
+        if !spells(text, identity) {
+            errors.push(format!(
+                "evidence-identity-missing: crate {crate_name} anchors the {surface} identity {identity} on {path}, which never names that identity; an anchor points at a production source that says so, not at a file that happens to hold the symbol"
+            ));
+        }
     }
     errors
 }
@@ -991,12 +1003,24 @@ mod tests {
 
     use super::*;
 
+    // The census asserts against the tree the loader enumerated, so the
+    // enumeration itself is read here rather than restated in the assertions.
+    use crate::authority_common::provider_crates;
+
     /// The declaration path of one fixture crate, spelled once so the tests
     /// and the loader agree on where a declaration lives.
     fn declaration_path(crate_name: &str) -> PathBuf {
         PathBuf::from("packages")
             .join(crate_name)
             .join(Declaration::ProviderIdentity.file_name())
+    }
+
+    /// The live repository's declarations, read through the loader the normal
+    /// gate runs: the assertions below state what the committed tree says,
+    /// not what a fixture would accept.
+    fn repository_identities() -> ProviderIdentities {
+        ProviderIdentities::load(crate::repo_root().expect("the aggregate passes D2B_REPO_ROOT"))
+            .expect("every provider crate declares its identities")
     }
 
     /// The NixOS source an accepted anchor names: outside the crate graph,
@@ -1008,6 +1032,24 @@ mod tests {
     const RUST_SOURCE: &str = "packages/d2b-core/src/runtime.rs";
     /// The symbol the fixture's Rust source spells.
     const RUST_SYMBOL: &str = "SERVING_WORKER_PROVIDER_REF";
+
+    /// Every Provider identity a fixture declaration anchors on one of the
+    /// accepted sources above. Both sources spell all of them, so a fixture
+    /// varies the placement rule rather than the source's willingness to name
+    /// the identity it is asked to evidence.
+    const FIXTURE_IDENTITIES: &[&str] = &[
+        "alpha-product",
+        "device-tpm",
+        "endpoint",
+        "process-systemd",
+        "runtime-alpha",
+        "runtime-endpoint",
+        "session-alpha",
+        "session-beta",
+        "system-minijail",
+        "system-systemd",
+    ];
+
     /// The generated projection no identity may take its evidence from.
     const GENERATED_SOURCE: &str = "generated/new-graph/provider_registrations.rs";
     /// The symbol the fixture's generated projection really does spell, so the
@@ -1048,16 +1090,38 @@ mod tests {
             fs::read_to_string(self.root.join(relative)).expect("read the fixture file")
         }
 
-        /// The two production sources the accepted anchors name, each
-        /// spelling the symbol its anchor claims.
+        /// The two production sources the accepted anchors name. Each spells
+        /// the symbols its anchors claim and every Provider identity the
+        /// fixture declarations below anchor on it, because the loader
+        /// refuses an anchor whose source holds the symbol without naming the
+        /// identity.
         fn write_evidence_sources(&self) {
             self.write(
                 NIX_SOURCE,
-                &format!("{{ assertions = [{NIX_SYMBOL} \"systemd\"]; }}\n"),
+                &format!(
+                    "{{ assertions = [\n  {NIX_SYMBOL} \"systemd\"\n{}];\n}}\n",
+                    FIXTURE_IDENTITIES
+                        .iter()
+                        .map(|identity| format!("  {NIX_SYMBOL} \"Provider/{identity}\""))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ),
             );
             self.write(
                 RUST_SOURCE,
-                &format!("pub const {RUST_SYMBOL}: &str = \"volume-virtiofs\";\n"),
+                &format!(
+                    "pub const {RUST_SYMBOL}: &str = \"Provider/process-systemd\";\n{}\n",
+                    FIXTURE_IDENTITIES
+                        .iter()
+                        .enumerate()
+                        .map(|(index, identity)| {
+                            format!(
+                                "pub const FIXTURE_PROVIDER_REF_{index}: &str = \"Provider/{identity}\";"
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ),
             );
             self.write(
                 GENERATED_SOURCE,
@@ -1354,20 +1418,21 @@ mod tests {
         );
     }
 
-    /// Fixed-bootstrap ownership is a runtime-surface fact: the crate that
-    /// owns `system-minijail` declares it as the identity it registers.
+    /// Fixed-bootstrap ownership is a product-surface fact: the crate that
+    /// owns `system-minijail` declares it as the packaged identity it ships
+    /// and registers no runtime Provider of its own.
     #[test]
-    fn a_fixed_bootstrap_owner_declares_its_runtime_identity() {
+    fn a_fixed_bootstrap_owner_declares_its_product_identity() {
         let fixture = Fixture::new("bootstrap");
         fixture.write_evidence_sources();
         fixture.write_declaration(
             "d2b-provider-process-minijail",
             &declaration(
                 "d2b-provider-process-minijail",
-                "process-minijail",
-                &["runtime", "fixed-bootstrap"],
-                &null_slot("no-identity-owned"),
+                "system-minijail",
+                &["product", "fixed-bootstrap"],
                 &identity_slot("system-minijail", (NIX_SOURCE, NIX_SYMBOL)),
+                &null_slot("no-identity-owned"),
                 &null_slot("no-identity-owned"),
                 "[]",
             ),
@@ -1376,7 +1441,12 @@ mod tests {
         assert_eq!(
             identities.fixed_bootstrap_identities(),
             vec![("d2b-provider-process-minijail", "system-minijail")],
-            "the fixed-bootstrap join carries the registering crate and its identity"
+            "the fixed-bootstrap join carries the owning crate and the product identity it ships"
+        );
+        assert_eq!(
+            identities.identity("d2b-provider-process-minijail", Surface::Runtime),
+            None,
+            "a fixed-bootstrap Provider is a packaged artifact, never a ProviderSet runtime row"
         );
     }
 
@@ -1784,6 +1854,38 @@ mod tests {
         );
     }
 
+    /// An anchor whose source spells the symbol but never the identity is the
+    /// hollow case: a file can hold a well-known constant without saying
+    /// which Provider this declaration is about.
+    #[test]
+    fn evidence_naming_a_source_that_never_names_the_identity_is_refused() {
+        let fixture = Fixture::new("silent-source");
+        fixture.with_identity_crate();
+        fixture.write(
+            RUST_SOURCE,
+            &format!("pub const {RUST_SYMBOL}: &str = \"Provider/systemd\";\n"),
+        );
+        fixture.write_declaration(
+            "d2b-provider-alpha",
+            &declaration(
+                "d2b-provider-alpha",
+                "alpha",
+                &["runtime"],
+                &null_slot("no-identity-owned"),
+                &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
+                &null_slot("no-identity-owned"),
+                "[]",
+            ),
+        );
+        let error = fixture.expect_refusal();
+        assert!(
+            error.contains("evidence-identity-missing")
+                && error.contains("runtime-alpha")
+                && error.contains(RUST_SOURCE),
+            "the refusal names the identity the source never mentions:\n{error}"
+        );
+    }
+
     /// The same anchor twice is noise that hides a missing second source.
     #[test]
     fn a_repeated_evidence_anchor_is_refused() {
@@ -1970,8 +2072,8 @@ mod tests {
         assert!(fixture.refuses("contradictory-roles"));
     }
 
-    /// Fixed-bootstrap ownership is a runtime fact, and a shared driver is
-    /// owned by the crate that spells it.
+    /// Fixed-bootstrap ownership is a product-surface fact, and a shared
+    /// driver is owned by the crate that spells it.
     #[test]
     fn bootstrap_and_shared_driver_ownership_need_an_identity_to_own() {
         let fixture = Fixture::new("ownership-without-identity");
@@ -1988,7 +2090,7 @@ mod tests {
                 "[]",
             ),
         );
-        assert!(fixture.refuses("fixed-bootstrap-without-runtime"));
+        assert!(fixture.refuses("fixed-bootstrap-without-product"));
 
         let fixture = Fixture::new("shared-driver-without-identity");
         fixture.with_identity_crate();
@@ -2275,26 +2377,394 @@ mod tests {
         );
     }
 
-    /// The workspace is not yet required to declare its identities: the
-    /// authority lands first and the declarations land with the unit that
-    /// writes them, so the absence ratchet still records every crate as
-    /// owning no `provider-identity.json`. The ratchet that flips this is
-    /// `authority_common`'s per-crate absence table.
+    /// The census: every provider-prefixed crate the tree enumerates carries
+    /// exactly one declaration, and the kind is mandatory, so nothing is
+    /// read through an absence row any more.
     #[test]
-    fn the_repository_loads_under_the_current_gate() {
+    fn the_census_covers_every_provider_crate_exactly_once() {
         let repo_root = crate::repo_root().expect("the aggregate passes D2B_REPO_ROOT");
-        let identities = ProviderIdentities::load(repo_root)
-            .expect("the current workspace satisfies the identity authority");
+        let identities = repository_identities();
+        let enumerated = provider_crates(repo_root).expect("the provider crates enumerate");
         assert_eq!(
             identities.crate_names().collect::<Vec<_>>(),
-            Vec::<&str>::new(),
-            "no crate carries a provider-identity.json yet, and the gate says so rather than inferring one"
+            enumerated
+                .iter()
+                .map(|(crate_name, _)| crate_name.as_str())
+                .collect::<Vec<_>>(),
+            "every provider-prefixed crate declares its identities, and nothing else does"
+        );
+        assert_eq!(
+            declaration_paths(repo_root, Declaration::ProviderIdentity)
+                .expect("the declaration kind is mandatory for every provider crate")
+                .len(),
+            enumerated.len(),
+            "no crate carries the kind through an absence row any more"
+        );
+    }
+
+    /// A provider-prefixed crate that arrives without a declaration fails the
+    /// census by name: the crates that did declare are still read normally,
+    /// and the refusal names only the crate that never carried the file.
+    #[test]
+    fn a_new_provider_prefixed_crate_without_a_declaration_fails_the_census() {
+        let fixture = Fixture::new("census-missing");
+        fixture.with_identity_crate();
+        fixture.write(
+            "packages/d2b-provider-newcomer/src/lib.rs",
+            "pub fn driver() {}\n",
+        );
+        let error = fixture.expect_refusal();
+        assert!(
+            error.contains("missing-declaration")
+                && error.contains("d2b-provider-newcomer")
+                && error.contains(Declaration::ProviderIdentity.file_name()),
+            "the refusal names the new crate and the declaration it never carried:\n{error}"
         );
         assert!(
-            declaration_paths(repo_root, Declaration::ProviderIdentity)
-                .expect("every crate carries the declaration or names its absence")
-                .is_empty(),
-            "the declaration kind is registered and every crate names its absence"
+            !error.contains("d2b-provider-fixture"),
+            "the crate that did declare is read normally and is not dragged into the refusal:\n{error}"
         );
+    }
+
+    /// Every crate's declaration has to reach the Bazel runfiles closure: a
+    /// manifest that leaves the file out makes the drift action build over an
+    /// incomplete source tree and compare nothing.
+    #[test]
+    fn every_provider_crate_names_its_declaration_in_the_bazel_workspace_sources() {
+        let repo_root = crate::repo_root().expect("the aggregate passes D2B_REPO_ROOT");
+        let entry = format!("\"{}\",", Declaration::ProviderIdentity.file_name());
+        for (crate_name, crate_dir) in
+            provider_crates(repo_root).expect("the provider crates enumerate")
+        {
+            let manifest_path = crate_dir.join("BUILD.bazel");
+            let manifest = fs::read_to_string(&manifest_path).unwrap_or_else(|error| {
+                panic!(
+                    "{} is a readable Bazel manifest: {error}",
+                    manifest_path.display()
+                )
+            });
+            assert!(
+                manifest.lines().any(|line| line.trim() == entry),
+                "{crate_name}/BUILD.bazel carries no {} entry in cargo_workspace_sources, so its runfiles closure drops the declaration and every drift action over it reads an incomplete source tree",
+                Declaration::ProviderIdentity.file_name()
+            );
+        }
+    }
+
+    /// The census reads as a classification, not as a count of registrations:
+    /// a crate that ships a product identity and registers no runtime Provider
+    /// is a product-only crate, not a crate that owns no identity.
+    #[test]
+    fn the_census_classifies_every_crate_by_the_surfaces_it_owns() {
+        let identities = repository_identities();
+        let mut by_shape: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+        for (crate_name, declaration) in identities.declarations() {
+            let owned = Surface::ALL
+                .iter()
+                .filter(|surface| declaration.slot(**surface).identity().is_some())
+                .map(|surface| surface.key())
+                .collect::<Vec<_>>();
+            let shape = if owned.is_empty() {
+                "none".to_owned()
+            } else {
+                owned.join("+")
+            };
+            by_shape.entry(shape).or_default().push(crate_name);
+        }
+        let expected = BTreeMap::from([
+            (
+                "none".to_owned(),
+                vec![
+                    "d2b-provider-emergency-policy",
+                    "d2b-provider-execution-policy",
+                    "d2b-provider-operation",
+                    "d2b-provider-provider",
+                    "d2b-provider-quota",
+                    "d2b-provider-resource-export",
+                    "d2b-provider-resource-import",
+                    "d2b-provider-role",
+                    "d2b-provider-role-binding",
+                    "d2b-provider-seccomp-profile",
+                    "d2b-provider-supervisor",
+                    "d2b-provider-telemetry-binding",
+                    "d2b-provider-telemetry-service",
+                    "d2b-provider-test-controller",
+                    "d2b-provider-toolkit",
+                    "d2b-provider-zone",
+                    "d2b-provider-zone-link",
+                ],
+            ),
+            (
+                "product".to_owned(),
+                vec![
+                    "d2b-provider-audio-pipewire",
+                    "d2b-provider-device-tpm",
+                    "d2b-provider-observability-otel",
+                    "d2b-provider-process-minijail",
+                ],
+            ),
+            (
+                "product+runtime".to_owned(),
+                vec![
+                    "d2b-provider-activation-nixos",
+                    "d2b-provider-credential-entra",
+                    "d2b-provider-credential-managed-identity",
+                    "d2b-provider-credential-secret-service",
+                    "d2b-provider-device-gpu",
+                    "d2b-provider-device-security-key",
+                    "d2b-provider-device-usbip",
+                    "d2b-provider-guest-azure-container-apps",
+                    "d2b-provider-guest-azure-virtual-machine",
+                    "d2b-provider-guest-cloud-hypervisor",
+                    "d2b-provider-guest-qemu-media",
+                    "d2b-provider-network-local",
+                    "d2b-provider-process-systemd",
+                    "d2b-provider-transport-azure-relay",
+                    "d2b-provider-transport-vsock",
+                    "d2b-provider-volume-local",
+                    "d2b-provider-volume-virtiofs",
+                ],
+            ),
+            (
+                "product+session".to_owned(),
+                vec![
+                    "d2b-provider-clipboard-wayland",
+                    "d2b-provider-display-wayland",
+                    "d2b-provider-notification-desktop",
+                    "d2b-provider-shell-terminal",
+                    "d2b-provider-system-core",
+                ],
+            ),
+            (
+                "runtime".to_owned(),
+                vec![
+                    "d2b-provider-audio-binding",
+                    "d2b-provider-audio-service",
+                    "d2b-provider-credential",
+                    "d2b-provider-device",
+                    "d2b-provider-endpoint",
+                    "d2b-provider-guest",
+                    "d2b-provider-host",
+                    "d2b-provider-process",
+                    "d2b-provider-shell-pool",
+                    "d2b-provider-shell-session",
+                    "d2b-provider-user",
+                    "d2b-provider-volume",
+                    "d2b-provider-volume-binding",
+                    "d2b-provider-wayland-policy",
+                    "d2b-provider-wayland-session",
+                ],
+            ),
+            ("session".to_owned(), vec!["d2b-provider-config-nixos"]),
+        ]);
+        assert_eq!(
+            by_shape, expected,
+            "every crate falls in exactly one classification, and registration absence is never read as identity absence"
+        );
+    }
+
+    /// AE1: the systemd Process provider ships the product-plane
+    /// `system-systemd` artifact and registers a different runtime identity;
+    /// the two slots are independent and the declaration states both.
+    #[test]
+    fn the_systemd_process_crate_ships_one_identity_and_registers_another() {
+        let identities = repository_identities();
+        let crate_name = "d2b-provider-process-systemd";
+        assert_eq!(
+            identities.identity(crate_name, Surface::Product),
+            Some("system-systemd")
+        );
+        assert_eq!(
+            identities.identity(crate_name, Surface::Runtime),
+            Some("process-systemd")
+        );
+        assert_eq!(
+            identities.identity(crate_name, Surface::Session),
+            None,
+            "a crate that owns no session routing states that rather than inheriting a neighbour's answer"
+        );
+        assert_eq!(
+            identities
+                .declaration(crate_name)
+                .expect("the crate declares")
+                .roles(),
+            &[Role::Product, Role::Runtime]
+        );
+    }
+
+    /// AE2: `device-tpm` keeps its packaged product identity while the shared
+    /// Device driver owns the executable reconciliation, so no runtime
+    /// registration is synthesized for it.
+    #[test]
+    fn the_tpm_crate_keeps_its_product_identity_and_owns_the_shared_driver() {
+        let identities = repository_identities();
+        let crate_name = "d2b-provider-device-tpm";
+        let declaration = identities
+            .declaration(crate_name)
+            .expect("the crate declares");
+        assert_eq!(
+            identities.identity(crate_name, Surface::Product),
+            Some("device-tpm")
+        );
+        assert_eq!(identities.identity(crate_name, Surface::Runtime), None);
+        assert_eq!(
+            identities.shared_driver_crates(),
+            vec![crate_name],
+            "the crate that declares the shared driver owns the identity that driver serves"
+        );
+        assert_eq!(
+            declaration.slot(Surface::Runtime).reason(),
+            Some(NoIdentityReason::CompositionHosted),
+            "the null runtime surface names the hosting the composition does, so a registration row could carry neither half"
+        );
+    }
+
+    /// The fixed-bootstrap join is the whole of R5's ownership statement:
+    /// exactly two crates, each reading its packaged product identity, and
+    /// neither owning a runtime Provider that a cutover could mint a
+    /// ProviderSet registration for.
+    #[test]
+    fn fixed_bootstrap_is_exactly_the_two_foundation_owned_products() {
+        let identities = repository_identities();
+        assert_eq!(
+            identities.fixed_bootstrap_identities(),
+            vec![
+                ("d2b-provider-process-minijail", "system-minijail"),
+                ("d2b-provider-system-core", "system-core"),
+            ],
+            "the fixed-bootstrap join reads the product surface, and foundation owns exactly these two"
+        );
+        for (crate_name, identity) in identities.fixed_bootstrap_identities() {
+            assert_eq!(
+                identities.identity(crate_name, Surface::Runtime),
+                None,
+                "{crate_name} is fixed bootstrap through its packaged {identity}, so it owns no runtime Provider"
+            );
+        }
+    }
+
+    /// AE3: `system-minijail` is a fixed-bootstrap product identity owned by
+    /// the minijail crate, and no crate on any surface owns a
+    /// `process-minijail` identity: the directory name is not an identity.
+    #[test]
+    fn the_minijail_crate_owns_the_fixed_bootstrap_system_minijail_identity() {
+        let identities = repository_identities();
+        let crate_name = "d2b-provider-process-minijail";
+        let declaration = identities
+            .declaration(crate_name)
+            .expect("the crate declares");
+        assert_eq!(declaration.roles(), &[Role::Product, Role::FixedBootstrap]);
+        assert_eq!(
+            identities.identity(crate_name, Surface::Product),
+            Some("system-minijail")
+        );
+        assert_eq!(
+            identities.identity(crate_name, Surface::Runtime),
+            None,
+            "the fixed-bootstrap identity is a packaged product, not a ProviderSet registration"
+        );
+        for surface in Surface::ALL {
+            assert!(
+                declaration.slot(surface).shares_identity_with().is_empty(),
+                "the fixed-bootstrap identity is declared on one surface, so no {surface} slot repeats it"
+            );
+        }
+        for surface in Surface::ALL {
+            assert_ne!(
+                identities.identity(crate_name, surface),
+                Some("process-minijail"),
+                "the crate's own directory name names no identity: the {surface} surface states none"
+            );
+        }
+    }
+
+    /// AE4: `endpoint` is a runtime resource family outside the packaged
+    /// Provider matrix: it registers a Provider and ships no product.
+    #[test]
+    fn the_endpoint_family_is_a_runtime_identity_and_no_packaged_product() {
+        let identities = repository_identities();
+        let crate_name = "d2b-provider-endpoint";
+        assert_eq!(
+            identities.identity(crate_name, Surface::Runtime),
+            Some("endpoint")
+        );
+        assert_eq!(identities.identity(crate_name, Surface::Product), None);
+        assert_eq!(identities.identity(crate_name, Surface::Session), None);
+        assert_eq!(
+            identities
+                .declaration(crate_name)
+                .expect("the crate declares")
+                .roles(),
+            &[Role::Runtime]
+        );
+    }
+
+    /// AE5: `execution-policy` owns a ResourceType vocabulary and no Provider
+    /// identity at all, so the `Provider/execution-policy` reference
+    /// `d2b-contracts-resource` publishes names no crate's identity.
+    #[test]
+    fn the_execution_policy_crate_declares_no_identity_on_any_surface() {
+        let identities = repository_identities();
+        let crate_name = "d2b-provider-execution-policy";
+        let declaration = identities
+            .declaration(crate_name)
+            .expect("the crate declares");
+        assert_eq!(
+            declaration.roles(),
+            &[Role::NoIdentity, Role::ResourceFamily]
+        );
+        for surface in Surface::ALL {
+            assert_eq!(declaration.slot(surface).identity(), None);
+            assert_eq!(
+                declaration.slot(surface).reason(),
+                Some(NoIdentityReason::NoIdentityOwned)
+            );
+            assert!(
+                identities
+                    .identities(surface)
+                    .all(|(_, identity)| identity != "execution-policy"),
+                "no surface projects a Provider/execution-policy identity"
+            );
+        }
+    }
+
+    /// AE12: a blocker records a tracked issue and claims nothing about the
+    /// implementation behind it, so the surfaces that issue prevents stay
+    /// null and the three deferred families are the only crates naming one.
+    #[test]
+    fn a_blocker_names_a_waiting_issue_and_claims_no_executable_readiness() {
+        let identities = repository_identities();
+        let mut by_crate: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (crate_name, blocker) in identities.blockers() {
+            by_crate
+                .entry(crate_name)
+                .or_default()
+                .push(blocker.issue());
+        }
+        assert_eq!(
+            by_crate,
+            BTreeMap::from([
+                ("d2b-provider-audio-pipewire", vec!["#629"]),
+                ("d2b-provider-observability-otel", vec!["#630"]),
+                ("d2b-provider-shell-pool", vec!["#631"]),
+                ("d2b-provider-shell-session", vec!["#631"]),
+                ("d2b-provider-shell-terminal", vec!["#631"]),
+            ]),
+            "#629, #630 and #631 stay explicit blocked surfaces on the audio, observability and shell families, and on no other crate"
+        );
+        for (crate_name, issues) in &by_crate {
+            if issues.contains(&"#629") || issues.contains(&"#630") {
+                let declaration = identities
+                    .declaration(crate_name)
+                    .expect("a blocked crate still declares its identities");
+                for surface in [Surface::Runtime, Surface::Session] {
+                    assert_eq!(
+                        declaration.slot(surface).identity(),
+                        None,
+                        "{crate_name} is blocked on {issues:?}, so its {surface} surface states no identity"
+                    );
+                }
+            }
+        }
     }
 }

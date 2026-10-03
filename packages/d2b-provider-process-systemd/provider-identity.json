@@ -1,0 +1,36 @@
+{
+  "crate": "d2b-provider-process-systemd",
+  "family": "process-systemd",
+  "roles": ["product", "runtime"],
+  "product": {
+    "identity": "system-systemd",
+    "evidence": [
+      {
+        "path": "nixos-modules/providers/system-systemd.nix",
+        "symbol": "systemSystemd"
+      },
+      {
+        "path": "packages/d2b-provider-process-systemd/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "process-systemd",
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-process-systemd/src/effects_service.rs",
+        "symbol": "inspect_response"
+      },
+      {
+        "path": "packages/d2b-provider-process-systemd/src/effects_service.rs",
+        "symbol": "PROCESS_SYSTEMD_EFFECTS_SERVICE"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

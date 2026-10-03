@@ -75,6 +75,7 @@ filegroup(
             "build.rs",
             "examples/**/*.rs",
             "operations.json",
+            "provider-identity.json",
             "registrations.json",
             "resource-types.json",
             "service-catalog.json",

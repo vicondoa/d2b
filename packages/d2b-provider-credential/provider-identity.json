@@ -1,0 +1,23 @@
+{
+  "crate": "d2b-provider-credential",
+  "family": "credential",
+  "roles": ["runtime"],
+  "product": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "runtime": {
+    "identity": "credential",
+    "evidence": [
+      {
+        "path": "packages/d2bd/src/resource_plane_v3.rs",
+        "symbol": "registered_drivers"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

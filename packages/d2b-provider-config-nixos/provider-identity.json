@@ -1,0 +1,23 @@
+{
+  "crate": "d2b-provider-config-nixos",
+  "family": "config-nixos",
+  "roles": ["session"],
+  "product": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": "config-nixos",
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-config-nixos/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "blockers": []
+}

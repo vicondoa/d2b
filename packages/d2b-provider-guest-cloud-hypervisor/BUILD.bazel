@@ -203,6 +203,7 @@ filegroup(
             "integration/**/*",
             "nix/**/*",
             "operations.json",
+            "provider-identity.json",
             "provider-manifest.json",
             "provider-manifest.json.sig",
             "publisher-public-key.pem",

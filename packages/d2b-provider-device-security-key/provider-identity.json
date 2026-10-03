@@ -1,0 +1,30 @@
+{
+  "crate": "d2b-provider-device-security-key",
+  "family": "device-security-key",
+  "roles": ["product", "runtime"],
+  "product": {
+    "identity": "device-security-key",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-device-security-key/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "device-security-key",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "packages/d2bd/src/resource_plane_v3.rs",
+        "symbol": "registered_drivers"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

@@ -1,0 +1,30 @@
+{
+  "crate": "d2b-provider-device-usbip",
+  "family": "device-usbip",
+  "roles": ["product", "runtime"],
+  "product": {
+    "identity": "device-usbip",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-device-usbip/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "device-usbip",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "packages/d2bd/src/resource_plane_v3.rs",
+        "symbol": "registered_drivers"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

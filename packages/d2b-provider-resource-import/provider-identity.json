@@ -1,0 +1,18 @@
+{
+  "crate": "d2b-provider-resource-import",
+  "family": "resource-import",
+  "roles": ["resource-family"],
+  "product": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

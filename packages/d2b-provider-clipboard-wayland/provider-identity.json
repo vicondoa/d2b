@@ -1,0 +1,30 @@
+{
+  "crate": "d2b-provider-clipboard-wayland",
+  "family": "clipboard-wayland",
+  "roles": ["product", "session"],
+  "product": {
+    "identity": "clipboard-wayland",
+    "sharesIdentityWith": ["session"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-clipboard-wayland/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": "clipboard-wayland",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-clipboard-wayland/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "blockers": []
+}

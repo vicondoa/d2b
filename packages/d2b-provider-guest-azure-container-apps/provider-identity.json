@@ -1,0 +1,30 @@
+{
+  "crate": "d2b-provider-guest-azure-container-apps",
+  "family": "runtime-azure-container-apps",
+  "roles": ["product", "runtime"],
+  "product": {
+    "identity": "runtime-azure-container-apps",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "nixos-modules/provider-runtime-contracts.nix",
+        "symbol": "runtimeProviderRefs"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "runtime-azure-container-apps",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "nixos-modules/provider-runtime-contracts.nix",
+        "symbol": "runtimeProviderRefs"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

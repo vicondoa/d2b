@@ -1,0 +1,23 @@
+{
+  "crate": "d2b-provider-device-tpm",
+  "family": "device-tpm",
+  "roles": ["product", "shared-driver"],
+  "product": {
+    "identity": "device-tpm",
+    "evidence": [
+      {
+        "path": "packages/d2b-core/src/bundle_resolver.rs",
+        "symbol": "DEVICE_TPM_PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "composition-hosted"
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

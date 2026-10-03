@@ -1,0 +1,23 @@
+{
+  "crate": "d2b-provider-device",
+  "family": "device",
+  "roles": ["runtime"],
+  "product": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "runtime": {
+    "identity": "device",
+    "evidence": [
+      {
+        "path": "packages/d2bd/src/resource_plane_v3.rs",
+        "symbol": "registered_drivers"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

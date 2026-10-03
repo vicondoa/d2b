@@ -1,0 +1,23 @@
+{
+  "crate": "d2b-provider-volume-binding",
+  "family": "volume-binding",
+  "roles": ["runtime"],
+  "product": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "runtime": {
+    "identity": "volume-binding",
+    "evidence": [
+      {
+        "path": "packages/d2bd/src/resource_plane_v3.rs",
+        "symbol": "registered_drivers"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

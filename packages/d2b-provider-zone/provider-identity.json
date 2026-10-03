@@ -1,0 +1,18 @@
+{
+  "crate": "d2b-provider-zone",
+  "family": "zone",
+  "roles": ["resource-family"],
+  "product": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

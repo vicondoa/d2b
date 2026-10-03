@@ -1,0 +1,30 @@
+{
+  "crate": "d2b-provider-volume-local",
+  "family": "volume-local",
+  "roles": ["product", "runtime"],
+  "product": {
+    "identity": "volume-local",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "packages/d2bd/src/shared_provider_effects.rs",
+        "symbol": "validate_network_config_volume_spec"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "volume-local",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-network-local/src/driver.rs",
+        "symbol": "CONFIG_VOLUME_PROVIDER_REF"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

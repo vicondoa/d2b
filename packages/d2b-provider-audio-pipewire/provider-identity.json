@@ -1,0 +1,28 @@
+{
+  "crate": "d2b-provider-audio-pipewire",
+  "family": "audio-pipewire",
+  "roles": ["product"],
+  "product": {
+    "identity": "audio-pipewire",
+    "evidence": [
+      {
+        "path": "packages/d2b-core-controller/src/binding_children.rs",
+        "symbol": "child_set"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": [
+    {
+      "issue": "#629",
+      "summary": "the runtime and session surfaces stay null: #629 owns the audio artifact and the portal FD transfer, and this declaration claims no executable audio path behind the product identity"
+    }
+  ]
+}

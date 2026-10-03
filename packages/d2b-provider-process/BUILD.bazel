@@ -112,6 +112,7 @@ filegroup(
             "integration/**/*",
             "README.md",
             "operations.json",
+            "provider-identity.json",
             "registrations.json",
             "resource-types.json",
             "service-catalog.json",

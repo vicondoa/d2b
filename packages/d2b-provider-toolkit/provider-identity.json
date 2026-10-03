@@ -1,0 +1,18 @@
+{
+  "crate": "d2b-provider-toolkit",
+  "family": "toolkit",
+  "roles": ["support"],
+  "product": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}
