@@ -77,7 +77,7 @@ pub use execution_policy_resource::{
     ExecutionInstance, ExecutionInstanceKind, ExecutionPolicyFingerprint, ExecutionPolicySpec,
     ExecutionRequirements, PolicyAuthorization, PolicyCapabilities, PolicyContractError,
     PolicyIdentity, PolicyNamespaces, PolicyRefusal, PolicyRoot, PolicySeccomp,
-    ALL_CONFINEMENT_FACETS, EXECUTION_POLICY_PROVIDER_REF, EXECUTION_POLICY_RESOURCE_TYPE,
+    ALL_CONFINEMENT_FACETS, EXECUTION_POLICY_RESOURCE_TYPE,
     MAX_POLICY_CAPABILITY_CLASSES, MAX_POLICY_FDS, MAX_POLICY_MEMORY_BYTES, MAX_POLICY_MILLICPU,
     MAX_POLICY_NAMESPACE_CLASSES, MAX_POLICY_PIDS, MAX_POLICY_UMASK, admit_execution,
 };

@@ -15,301 +15,238 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-const PROVIDER_PREFIX: &str = "d2b-provider-";
-const NON_PROVIDER_PREFIXED: &[&str] = &[
-    "d2b-provider",
-    "d2b-provider-config-nixos",
-    "d2b-provider-supervisor",
-    "d2b-provider-test-controller",
-    "d2b-provider-toolkit",
-];
+use crate::provider_identity_authority::{ProviderIdentities, Surface};
 
-/// The crate that declares the resource types a driver crate serves.
-///
-/// A per-type driver crate implements one resource type's driver, so it
-/// depends on this crate; that declared dependency, and not the shape of the
-/// crate name, is what separates a driver crate from a packaging Provider.
-const RESOURCE_TYPES_CRATE: &str = "d2b-resource-types";
+const PROVIDER_PREFIX: &str = "d2b-provider-";
 
 /// One row in the accepted Provider catalog.
 ///
-/// The matrix is deliberately kept beside the workspace policy.  Cargo
-/// metadata proves which crates exist, while this closed table proves that a
-/// crate, dossier, owner-local test, and aggregate target describe the same
-/// accepted Provider identity.
+/// The matrix is deliberately kept beside the workspace policy, and it is
+/// keyed by crate: a row says which crate ships which source, dossier,
+/// owner-local test and aggregate target. Which Provider identity that crate
+/// publishes, and whether the deployment starts it as a fixed bootstrap
+/// Provider, are not stated here - they are the crate's own product identity
+/// and its fixed-bootstrap role in the per-crate identity authority, so this
+/// table and that authority can never disagree about one fact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProviderMatrixRow {
-    pub(crate) identity: &'static str,
     pub(crate) crate_name: &'static str,
     pub(crate) source_path: &'static str,
     pub(crate) test_path: &'static str,
     pub(crate) dossier_path: &'static str,
     pub(crate) bazel_target: &'static str,
     pub(crate) unit: &'static str,
-    pub(crate) bootstrap: bool,
 }
 
 /// The closed initial Provider matrix from the generic reconciler plan.
 pub(crate) const PROVIDER_MATRIX: &[ProviderMatrixRow] = &[
     ProviderMatrixRow {
-        identity: "system-core",
         crate_name: "d2b-provider-system-core",
         source_path: "packages/d2b-provider-system-core/src/host.rs",
         test_path: "packages/d2b-provider-system-core/tests/host_reconciliation.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-system-core.md",
         bazel_target: "//packages/d2b-provider-system-core:all-tests",
         unit: "U5",
-        bootstrap: true,
     },
     ProviderMatrixRow {
-        identity: "system-systemd",
         crate_name: "d2b-provider-process-systemd",
         source_path: "packages/d2b-provider-process-systemd/src/controller.rs",
         test_path: "packages/d2b-provider-process-systemd/tests/controller.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-system-systemd.md",
         bazel_target: "//packages/d2b-provider-process-systemd:all-tests",
         unit: "U5",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "system-minijail",
         crate_name: "d2b-provider-process-minijail",
         source_path: "packages/d2b-provider-process-minijail/src/launch.rs",
         test_path: "packages/d2b-provider-process-minijail/tests/conformance.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-system-minijail.md",
         bazel_target: "//packages/d2b-provider-process-minijail:all-tests",
         unit: "U5",
-        bootstrap: true,
     },
     ProviderMatrixRow {
-        identity: "runtime-cloud-hypervisor",
         crate_name: "d2b-provider-guest-cloud-hypervisor",
         source_path: "packages/d2b-provider-guest-cloud-hypervisor/src/controller.rs",
         test_path: "packages/d2b-provider-guest-cloud-hypervisor/tests/reconcile_state_machine_test.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-runtime-cloud-hypervisor.md",
         bazel_target: "//packages/d2b-provider-guest-cloud-hypervisor:all-tests",
         unit: "U6",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "runtime-qemu-media",
         crate_name: "d2b-provider-guest-qemu-media",
         source_path: "packages/d2b-provider-guest-qemu-media/src/controller/reconcile.rs",
         test_path: "packages/d2b-provider-guest-qemu-media/tests/lifecycle.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-runtime-qemu-media.md",
         bazel_target: "//packages/d2b-provider-guest-qemu-media:all-tests",
         unit: "U6",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "runtime-azure-container-apps",
         crate_name: "d2b-provider-guest-azure-container-apps",
         source_path: "packages/d2b-provider-guest-azure-container-apps/src/controller.rs",
         test_path: "packages/d2b-provider-guest-azure-container-apps/tests/provider_lifecycle.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-runtime-azure-container-apps.md",
         bazel_target: "//packages/d2b-provider-guest-azure-container-apps:all-tests",
         unit: "U6",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "runtime-azure-virtual-machine",
         crate_name: "d2b-provider-guest-azure-virtual-machine",
         source_path: "packages/d2b-provider-guest-azure-virtual-machine/src/controller/mod.rs",
         test_path: "packages/d2b-provider-guest-azure-virtual-machine/tests/lifecycle_hermetic.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-runtime-azure-virtual-machine.md",
         bazel_target: "//packages/d2b-provider-guest-azure-virtual-machine:all-tests",
         unit: "U6",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "volume-local",
         crate_name: "d2b-provider-volume-local",
         source_path: "packages/d2b-provider-volume-local/src/controller.rs",
         test_path: "packages/d2b-provider-volume-local/tests/volume_local.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-volume-local.md",
         bazel_target: "//packages/d2b-provider-volume-local:all-tests",
         unit: "U7",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "volume-virtiofs",
         crate_name: "d2b-provider-volume-virtiofs",
         source_path: "packages/d2b-provider-volume-virtiofs/src/controller.rs",
         test_path: "packages/d2b-provider-volume-virtiofs/tests/lifecycle.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-volume-virtiofs.md",
         bazel_target: "//packages/d2b-provider-volume-virtiofs:all-tests",
         unit: "U7",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "network-local",
         crate_name: "d2b-provider-network-local",
         source_path: "packages/d2b-provider-network-local/src/controller.rs",
         test_path: "packages/d2b-provider-network-local/tests/reconcile.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-network-local.md",
         bazel_target: "//packages/d2b-provider-network-local:all-tests",
         unit: "U8",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "device-tpm",
         crate_name: "d2b-provider-device-tpm",
         source_path: "packages/d2b-provider-device-tpm/src/resource_controller.rs",
         test_path: "packages/d2b-provider-device-tpm/tests/resource_controller.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-device-tpm.md",
         bazel_target: "//packages/d2b-provider-device-tpm:all-tests",
         unit: "U8",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "device-usbip",
         crate_name: "d2b-provider-device-usbip",
         source_path: "packages/d2b-provider-device-usbip/src/controller.rs",
         test_path: "packages/d2b-provider-device-usbip/tests/service_binding_lifecycle.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-device-usbip.md",
         bazel_target: "//packages/d2b-provider-device-usbip:all-tests",
         unit: "U8",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "device-security-key",
         crate_name: "d2b-provider-device-security-key",
         source_path: "packages/d2b-provider-device-security-key/src/controller.rs",
         test_path: "packages/d2b-provider-device-security-key/tests/lease_state_machine.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-device-security-key.md",
         bazel_target: "//packages/d2b-provider-device-security-key:all-tests",
         unit: "U8",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "device-gpu",
         crate_name: "d2b-provider-device-gpu",
         source_path: "packages/d2b-provider-device-gpu/src/controller.rs",
         test_path: "packages/d2b-provider-device-gpu/tests/combined_reconcile.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-device-gpu.md",
         bazel_target: "//packages/d2b-provider-device-gpu:all-tests",
         unit: "U8",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "display-wayland",
         crate_name: "d2b-provider-display-wayland",
         source_path: "packages/d2b-provider-display-wayland/src/controller.rs",
         test_path: "packages/d2b-provider-display-wayland/tests/provider_behavior.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-display-wayland.md",
         bazel_target: "//packages/d2b-provider-display-wayland:all-tests",
         unit: "U9",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "audio-pipewire",
         crate_name: "d2b-provider-audio-pipewire",
         source_path: "packages/d2b-provider-audio-pipewire/src/controller.rs",
         test_path: "packages/d2b-provider-audio-pipewire/tests/controller.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-audio-pipewire.md",
         bazel_target: "//packages/d2b-provider-audio-pipewire:all-tests",
         unit: "U9",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "clipboard-wayland",
         crate_name: "d2b-provider-clipboard-wayland",
         source_path: "packages/d2b-provider-clipboard-wayland/src/controller/mod.rs",
         test_path: "packages/d2b-provider-clipboard-wayland/tests/provider_behavior.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-clipboard-wayland.md",
         bazel_target: "//packages/d2b-provider-clipboard-wayland:all-tests",
         unit: "U9",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "notification-desktop",
         crate_name: "d2b-provider-notification-desktop",
         source_path: "packages/d2b-provider-notification-desktop/src/controller.rs",
         test_path: "packages/d2b-provider-notification-desktop/tests/provider_behavior.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-notification-desktop.md",
         bazel_target: "//packages/d2b-provider-notification-desktop:all-tests",
         unit: "U9",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "shell-terminal",
         crate_name: "d2b-provider-shell-terminal",
         source_path: "packages/d2b-provider-shell-terminal/src/service/controller.rs",
         test_path: "packages/d2b-provider-shell-terminal/tests/controller_reconcile.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-shell-terminal.md",
         bazel_target: "//packages/d2b-provider-shell-terminal:all-tests",
         unit: "U9",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "credential-secret-service",
         crate_name: "d2b-provider-credential-secret-service",
         source_path: "packages/d2b-provider-credential-secret-service/src/controller.rs",
         test_path: "packages/d2b-provider-credential-secret-service/tests/session.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-credential-secret-service.md",
         bazel_target: "//packages/d2b-provider-credential-secret-service:all-tests",
         unit: "U10",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "credential-entra",
         crate_name: "d2b-provider-credential-entra",
         source_path: "packages/d2b-provider-credential-entra/src/controller.rs",
         test_path: "packages/d2b-provider-credential-entra/tests/controller.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-credential-entra.md",
         bazel_target: "//packages/d2b-provider-credential-entra:all-tests",
         unit: "U10",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "credential-managed-identity",
         crate_name: "d2b-provider-credential-managed-identity",
         source_path: "packages/d2b-provider-credential-managed-identity/src/controller.rs",
         test_path: "packages/d2b-provider-credential-managed-identity/tests/binding.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-credential-managed-identity.md",
         bazel_target: "//packages/d2b-provider-credential-managed-identity:all-tests",
         unit: "U10",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "transport-azure-relay",
         crate_name: "d2b-provider-transport-azure-relay",
         source_path: "packages/d2b-provider-transport-azure-relay/src/relay_transport.rs",
         test_path: "packages/d2b-provider-transport-azure-relay/tests/fake_relay_transport.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-transport-azure-relay.md",
         bazel_target: "//packages/d2b-provider-transport-azure-relay:all-tests",
         unit: "U11",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "transport-vsock",
         crate_name: "d2b-provider-transport-vsock",
         source_path: "packages/d2b-provider-transport-vsock/src/service.rs",
         test_path: "packages/d2b-provider-transport-vsock/tests/service.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-transport-vsock.md",
         bazel_target: "//packages/d2b-provider-transport-vsock:all-tests",
         unit: "U11",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "observability-otel",
         crate_name: "d2b-provider-observability-otel",
         source_path: "packages/d2b-provider-observability-otel/src/controller.rs",
         test_path: "packages/d2b-provider-observability-otel/tests/binding_controller.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-observability-otel.md",
         bazel_target: "//packages/d2b-provider-observability-otel:all-tests",
         unit: "U12",
-        bootstrap: false,
     },
     ProviderMatrixRow {
-        identity: "activation-nixos",
         crate_name: "d2b-provider-activation-nixos",
         source_path: "packages/d2b-provider-activation-nixos/src/controller.rs",
         test_path: "packages/d2b-provider-activation-nixos/tests/reconcile.rs",
         dossier_path: "docs/specs/providers/ADR-046-provider-activation-nixos.md",
         bazel_target: "//packages/d2b-provider-activation-nixos:all-tests",
         unit: "U12",
-        bootstrap: false,
     },
 ];
 // The Provider crates whose integration surface is a recorded scaffold rather
@@ -368,25 +305,12 @@ struct WorkspaceMember {
     package_name: String,
     crate_dir: PathBuf,
     manifest_path: PathBuf,
-    /// Whether the member manifest declares the resource-type crate, which
-    /// makes a provider-prefixed member a per-type driver crate.
-    declares_driver: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OnDiskProvider {
     directory_name: String,
     manifest_path: PathBuf,
-    /// Whether the crate manifest declares the resource-type crate, which
-    /// keeps a driver crate out of the packaging obligations and the catalog.
-    declares_driver: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProviderNameKind {
-    NonProvider,
-    Provider,
-    Malformed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -582,12 +506,11 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_closed_matrix(repo_root: &Path, members: &[WorkspaceMember]) -> Result<(), String> {
+    let identities = ProviderIdentities::load(repo_root)?;
     let expected: BTreeSet<&str> = PROVIDER_MATRIX.iter().map(|row| row.crate_name).collect();
     let actual: BTreeSet<&str> = members
         .iter()
-        .filter(|member| {
-            name_kind(&member.package_name, member.declares_driver) == ProviderNameKind::Provider
-        })
+        .filter(|member| is_packaging_provider(&identities, &member.package_name))
         .map(|member| member.package_name.as_str())
         .collect();
     let mut violations = Vec::new();
@@ -613,6 +536,15 @@ fn check_closed_matrix(repo_root: &Path, members: &[WorkspaceMember]) -> Result<
             continue;
         };
 
+        // The dossier names the product identity the crate publishes, which
+        // is the crate's own product identity in the identity authority.
+        let Some(identity) = identities.identity(row.crate_name, Surface::Product) else {
+            violations.push(Diagnostic::simple(
+                "provider-matrix-product-identity-missing",
+                row.crate_name,
+            ));
+            continue;
+        };
         let dossier = repo_root.join(row.dossier_path);
         if !dossier.is_file() {
             violations.push(Diagnostic::matrix_path(
@@ -621,7 +553,7 @@ fn check_closed_matrix(repo_root: &Path, members: &[WorkspaceMember]) -> Result<
                 row.dossier_path,
             ));
         } else {
-            let expected_spec_id = format!("| Spec ID | `ADR-046-provider-{}` |", row.identity);
+            let expected_spec_id = format!("| Spec ID | `ADR-046-provider-{identity}` |");
             let spec_id_count = fs::read_to_string(&dossier)
                 .map(|text| {
                     text.lines()
@@ -6356,6 +6288,7 @@ fn check_shared_provider_dependencies_with(
     repo_root: &Path,
     allowed: &[(&str, &str)],
 ) -> Result<(), String> {
+    let identities = ProviderIdentities::load(repo_root)?;
     let mut shared_dirs: BTreeSet<&str> = BTreeSet::new();
     for root in SHARED_CRATE_SOURCE_ROOTS {
         shared_dirs.insert(root.strip_suffix("/src").unwrap_or(root));
@@ -6385,7 +6318,7 @@ fn check_shared_provider_dependencies_with(
             let Some(provider) = manifest_provider_dependency(trimmed) else {
                 continue;
             };
-            if name_kind(provider, false) != ProviderNameKind::Provider {
+            if !is_packaging_provider(&identities, provider) {
                 continue;
             }
             let listed = allowed.iter().any(|(crate_name, provider_name)| {
@@ -7796,10 +7729,11 @@ fn is_citation_cue(text: &str) -> bool {
 }
 
 fn check_members(repo_root: &Path, members: &[WorkspaceMember]) -> Result<(), String> {
+    let identities = ProviderIdentities::load(repo_root)?;
     let on_disk = on_disk_providers(repo_root)?;
-    let has_provider_member = members.iter().any(|member| {
-        name_kind(&member.package_name, member.declares_driver) == ProviderNameKind::Provider
-    });
+    let has_provider_member = members
+        .iter()
+        .any(|member| is_packaging_provider(&identities, &member.package_name));
     if !has_provider_member && on_disk.is_empty() {
         return Err("provider-crate-layout-empty-scope".to_owned());
     }
@@ -7809,24 +7743,29 @@ fn check_members(repo_root: &Path, members: &[WorkspaceMember]) -> Result<(), St
         .map(|member| (member.manifest_path.clone(), member))
         .collect();
     let mut violations = Vec::new();
+    let declared: BTreeSet<&str> = identities.crate_names().collect();
 
     for member in members {
-        match name_kind(&member.package_name, member.declares_driver) {
-            ProviderNameKind::Provider => {
-                if !is_provider_directory(repo_root, &member.crate_dir, &member.package_name) {
-                    violations.push(Diagnostic::simple(
-                        "provider-crate-location-invalid",
-                        &member.package_name,
-                    ));
-                } else {
-                    violations.extend(inspect_crate(member)?);
-                }
+        if is_packaging_provider(&identities, &member.package_name) {
+            if !is_provider_directory(repo_root, &member.crate_dir, &member.package_name) {
+                violations.push(Diagnostic::simple(
+                    "provider-crate-location-invalid",
+                    &member.package_name,
+                ));
+            } else {
+                violations.extend(inspect_crate(member)?);
             }
-            ProviderNameKind::Malformed => violations.push(Diagnostic::simple(
-                "provider-crate-name-invalid",
+        } else if member.package_name.starts_with(PROVIDER_PREFIX)
+            && !declared.contains(member.package_name.as_str())
+        {
+            // A provider-prefixed workspace member the identity authority
+            // does not know is a crate whose classification was never stated.
+            // Ignoring it would drop the crate from the packaging
+            // obligations, the matrix and the catalog without a word.
+            violations.push(Diagnostic::simple(
+                "provider-crate-identity-undeclared",
                 &member.package_name,
-            )),
-            ProviderNameKind::NonProvider => {}
+            ));
         }
     }
 
@@ -7840,14 +7779,6 @@ fn check_members(repo_root: &Path, members: &[WorkspaceMember]) -> Result<(), St
                 if member.package_name != crate_on_disk.directory_name {
                     violations.push(Diagnostic::simple(
                         "provider-crate-name-mismatch",
-                        &crate_on_disk.directory_name,
-                    ));
-                }
-                if name_kind(&crate_on_disk.directory_name, crate_on_disk.declares_driver)
-                    == ProviderNameKind::Malformed
-                {
-                    violations.push(Diagnostic::simple(
-                        "provider-crate-name-invalid",
                         &crate_on_disk.directory_name,
                     ));
                 }
@@ -7896,13 +7827,10 @@ fn cargo_workspace_members(repo_root: &Path) -> Result<Vec<WorkspaceMember>, Str
             .parent()
             .ok_or_else(|| "provider-crate-layout-member-invalid".to_owned())?
             .to_owned();
-        let manifest = fs::read_to_string(&manifest_path)
-            .map_err(|_| "provider-crate-layout-member-invalid".to_owned())?;
         members.push(WorkspaceMember {
             package_name: package.name.clone(),
             crate_dir,
             manifest_path,
-            declares_driver: manifest_declares_driver(&manifest),
         });
     }
     if members.is_empty() {
@@ -8008,109 +7936,33 @@ fn on_disk_providers(repo_root: &Path) -> Result<Vec<OnDiskProvider>, String> {
         if !manifest_path.is_file() {
             continue;
         }
-        let manifest = fs::read_to_string(&manifest_path)
-            .map_err(|_| "provider-crate-layout-packages-unreadable".to_owned())?;
-        let declares_driver = manifest_declares_driver(&manifest);
-        if matches!(
-            name_kind(&directory_name, declares_driver),
-            ProviderNameKind::NonProvider
-        ) {
-            continue;
-        }
         providers.push(OnDiskProvider {
             directory_name,
             manifest_path: manifest_path
                 .canonicalize()
                 .map_err(|_| "provider-crate-layout-member-invalid".to_owned())?,
-            declares_driver,
         });
     }
     providers.sort_by(|left, right| left.directory_name.cmp(&right.directory_name));
     Ok(providers)
 }
 
-/// Whether a package manifest declares a dependency on the resource types.
+/// Whether one provider-prefixed crate is a packaging Provider.
 ///
-/// The declaration is read from the manifest text because the workspace
-/// metadata the check already uses does not carry per-member dependencies. A
-/// dependency counts in either spelling Cargo allows: the crate name as the
-/// key, or the crate name as the package of a renamed key.
-fn manifest_declares_driver(manifest: &str) -> bool {
-    manifest.lines().any(|line| {
-        let line = line.split('#').next().unwrap_or_default().trim();
-        if let Some(table) = line
-            .strip_prefix('[')
-            .and_then(|table| table.strip_suffix(']'))
-        {
-            return table
-                .rsplit('.')
-                .next()
-                .is_some_and(|key| key.trim_matches(['"', '\'']) == RESOURCE_TYPES_CRATE);
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            return false;
-        };
-        key.trim().split('.').next().unwrap_or_default() == RESOURCE_TYPES_CRATE
-            || value
-                .trim()
-                .contains(&format!("package = \"{RESOURCE_TYPES_CRATE}\""))
-    })
-}
-
-/// Classify one provider-prefixed crate name for this policy.
-///
-/// The classification decides packaging obligations and the catalog row, so
-/// the name alone cannot settle it: a per-type driver crate is named after the
-/// resource type it serves, and that type name may contain a dash, which is
-/// exactly the shape of a packaging Provider identity.
-fn provider_name_kind(name: &str, declares_driver: bool) -> ProviderNameKind {
-    if NON_PROVIDER_PREFIXED.contains(&name) {
-        return ProviderNameKind::NonProvider;
-    }
-    let Some(rest) = name.strip_prefix(PROVIDER_PREFIX) else {
-        return ProviderNameKind::NonProvider;
-    };
-    let segments: Vec<_> = rest.split('-').collect();
-    if segments.iter().any(|segment| !valid_name_segment(segment)) {
-        return ProviderNameKind::Malformed;
-    }
-    // A driver crate declares one resource type's driver for the plane and
-    // ships no packaging artifact of its own, so it carries neither the
-    // packaging obligations nor a catalog row. A single segment names the same
-    // kind of crate without declaring the shared resource types.
-    if declares_driver || segments.len() < 2 {
-        return ProviderNameKind::NonProvider;
-    }
-    ProviderNameKind::Provider
-}
-
-/// Whether the closed matrix names this crate as an accepted Provider.
-fn catalogued_provider(crate_name: &str) -> bool {
-    PROVIDER_MATRIX
-        .iter()
-        .any(|row| row.crate_name == crate_name)
-}
-
-/// The packaging kind of one provider-prefixed crate.
-///
-/// The closed matrix is the authority for the crates it names. A realizer that
-/// hosts the driver of the types it realizes keeps its packaging identity, its
-/// catalog row, and the artifact the Nix layer compiles for it; the declared
-/// driver dependency separates the per-type driver crates the matrix does not
-/// name, which ship no packaging artifact of their own.
-fn name_kind(crate_name: &str, declares_driver: bool) -> ProviderNameKind {
-    if catalogued_provider(crate_name) {
-        return ProviderNameKind::Provider;
-    }
-    provider_name_kind(crate_name, declares_driver)
-}
-
-fn valid_name_segment(segment: &str) -> bool {
-    !segment.is_empty()
-        && segment.len() <= 64
-        && segment
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+/// The classification is read, not inferred: a crate is a packaging Provider
+/// exactly when it owns a product-plane Provider identity, which its own
+/// `provider-identity.json` declares. The convention this replaced read the
+/// answer off two things the crate never states - how many segments its
+/// directory name has, and whether its manifest depends on the resource-type
+/// crate - so `d2b-provider-endpoint` was a driver because its name had one
+/// segment, `d2b-provider-guest-qemu-media` and `d2b-provider-process-minijail`
+/// were real Providers only because their names had two, and the five
+/// provider-prefixed crates that are not Providers had to be named in an
+/// exclusion list to escape the same rule. A crate that declares no product
+/// identity is not a packaging Provider whatever its name reads, and a crate
+/// that does is one whatever its name reads.
+fn is_packaging_provider(identities: &ProviderIdentities, crate_name: &str) -> bool {
+    identities.identity(crate_name, Surface::Product).is_some()
 }
 
 fn diagnostic_name(name: &str) -> String {
@@ -8292,17 +8144,6 @@ fn is_family_identity_token(entry: &FamilyToken) -> bool {
     entry.token.replace('_', "-") == entry.family
 }
 
-/// The family one provider crate belongs to: the closed matrix is the
-/// family authority, and a crate the matrix does not name owns the family its
-/// name suffix spells.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn provider_crate_family(crate_name: &str) -> String {
-    PROVIDER_MATRIX
-        .iter()
-        .find(|row| row.crate_name == crate_name)
-        .map_or_else(|| crate_name.strip_prefix("d2b-provider-").unwrap_or(crate_name).replace('_', "-"), |row| row.identity.to_owned())
-}
-
 /// Whether one literal's content is a resource reference: `Provider/<name>`,
 /// `Process/<name>`, `Host/<name>`, `User/<name>`, or `Guest/<name>`. The
 /// resource model addresses providers and processes by name; naming the
@@ -8335,7 +8176,7 @@ fn provider_module_family_signals(
     repo_root: &Path,
     module: &str,
     crate_name: &str,
-    family: &str,
+    own_names: &BTreeSet<&str>,
     signals: &mut Vec<ProviderFamilySignal>,
 ) -> Result<(), String> {
     let path = repo_root.join(module);
@@ -8370,7 +8211,7 @@ fn provider_module_family_signals(
                 }
                 if assembles {
                     for entry in FAMILY_KNOWLEDGE_TOKENS {
-                        if !is_family_identity_token(entry) || entry.family == family {
+                        if !is_family_identity_token(entry) || own_names.contains(entry.family) {
                             continue;
                         }
                         if literal_contains_token(content, entry.token)
@@ -8391,7 +8232,7 @@ fn provider_module_family_signals(
                     }
                 } else {
                     for entry in FAMILY_KNOWLEDGE_TOKENS {
-                        if !is_family_identity_token(entry) || entry.family == family {
+                        if !is_family_identity_token(entry) || own_names.contains(entry.family) {
                             continue;
                         }
                         if literal_contains_token(content, entry.token) {
@@ -8415,7 +8256,7 @@ fn provider_module_family_signals(
                     continue;
                 }
                 for entry in FAMILY_KNOWLEDGE_TOKENS {
-                    if !is_family_identity_token(entry) || entry.family == family {
+                    if !is_family_identity_token(entry) || own_names.contains(entry.family) {
                         continue;
                     }
                     if identifier_contains_token(identifier, entry.token) {
@@ -8442,7 +8283,7 @@ fn collect_provider_module_signals(
     repo_root: &Path,
     directory:&Path,
     crate_name: &str,
-    family: &str,
+    own_names: &BTreeSet<&str>,
     signals: &mut Vec<ProviderFamilySignal>,
 ) -> Result<(), String> {
     let entries = fs::read_dir(directory)
@@ -8455,7 +8296,7 @@ fn collect_provider_module_signals(
             .map_err(|_| "provider-crate-layout-provider-unreadable".to_owned())?;
         if file_type.is_dir() {
             if entry.file_name().to_string_lossy() != "generated" {
-                collect_provider_module_signals(repo_root, &path, crate_name, family, signals)?;
+                collect_provider_module_signals(repo_root, &path, crate_name, own_names, signals)?;
             }
             continue;
         }
@@ -8464,7 +8305,7 @@ fn collect_provider_module_signals(
         }
         let relative = path.strip_prefix(repo_root).unwrap_or(&path);
         let relative = relative.to_string_lossy().replace('\\', "/");
-        provider_module_family_signals(repo_root, &relative, crate_name, family, signals)?;
+        provider_module_family_signals(repo_root, &relative, crate_name, own_names, signals)?;
     }
     Ok(())
 }
@@ -8477,14 +8318,29 @@ fn collect_provider_family_signals(
     repo_root:&Path,
     provider_crates: &[&str],
 ) -> Result<Vec<ProviderFamilySignal>, String> {
+    let identities = ProviderIdentities::load(repo_root)?;
     let mut signals = Vec::new();
     for crate_name in provider_crates {
-        let family = provider_crate_family(crate_name);
+        // A crate may name its own family and its own Provider identities
+        // wherever it spells them; only another family's name is knowledge
+        // leaking across a boundary.
+        let mut own_names: BTreeSet<&str> = BTreeSet::new();
+        // The family is borrowed from the loaded authority so the set keeps
+        // borrowing one owner; a crate that declares no family simply has no
+        // own name to admit here.
+        if let Some(family) = identities.family(crate_name) {
+            own_names.insert(family);
+        }
+        for surface in [Surface::Product, Surface::Runtime, Surface::Session] {
+            if let Some(identity) = identities.identity(crate_name, surface) {
+                own_names.insert(identity);
+            }
+        }
         let directory = repo_root.join("packages").join(crate_name).join("src");
         if !directory.is_dir() {
             continue;
         }
-        collect_provider_module_signals(repo_root, &directory, crate_name, &family, &mut signals)?;
+        collect_provider_module_signals(repo_root, &directory, crate_name, &own_names, &mut signals)?;
     }
     signals.sort_by(|left, right| {
         left.crate_name
@@ -9330,6 +9186,15 @@ mod tests {
             fs::create_dir_all(&root).unwrap();
             write_package(&root, "d2b-core");
             write_package(&root, "d2b-provider-fixture-example");
+            // The fixture's packaging Provider owns a product identity, which
+            // is what the check classifies it by; a name alone decides
+            // nothing here.
+            write_identity_declaration(
+                &root,
+                "d2b-provider-fixture-example",
+                "fixture-example",
+                Some("fixture-example"),
+            );
             let provider = root.join("packages/d2b-provider-fixture-example");
             fs::create_dir_all(provider.join("integration")).unwrap();
             fs::create_dir_all(provider.join("tests")).unwrap();
@@ -9365,9 +9230,27 @@ mod tests {
             self.root.join("packages/d2b-provider-fixture-example")
         }
 
+        /// Add a provider-prefixed crate that owns no product identity, so
+        /// the check classifies it as a crate that ships no artifact of its
+        /// own whatever its directory name reads.
         fn add_package(&self, name: &str) -> PathBuf {
-            write_package(&self.root, name);
-            self.root.join("packages").join(name)
+            let package = write_package(&self.root, name);
+            if name.starts_with(PROVIDER_PREFIX) {
+                let family = name.strip_prefix(PROVIDER_PREFIX).expect("provider prefix");
+                write_identity_declaration(&self.root, name, family, None);
+            }
+            package
+        }
+
+        /// Add a packaging Provider crate: one that owns a product identity,
+        /// which is the whole of what makes a provider-prefixed crate a
+        /// packaging Provider.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn add_provider_package(&self, name: &str, identity: &str) -> PathBuf {
+            let package = write_package(&self.root, name);
+            let family = name.strip_prefix(PROVIDER_PREFIX).expect("provider prefix");
+            write_identity_declaration(&self.root, name, family, Some(identity));
+            package
         }
 
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -9417,7 +9300,6 @@ mod tests {
                 package_name,
                 crate_dir: manifest_path.parent().unwrap().to_owned(),
                 manifest_path,
-                declares_driver: manifest_declares_driver(&manifest),
             });
         }
         Ok(members)
@@ -9437,7 +9319,7 @@ mod tests {
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn write_package(root: &Path, name: &str) {
+    fn write_package(root: &Path, name: &str) -> PathBuf {
         let package = root.join("packages").join(name);
         fs::create_dir_all(package.join("src")).unwrap();
         fs::write(package.join("src/lib.rs"), "").unwrap();
@@ -9446,32 +9328,53 @@ mod tests {
             format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n"),
         )
         .unwrap();
+        package
     }
 
-    /// Give one fixture package the declared dependency that makes it a
-    /// per-type driver crate.
+
+    /// One fixture crate's identity declaration: the product identity it
+    /// publishes, when it is a packaging Provider, and a deliberate null on
+    /// every surface when it is not. The evidence anchor names the crate's
+    /// own source, which every fixture crate carries.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn declare_resource_types_dependency(crate_dir: &Path) {
-        let manifest = crate_dir.join("Cargo.toml");
-        let text = fs::read_to_string(&manifest).expect("read fixture manifest");
+    fn write_identity_declaration(root: &Path, crate_name: &str, family: &str, product: Option<&str>) {
+        let package = root.join("packages").join(crate_name);
+        // The evidence anchor has to name the identity it claims, not merely
+        // some symbol in a file the crate holds, so the source spells the
+        // product identity where there is one and the family otherwise.
+        let named = product.unwrap_or(family);
         fs::write(
-            &manifest,
+            package.join("src/identity.rs"),
+            format!("pub const PROVIDER_IDENTITY: &str = \"{named}\";\n"),
+        )
+        .unwrap();
+        let (roles, product) = match product {
+            Some(identity) => (
+                "[\"product\"]".to_owned(),
+                format!(
+                    "{{\n    \"identity\": \"{identity}\",\n    \"evidence\": [\n      {{\n        \"path\": \"packages/{crate_name}/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }}\n    ]\n  }}"
+                ),
+            ),
+            None => (
+                "[\"no-identity\"]".to_owned(),
+                "{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }".to_owned(),
+            ),
+        };
+        fs::write(
+            package.join("provider-identity.json"),
             format!(
-                "{text}\n[dependencies]\nd2b-resource-types = {{ path = \"../d2b-resource-types\" }}\n"
+                "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{family}\",\n  \"roles\": {roles},\n  \"product\": {product},\n  \"runtime\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"session\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"blockers\": []\n}}\n"
             ),
         )
-        .expect("write fixture manifest");
+        .unwrap();
     }
 
-    /// Classify one crate the way the check does: from its name and the
-    /// dependency its manifest declares.
+    /// Whether the check classifies one crate as a packaging Provider.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn classified_kind(root: &Path, name: &str) -> ProviderNameKind {
-        let manifest = fs::read_to_string(root.join("packages").join(name).join("Cargo.toml"))
-            .expect("read crate manifest");
-        name_kind(name, manifest_declares_driver(&manifest))
+    fn classified_as_packaging_provider(root: &Path, name: &str) -> bool {
+        let identities = ProviderIdentities::load(root).expect("the authority loads the fixture");
+        is_packaging_provider(&identities, name)
     }
-
     fn required_readme(identity: &str) -> String {
         let mut readme = String::new();
         for section in REQUIRED_README_SECTIONS {
@@ -9490,27 +9393,72 @@ mod tests {
         assert_eq!(check_fixture(&fixture.root), Ok(()));
     }
 
+    /// The matrix is closed against the identity authority: every packaging
+    /// row is a crate that owns a product identity, every crate that owns one
+    /// has a row, and the fixed-bootstrap set is the authority's, not the
+    /// matrix's.
+    ///
+    /// The row counts are pinned rather than derived so a crate that arrives
+    /// with or loses a packaging row fails loudly instead of quietly becoming
+    /// a smaller table.
     #[test]
-    fn the_provider_matrix_is_closed_and_has_two_bootstrap_rows() {
+    fn the_provider_matrix_is_closed_against_the_identity_authority() {
+        let root = repo_root().expect("resolve repository root");
+        let identities = ProviderIdentities::load(&root).expect("the identity authority loads");
         assert_eq!(PROVIDER_MATRIX.len(), 26);
 
-        let identities: BTreeSet<_> = PROVIDER_MATRIX.iter().map(|row| row.identity).collect();
-        let crates: BTreeSet<_> = PROVIDER_MATRIX.iter().map(|row| row.crate_name).collect();
-        assert_eq!(identities.len(), PROVIDER_MATRIX.len());
+        let crates: BTreeSet<&str> = PROVIDER_MATRIX.iter().map(|row| row.crate_name).collect();
         assert_eq!(crates.len(), PROVIDER_MATRIX.len());
+        let declared: BTreeSet<&str> = identities
+            .identities(Surface::Product)
+            .map(|(crate_name, _)| crate_name)
+            .collect();
         assert_eq!(
-            PROVIDER_MATRIX
-                .iter()
-                .filter(|row| row.bootstrap)
-                .map(|row| row.identity)
+            declared, crates,
+            "the packaging rows are exactly the crates that own a product identity"
+        );
+        let products: BTreeSet<&str> = PROVIDER_MATRIX
+            .iter()
+            .map(|row| {
+                identities
+                    .identity(row.crate_name, Surface::Product)
+                    .expect("a packaging row names a crate with a product identity")
+            })
+            .collect();
+        assert_eq!(products.len(), PROVIDER_MATRIX.len(), "two rows name one identity");
+        // The deployment registers exactly these two as fixed bootstrap
+        // Providers, and the order is the authority's crate-name order.
+        assert_eq!(
+            identities
+                .fixed_bootstrap_identities()
+                .into_iter()
+                .map(|(_, identity)| identity)
                 .collect::<Vec<_>>(),
-            vec!["system-core", "system-minijail"]
+            vec!["system-minijail", "system-core"]
+        );
+        // The two surfaces are genuinely independent: a runtime-only family
+        // is in the registration table and out of the product packaging, and
+        // a product-only family is the other way round.
+        assert!(
+            identities.identity("d2b-provider-endpoint", Surface::Runtime).is_some(),
+            "endpoint registers a runtime identity"
+        );
+        assert!(
+            identities.identity("d2b-provider-endpoint", Surface::Product).is_none(),
+            "endpoint is in the runtime registrations, not in the product packaging"
+        );
+        assert!(
+            identities.identity("d2b-provider-device-tpm", Surface::Product).is_some(),
+            "device-tpm is product packaging"
+        );
+        assert!(
+            identities.identity("d2b-provider-device-tpm", Surface::Runtime).is_none(),
+            "device-tpm is not a runtime registration"
         );
         for row in PROVIDER_MATRIX {
-            // A crate is renamed with the family it realizes, so the identity
-            // suffix is only required to be non-empty here; the provider
-            // identity - and with it the dossier and the catalog id - is what
-            // stays put across a rename.
+            let identity = identities
+                .identity(row.crate_name, Surface::Product)
+                .expect("a packaging row names a crate with a product identity");
             assert!(
                 row.crate_name
                     .strip_prefix(PROVIDER_PREFIX)
@@ -9519,7 +9467,7 @@ mod tests {
             assert!(row.bazel_target.ends_with(":all-tests"));
             assert!(
                 row.dossier_path
-                    .ends_with(&format!("ADR-046-provider-{}.md", row.identity))
+                    .ends_with(&format!("ADR-046-provider-{identity}.md"))
             );
             assert!(row.source_path.starts_with("packages/"));
             assert!(row.test_path.starts_with("packages/"));
@@ -9541,128 +9489,54 @@ mod tests {
         );
     }
 
+    /// Every provider-prefixed crate the tree reaches is classified by an
+    /// explicit declaration, and the classification is the declaration's: a
+    /// crate the authority does not know is refused by name rather than
+    /// falling out of every obligation by reading its name.
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn every_provider_prefixed_name_has_one_explicit_classification() {
+    fn every_provider_prefixed_crate_declares_its_classification() {
         let root = repo_root().expect("resolve repository root");
-        let members = manifest_workspace_members(root).expect("read workspace manifest");
-        let mut manifests: BTreeMap<String, PathBuf> = members
-            .into_iter()
-            .map(|member| (member.package_name, member.manifest_path))
-            .filter(|(name, _)| name.starts_with(PROVIDER_PREFIX))
+        let identities = ProviderIdentities::load(&root).expect("the identity authority loads");
+        let mut names: BTreeSet<String> = fs::read_dir(root.join("packages"))
+            .expect("read packages directory")
+            .map(|entry| entry.expect("read package entry"))
+            .filter(|entry| entry.file_type().expect("read package entry type").is_dir())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(PROVIDER_PREFIX))
             .collect();
-        for entry in fs::read_dir(root.join("packages")).expect("read packages directory") {
-            let entry = entry.expect("read package entry");
-            if entry.file_type().expect("read package entry type").is_dir() {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if name.starts_with(PROVIDER_PREFIX) {
-                    manifests
-                        .entry(name)
-                        .or_insert_with(|| entry.path().join("Cargo.toml"));
-                }
-            }
-        }
-
         assert!(
-            !manifests.is_empty(),
-            "Provider-name classification must inspect a non-empty scope"
+            !names.is_empty(),
+            "the classification census must inspect a non-empty scope"
         );
-        for (name, manifest_path) in manifests {
-            let manifest = fs::read_to_string(&manifest_path).expect("read crate manifest");
-            let declares_driver = manifest_declares_driver(&manifest);
-            match name_kind(&name, declares_driver) {
-                ProviderNameKind::NonProvider => {
-                    let single_segment = name
-                        .strip_prefix(PROVIDER_PREFIX)
-                        .is_some_and(|suffix| suffix.split('-').count() == 1);
-                    assert!(
-                        NON_PROVIDER_PREFIXED.contains(&name.as_str())
-                            || single_segment
-                            || declares_driver,
-                        "{name} is neither an explicit non-Provider helper, a single-segment driver crate, nor a crate that declares a driver"
-                    );
-                }
-                ProviderNameKind::Provider => {
-                    assert!(
-                        catalogued_provider(&name)
-                            || (!declares_driver
-                                && name
-                                    .strip_prefix(PROVIDER_PREFIX)
-                                    .is_some_and(|suffix| suffix.split('-').count() >= 2)),
-                        "{name} is neither a catalogued Provider identity nor a two-segment identity that declares no driver"
-                    );
-                }
-                ProviderNameKind::Malformed => {
-                    assert!(
-                        name.starts_with(PROVIDER_PREFIX),
-                        "{name} is malformed but not Provider-prefixed"
-                    );
-                }
-            }
+        for name in &names {
+            assert!(
+                identities.declaration(name).is_some(),
+                "{name} is a provider-prefixed crate with no identity declaration"
+            );
         }
-    }
+        names.clear();
 
-    /// The driver signal is the dependency declaration, in the forms a Cargo
-    /// manifest spells it, and nothing else in the manifest.
-    #[test]
-    fn the_driver_signal_reads_the_declared_resource_types_dependency() {
-        assert!(manifest_declares_driver(
-            "[dependencies]\nd2b-resource-types = { path = \"../d2b-resource-types\", version = \"0.0.0-bootstrap\" }\n"
-        ));
-        assert!(manifest_declares_driver(
-            "[dependencies]\nresource-types = { package = \"d2b-resource-types\", path = \"../d2b-resource-types\" }\n"
-        ));
-        assert!(manifest_declares_driver(
-            "[target.'cfg(unix)'.dependencies.d2b-resource-types]\npath = \"../d2b-resource-types\"\n"
-        ));
-        assert!(!manifest_declares_driver(
-            "[dependencies]\nd2b-resource-types-extra = { path = \"../d2b-resource-types-extra\" }\n"
-        ));
-        assert!(!manifest_declares_driver(
-            "# d2b-resource-types = { path = \"../d2b-resource-types\" }\n[dependencies]\n"
-        ));
-        assert!(!manifest_declares_driver(
-            "[package]\nname = \"d2b-provider-example\"\ndescription = \"depends on d2b-resource-types\"\n"
-        ));
-    }
-
-    /// A per-type driver crate is named after the resource type it serves, so
-    /// its type name may contain a dash. The declared driver, not that shape,
-    /// is what keeps it out of the packaging obligations and the catalog.
-    #[test]
-    fn a_per_type_driver_crate_with_a_dashed_type_name_needs_no_matrix_row() {
-        let fixture = Fixture::new("dashed-driver");
-        let driver = fixture.add_package("d2b-provider-wayland-policy");
-        declare_resource_types_dependency(&driver);
+        let fixture = Fixture::new("undeclared-crate");
+        write_package(&fixture.root, "d2b-provider-undeclared");
         fixture.set_members(&[
             "d2b-core",
             "d2b-provider-fixture-example",
-            "d2b-provider-wayland-policy",
+            "d2b-provider-undeclared",
         ]);
-
-        assert_eq!(
-            classified_kind(&fixture.root, "d2b-provider-wayland-policy"),
-            ProviderNameKind::NonProvider
-        );
-        // A driver crate ships no packaging artifact, so it owes no Provider
-        // layout.
-        assert_eq!(check_fixture(&fixture.root), Ok(()));
-
-        let members = manifest_workspace_members(&fixture.root).expect("read workspace manifest");
-        let error = check_closed_matrix(&fixture.root, &members)
-            .expect_err("the fixture holds no Provider matrix row");
+        let error = check_fixture(&fixture.root).expect_err("an undeclared crate is refused");
         assert!(
-            !error.contains("d2b-provider-wayland-policy"),
-            "a declared driver needs no catalog row: {error}"
+            error.contains("missing-declaration") && error.contains("d2b-provider-undeclared"),
+            "the refusal names the crate whose classification was never stated: {error}"
         );
     }
 
-    /// The control for the dashed name above: the same name shape without the
-    /// declared driver is a packaging Provider, so the check may not start
-    /// passing a crate that genuinely forgot its matrix row.
+    /// A crate that declares no product identity ships no packaging artifact,
+    /// so it owes no Provider layout and needs no packaging matrix row - even
+    /// when its directory name is the exact shape of a packaging identity.
     #[test]
-    fn a_dashed_provider_name_without_a_driver_declaration_keeps_the_packaging_obligations() {
-        let fixture = Fixture::new("dashed-provider");
+    fn a_crate_with_no_product_identity_needs_no_matrix_row() {
+        let fixture = Fixture::new("dashed-driver");
         fixture.add_package("d2b-provider-wayland-policy");
         fixture.set_members(&[
             "d2b-core",
@@ -9670,9 +9544,37 @@ mod tests {
             "d2b-provider-wayland-policy",
         ]);
 
-        assert_eq!(
-            classified_kind(&fixture.root, "d2b-provider-wayland-policy"),
-            ProviderNameKind::Provider
+        assert!(
+            !classified_as_packaging_provider(&fixture.root, "d2b-provider-wayland-policy"),
+            "a crate that owns no product identity is not a packaging Provider, whatever its directory name reads"
+        );
+        assert_eq!(check_fixture(&fixture.root), Ok(()));
+
+        let members = manifest_workspace_members(&fixture.root).expect("read workspace manifest");
+        let error = check_closed_matrix(&fixture.root, &members)
+            .expect_err("the fixture holds no Provider matrix row");
+        assert!(
+            !error.contains("d2b-provider-wayland-policy"),
+            "a crate with no product identity needs no catalog row: {error}"
+        );
+    }
+
+    /// The control for the crate above: the same directory name, owning a
+    /// product identity, is a packaging Provider, so the check may not start
+    /// passing a crate that genuinely forgot its matrix row.
+    #[test]
+    fn a_crate_owning_a_product_identity_keeps_the_packaging_obligations() {
+        let fixture = Fixture::new("dashed-provider");
+        fixture.add_provider_package("d2b-provider-wayland-policy", "wayland-policy");
+        fixture.set_members(&[
+            "d2b-core",
+            "d2b-provider-fixture-example",
+            "d2b-provider-wayland-policy",
+        ]);
+
+        assert!(
+            classified_as_packaging_provider(&fixture.root, "d2b-provider-wayland-policy"),
+            "owning a product identity is what makes a crate a packaging Provider"
         );
         let error = check_fixture(&fixture.root).expect_err("a packaging Provider owes its layout");
         assert!(error.contains("missing-provider-crate-path"), "{error}");
@@ -9689,19 +9591,16 @@ mod tests {
         );
     }
 
-    /// A provider-prefixed crate that declares no driver keeps the packaging
-    /// identity however its name reads, so its catalog row is still demanded.
+    /// A packaging Provider dropped from the workspace reports its row
+    /// missing rather than silently passing.
     #[test]
-    fn a_packaging_provider_without_a_driver_declaration_keeps_its_matrix_row() {
+    fn a_packaging_provider_keeps_its_matrix_row() {
         let fixture = Fixture::new("packaging-provider");
-        fixture.add_package("d2b-provider-volume-local");
+        fixture.add_provider_package("d2b-provider-volume-local", "volume-local");
 
-        assert_eq!(
-            classified_kind(&fixture.root, "d2b-provider-volume-local"),
-            ProviderNameKind::Provider
+        assert!(
+            classified_as_packaging_provider(&fixture.root, "d2b-provider-volume-local")
         );
-        // Dropping the crate from the workspace must report its row missing
-        // rather than silently pass.
         let members = manifest_workspace_members(&fixture.root).expect("read workspace manifest");
         let error = check_closed_matrix(&fixture.root, &members)
             .expect_err("the fixture holds no Provider matrix row");
@@ -9713,18 +9612,19 @@ mod tests {
         );
     }
 
-    /// The single-segment shape is unchanged: it names a per-type driver crate
-    /// whether or not the manifest declares the resource types.
+    /// The classification reads the declaration and not the name: a
+    /// single-segment crate that owns a runtime identity is not a packaging
+    /// Provider, and a multi-segment crate that owns a product identity is.
     #[test]
-    fn a_single_segment_driver_crate_stays_a_non_provider() {
+    fn the_classification_reads_the_declaration_and_not_the_directory_name() {
         let root = repo_root().expect("resolve repository root");
-        assert_eq!(
-            classified_kind(root, "d2b-provider-endpoint"),
-            ProviderNameKind::NonProvider
+        assert!(
+            !classified_as_packaging_provider(root, "d2b-provider-endpoint"),
+            "a single-segment crate with no product identity ships no packaging artifact"
         );
-        assert_eq!(
-            provider_name_kind("d2b-provider-endpoint", false),
-            ProviderNameKind::NonProvider
+        assert!(
+            classified_as_packaging_provider(root, "d2b-provider-system-core"),
+            "a multi-segment crate that owns a product identity is a packaging Provider"
         );
     }
 
@@ -9782,19 +9682,37 @@ mod tests {
         );
     }
 
+    /// A provider-prefixed crate whose declared product identity the
+    /// resource-name grammar refuses is rejected by name instead of being
+    /// ignored: the layout check reads the authority before it classifies
+    /// anything, so a crate that could never publish that identity fails
+    /// rather than quietly shipping nothing.
     #[test]
-    fn a_malformed_provider_name_is_rejected_instead_of_ignored() {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_malformed_declared_identity_is_rejected_instead_of_ignored() {
         let fixture = Fixture::new("malformed");
-        fixture.add_package("d2b-provider-fixture-");
+        write_package(&fixture.root, "d2b-provider-broken");
+        fs::write(
+            fixture.root.join("packages/d2b-provider-broken/src/identity.rs"),
+            "pub const PROVIDER_IDENTITY: &str = \"broken\";\n",
+        )
+        .unwrap();
+        fs::write(
+            fixture.root.join("packages/d2b-provider-broken/provider-identity.json"),
+            "{\n  \"crate\": \"d2b-provider-broken\",\n  \"family\": \"broken\",\n  \"roles\": [\"product\"],\n  \"product\": {\n    \"identity\": \"not a name\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-broken/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }\n    ]\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"session\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"blockers\": []\n}\n",
+        )
+        .unwrap();
         fixture.set_members(&[
             "d2b-core",
+            "d2b-provider-broken",
             "d2b-provider-fixture-example",
-            "d2b-provider-fixture-",
         ]);
 
         let error = check_fixture(&fixture.root).unwrap_err();
-        assert!(error.contains("provider-crate-name-invalid"));
-        assert!(error.contains("d2b-provider-fixture-"));
+        assert!(
+            error.contains("not a name") && error.contains("d2b-provider-broken"),
+            "the refusal names the crate and the identity it spelled: {error}"
+        );
     }
 
     #[test]
@@ -9866,7 +9784,7 @@ mod tests {
     #[test]
     fn a_matrix_row_that_cites_a_deleted_module_fails() {
         let fixture = Fixture::new("matrix-stale-source");
-        fixture.add_package("d2b-provider-volume-local");
+        fixture.add_provider_package("d2b-provider-volume-local", "volume-local");
         fixture.set_members(&[
             "d2b-core",
             "d2b-provider-fixture-example",
@@ -10309,8 +10227,13 @@ mod tests {
             .collect();
         families.sort_unstable();
         families.dedup();
+        let identities =
+            ProviderIdentities::load(&repo_root().expect("resolve repository root"))
+                .expect("the identity authority loads");
         for family in families {
-            let catalogued = PROVIDER_MATRIX.iter().any(|row| row.identity == family);
+            let catalogued = identities
+                .identities(Surface::Product)
+                .any(|(_, identity)| identity == family);
             assert!(
                 catalogued,
                 "family {family} is not a closed provider matrix identity"
@@ -10607,6 +10530,10 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_shared_crate_dependency_on_a_provider_crate_is_refused_unless_listed() {
         let fixture = Fixture::new("provider-dependency");
+        // The depended-on crate owns a product identity, so the check
+        // classifies it as a packaging Provider and the edge is the one the
+        // rule is about.
+        fixture.add_provider_package("d2b-provider-process-systemd", "system-systemd");
         let core = fixture.root.join("packages/d2b-core");
         fs::create_dir_all(core.join("src")).unwrap();
         fs::write(

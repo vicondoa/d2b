@@ -1,5 +1,4 @@
 {
   "crate": "d2b-provider-credential-managed-identity",
-  "provider": "credential-managed-identity",
   "services": []
 }

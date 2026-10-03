@@ -5553,7 +5553,7 @@ mod tests {
         {
             let digest = request.spec_digest().to_owned();
             let handle = request.local_handle().to_owned();
-            self.realized.lock().push((
+            self.realized.lock().push(( // async-gate-allow: fixture records the frame under a short guard and holds no await
                 request.source().clone(),
                 request.spec().to_vec(),
                 digest.clone(),
@@ -5577,7 +5577,7 @@ mod tests {
         {
             Ok(self
                 .observed
-                .lock()
+                .lock() // async-gate-allow: fixture pops under a short guard and holds no await
                 .pop_front()
                 .unwrap_or(TargetObservation::Ready {
                     session_generation: assignment.session_generation(),
@@ -5588,7 +5588,7 @@ mod tests {
             &self,
             assignment: &d2b_resource_runtime::guest_target::TargetControlAssignment,
         ) -> Result<(), d2b_resource_runtime::guest_target::GuestTargetError> {
-            self.deleted.lock().push(assignment.source().clone());
+            self.deleted.lock().push(assignment.source().clone()); // async-gate-allow: fixture records the delete under a short guard and holds no await
             Ok(())
         }
 
@@ -5596,7 +5596,7 @@ mod tests {
             &self,
             _assignment: &d2b_resource_runtime::guest_target::TargetControlAssignment,
         ) -> Result<GuestAdoption, d2b_resource_runtime::guest_target::GuestTargetError> {
-            Ok(self.adopted.lock().pop_front().unwrap_or(GuestAdoption::Missing))
+            Ok(self.adopted.lock().pop_front().unwrap_or(GuestAdoption::Missing)) // async-gate-allow: fixture pops under a short guard and holds no await
         }
     }
 
@@ -5909,7 +5909,7 @@ mod tests {
                 &self,
                 key: &ResourceKey,
             ) -> Result<Option<ResourceView>, ResourceError> {
-                Ok(self.views.lock().iter().find(|view| view.key == *key).cloned())
+                Ok(self.views.lock().iter().find(|view| view.key == *key).cloned()) // async-gate-allow: fixture reads under a short guard and holds no await
             }
 
             async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
@@ -6005,8 +6005,8 @@ mod tests {
             // The endpoint withdrew the delivery: its relationship row no
             // longer publishes one at the incarnation the lease sealed, so the
             // lease revalidation immediately before the effect fails closed.
-            manager.views.lock().retain(|view| view.key != binding_key());
-            manager.views.lock().push(binding_view(false));
+            manager.views.lock().retain(|view| view.key != binding_key()); // async-gate-allow: fixture rewrites under a short guard and holds no await
+            manager.views.lock().push(binding_view(false)); // async-gate-allow: fixture rewrites under a short guard and holds no await
             assert_eq!(
                 d.reconcile(&mut f.fixture.ctx).await.expect("the moved pass"),
                 ReconcileOutcome::RetryScheduled,

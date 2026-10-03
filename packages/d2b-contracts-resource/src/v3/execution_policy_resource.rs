@@ -45,8 +45,7 @@ use d2b_contracts::wire_deserialize;
 
 /// Canonical `ExecutionPolicy` ResourceType name.
 pub const EXECUTION_POLICY_RESOURCE_TYPE: &str = "ExecutionPolicy";
-/// The only Provider admitted by `ExecutionPolicy.spec.providerRef`.
-pub const EXECUTION_POLICY_PROVIDER_REF: &str = "Provider/execution-policy";
+
 /// Maximum namespace classes one policy requires.
 pub const MAX_POLICY_NAMESPACE_CLASSES: usize = 8;
 /// Maximum capability classes one policy admits.

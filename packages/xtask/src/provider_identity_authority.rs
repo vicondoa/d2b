@@ -44,10 +44,12 @@
 //!
 //! [`Declaration::ProviderIdentity`]: crate::authority_common::Declaration::ProviderIdentity
 
-// The loader and its joins have no production consumer until the generators
-// cut over to this authority; every consumer of this module today is its own
-// test suite. `delivery` carries the same blanket for a staged workflow.
-#![allow(dead_code, reason = "the identity authority lands ahead of the generators that consume it")]
+// The generators join through the accessors below: the registration
+// authority resolves every runtime row, the session catalog resolves every
+// routing row, the packaging matrix resolves every product row, the crate
+// layout policy classifies every provider-prefixed crate, and the closure
+// cross-check resolves every declared Provider reference. No consumer reads
+// an identity from a declaration file any more.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -232,6 +234,7 @@ pub(crate) enum NoIdentityReason {
 
 impl NoIdentityReason {
     /// Every reason, in declaration order.
+    #[allow(dead_code, reason = "read by this module's own census tests; no generator consumes it")]
     pub(crate) const ALL: [Self; 2] = [Self::NoIdentityOwned, Self::CompositionHosted];
 
     /// The closed vocabulary as the `serde` error names it.
@@ -447,6 +450,7 @@ impl ProviderIdentities {
     }
 
     /// Every declaring crate with its declaration, in crate-name order.
+    #[allow(dead_code, reason = "read by this module's own census tests; no generator consumes it")]
     pub(crate) fn declarations(&self) -> impl Iterator<Item = (&str, &IdentityDeclaration)> {
         self.declarations
             .iter()
@@ -510,6 +514,7 @@ impl ProviderIdentities {
     }
 
     /// Every external issue the declarations record, in crate-name order.
+    #[allow(dead_code, reason = "read by this module's own census tests; no generator consumes it")]
     pub(crate) fn blockers(&self) -> impl Iterator<Item = (&str, &Blocker)> {
         self.declarations
             .iter()
@@ -522,6 +527,7 @@ impl ProviderIdentities {
     }
 
     /// The production sources that name one crate's identity on one surface.
+    #[allow(dead_code, reason = "read by this module's own census tests; no generator consumes it")]
     pub(crate) fn evidence(&self, crate_name: &str, surface: Surface) -> &[EvidenceAnchor] {
         self.declaration(crate_name)
             .map(|declaration| declaration.slot(surface).evidence())
@@ -531,6 +537,34 @@ impl ProviderIdentities {
     /// The `Provider/<name>` reference a declared identity is written as.
     pub(crate) fn provider_ref(identity: &str) -> String {
         format!("Provider/{identity}")
+    }
+
+    /// The family one crate realizes, stated by its own declaration.
+    pub(crate) fn family(&self, crate_name: &str) -> Option<&str> {
+        self.declaration(crate_name)
+            .map(IdentityDeclaration::family)
+    }
+
+    /// Whether one crate carries one classification role.
+    pub(crate) fn has_role(&self, crate_name: &str, role: Role) -> bool {
+        self.declaration(crate_name)
+            .is_some_and(|declaration| declaration.has_role(role))
+    }
+
+    /// Every identity the declarations own on any surface, in crate-name
+    /// then surface order.
+    ///
+    /// This is the closed vocabulary a `Provider/<name>` reference resolves
+    /// against: a reference the declarations do not own names no Provider the
+    /// product has, whatever spelled it.
+    pub(crate) fn all_identities(&self) -> impl Iterator<Item = &str> {
+        self.declarations
+            .values()
+            .flat_map(|declaration| {
+                Surface::ALL
+                    .into_iter()
+                    .filter_map(move |surface| declaration.slot(surface).identity())
+            })
     }
 }
 

@@ -82,22 +82,73 @@ grants - beyond the crate's committed scope fails naming the widened fact
 privileges, state cells, and descriptor-leg type/rights in `operations.json`)
 carry the same committed per-crate bound (U4).
 A second, smaller declaration (`registrations.json`, beside
-`resource-types.json`) names the family's provider/service registration: the
-provider identity the daemon's composition root composes and the
-effect-service ids the family declares. The daemon composes the generated
-registration table instead of naming families, so a new family is registered
-by declaring it in its own crate - no daemon edit and no layout-ratchet row.
-A crate that declares no services carries an empty `services` list:
+`resource-types.json`) names the family's runtime registration: the
+effect-service ids the family registers. The Provider identity that
+registration is made under is **not** stated there - it is the crate's own
+runtime identity in the per-crate identity authority (below). The daemon
+composes the generated registration table instead of naming families, so a new
+family is registered by declaring it in its own crate - no daemon edit and no
+layout-ratchet row. A crate that registers no service carries an empty
+`services` list:
 
 ```json
 {
   "crate": "d2b-provider-<family>",
-  "provider": "<family>",
   "services": ["<family>.d2bus.org/<service>"]
 }
 ```
 
 
+
+## The Provider identity authority
+
+`packages/d2b-provider-*/provider-identity.json` is the one place a provider
+crate's Provider identities are stated. Every other declaration keeps its own
+facts - a registration row states the effect services a runtime identity
+registers, a session catalog row states the routing a session identity
+answers, a packaging row states the artifact a product identity ships - and
+each resolves its identity through this authority. Nothing reads an identity
+out of a crate's directory name, and no count of any category is written down
+here: the census is read from the declarations and the generated artifacts.
+
+A crate declares one identity slot per surface, and a slot states either the
+identity it owns or the closed reason it owns none. Each identity names the
+production sources that name it, and a slot whose evidence is missing is a
+refusal. The categories a declaration can fall into:
+
+- **product** - the identity the packaging metadata and the Nix provider
+  catalog ship. A crate in this category carries a packaging matrix row; a
+  packaging row whose crate declares no product identity fails.
+- **runtime** - the identity the daemon's composition root registers through
+  the generated registration table. A crate that declares services but owns no
+  runtime identity fails.
+- **session** - the identity the session-plane service catalog routes to. A
+  catalog row whose crate owns no session identity fails.
+- **fixed-bootstrap** - a packaged product identity the deployment registers
+  at startup, outside ordinary Process projection and outside the ProviderSet
+  runtime registrations. It lives on the product surface because that is where
+  its artifact ships; its startup is a deployment fact, so a fixed-bootstrap
+  crate owns no runtime identity and never becomes a normal runtime row.
+- **shared-driver** - the crate declares a driver another family's
+  registration runs, so it owns the identity that driver serves. A crate in
+  this category registers no Provider of its own.
+- **blocked** - the crate records an external issue it is waiting on. A
+  blocker is a record, never an exemption: it is read only out of a
+  declaration that is present and complete.
+- **no identity** - the crate implements other crates' surfaces and owns none
+  of its own (a support crate, a test crate, a resource-vocabulary crate, a
+  service-only crate, or a crate that deliberately owns no Provider). It
+  states which of those classes it is and nulls every surface with its reason.
+
+The three surfaces are independent: a crate routinely owns one identity on one
+surface and none on another. `d2b-provider-process-systemd` ships a
+product-plane artifact and registers a different runtime identity, and
+`d2b-provider-endpoint` is registered at runtime without being product
+packaging at all. An identity is written as the resource name the contracts
+admit; the `Provider/<name>` reference form is derived from it and is never
+authored, and every `Provider/<name>` reference a declaration emits resolves
+against the authority, so a reference to an identity no crate declares is
+refused at generation.
 
 ## What reads the declarations
 
@@ -111,12 +162,14 @@ about the resource model:
 - `generated/new-graph/provider_registrations.rs` - the committed
   provider/service registration table the daemon composition root composes
   (`include!`d by `packages/d2bd/src/resource_plane_v3.rs`): one row per
-  declaring family, carrying the provider identity and the declared
-  effect-service ids. The registration authority's parity gate refuses a
-  declared provider that is not the crate's own family, a declared service
-  the crate's sources do not spell, a service the crate spells or registers
-  that the declaration omits, and a service or provider declared by two
-  crates.
+  declaring crate, carrying the runtime identity the crate declares in the
+  identity authority and the declared effect-service ids. The registration
+  authority's parity gate refuses a registration whose crate declares no
+  runtime identity, a declared service the crate's sources do not spell, and
+  a service the crate spells or registers that the declaration omits. The
+  identity itself is refused by the authority: a malformed identity, an
+  identity no production source names, and an identity two crates declare are
+  all failures before any generation runs.
 
 - `generated/new-graph/service_provider_catalog.rs` - the committed
   service-to-provider catalog the zone-plane session contract serves
@@ -218,10 +271,12 @@ synchronous-path reads); everything else is a per-site row with reason.
 1. Move the vocabulary into the family's own crate(s) and declare the crate's
    `resource-types.json`: types with their verbs, execution classes, and
    reads, and the crate's provides, roles, principals, storage, security, and
-   capability rows. If the family needs the daemon's composition root to
-   register it, declare its `registrations.json` too: the generated
-   registration table carries the family into the daemon with no daemon
-   edit.
+   capability rows. Declare the crate's `provider-identity.json` beside them:
+   it states which identity the crate owns on each of the product, runtime and
+   session surfaces, and the closed reason for every surface it owns none on.
+   If the family needs the daemon's composition root to register it, declare
+   its `registrations.json` too: the generated registration table carries the
+   crate into the daemon with no daemon edit.
 2. Run `tests/tools/generate-artifacts.sh` so every generated view moves in
    the same change.
 3. Run `xtask check-provider-crate-layout`; if it adds rows to the ratchets,

@@ -1,8 +1,9 @@
 // @generated
-// Provenance: emitted from the per-crate `registrations.json` declarations
-// by `cargo xtask check-provider-crate-layout --fix`; the layout check's
-// authority drift gate regenerates this file byte-for-byte, and refuses a
-// hand edit.
+// Provenance: emitted from the per-crate `registrations.json` service
+// facts joined against the per-crate `provider-identity.json` runtime
+// identities by `cargo xtask check-provider-crate-layout --fix`; the
+// layout check's authority drift gate regenerates this file byte-for-byte,
+// and refuses a hand edit.
 
 /// One registered provider family row: the provider identity the daemon's
 /// composition root composes and the effect-service ids the family declares.

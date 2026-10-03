@@ -863,7 +863,6 @@ pub fn gen_nix_inventories(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider_crate_policy::PROVIDER_MATRIX;
 
     /// The Nix projection is the private plan's own Nix view, so a provider
     /// method reaches the Nix surface without a hand-written inventory row.
@@ -920,13 +919,20 @@ mod tests {
     }
 
     #[test]
-    fn every_projection_owner_is_a_closed_provider_matrix_row() {
-        let identities: BTreeSet<&str> = PROVIDER_MATRIX.iter().map(|row| row.identity).collect();
+    fn every_projection_owner_is_a_declared_product_identity() {
+        let identities = crate::provider_identity_authority::ProviderIdentities::load(
+            &crate::repo_root().expect("resolve repository root"),
+        )
+        .expect("the identity authority loads");
+        let products: BTreeSet<&str> = identities
+            .identities(crate::provider_identity_authority::Surface::Product)
+            .map(|(_, identity)| identity)
+            .collect();
         let mut seen = BTreeSet::new();
         for owner in PROVIDER_PROJECTION_OWNERS {
             assert!(
-                identities.contains(owner),
-                "projection owner '{owner}' is not a Provider matrix row"
+                products.contains(owner),
+                "projection owner '{owner}' is not a declared product Provider identity"
             );
             assert!(seen.insert(*owner), "projection owner '{owner}' repeats");
         }

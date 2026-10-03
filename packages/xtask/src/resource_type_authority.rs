@@ -62,6 +62,7 @@ use std::{
 };
 
 use crate::authority_common::{collect_rs_files, declaration_paths, verify_committed, Declaration};
+use crate::provider_identity_authority::ProviderIdentities;
 #[cfg(test)]
 use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
@@ -332,7 +333,8 @@ fn render_artifacts(
         .map_err(|error| {
             format!("resource-type-authority inventory render failed: {error}")
         })?;
-    let role_providers = render_nix_process_role_providers(registry)?;
+    let identities = ProviderIdentities::load(repo_root)?;
+    let role_providers = render_nix_process_role_providers(registry, &identities)?;
     let process_roles = render_process_roles(registry)?;
     Ok(vec![
         (GENERATED_ARTIFACT.to_owned(), render(registry)?),
@@ -485,10 +487,11 @@ fn is_provider_reference(reference: &str) -> bool {
 /// declarations.
 pub(crate) fn render_role_artifacts(repo_root: &Path) -> Result<Vec<(String, String)>, String> {
     let registry = load(repo_root)?;
+    let identities = ProviderIdentities::load(repo_root)?;
     Ok(vec![
         (
             NIX_PROCESS_ROLE_PROVIDERS_OUT.to_owned(),
-            render_nix_process_role_providers(&registry)?,
+            render_nix_process_role_providers(&registry, &identities)?,
         ),
         (PROCESS_ROLES_OUT.to_owned(), render_process_roles(&registry)?),
     ])
@@ -501,8 +504,14 @@ pub(crate) fn render_role_artifacts(repo_root: &Path) -> Result<Vec<(String, Str
 /// rows in declaration order, one for every declared role that carries a
 /// `providerRef`. A role no Provider serves stays out of the map, mirroring
 /// the historical table.
+///
+/// Every reference is resolved against the identity authority before it is
+/// emitted: a `Provider/<name>` the declarations do not own names no Provider
+/// the product has, so publishing it would hand a ProcessRole an identity no
+/// crate can serve.
 fn render_nix_process_role_providers(
     registry: &AuthorityRegistry,
+    identities: &ProviderIdentities,
 ) -> Result<String, String> {
     let mut out = String::from(GENERATED_NIX_HEADER);
     out.push_str(
@@ -527,6 +536,15 @@ fn render_nix_process_role_providers(
             if !is_provider_reference(reference) {
                 return Err(format!(
                     "role-provider-ref-invalid: crate {crate_name} role {} names providerRef {reference:?} which is not a Provider/<name> reference",
+                    role.name
+                ));
+            }
+            let identity = reference
+                .strip_prefix("Provider/")
+                .expect("the reference passed is_provider_reference");
+            if !identities.all_identities().any(|declared| declared == identity) {
+                return Err(format!(
+                    "role-provider-ref-unknown: crate {crate_name} role {} names providerRef {reference:?}, and no provider crate declares the identity {identity} on any surface",
                     role.name
                 ));
             }
@@ -1367,9 +1385,69 @@ mod tests {
 
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write(&self, relative: &str, content: &str) {
+            self.write_raw(relative, content);
+            self.write_identity_for(relative);
+        }
+
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn write_raw(&self, relative: &str, content: &str) {
             let path = self.root.join(relative);
             fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
             fs::write(&path, content).expect("write");
+        }
+
+        /// Stand up the identity declaration for a provider crate the fixture
+        /// has just created.
+        ///
+        /// Every provider crate a fixture writes a driver source for is a
+        /// crate the identity authority has to know about, and the authority
+        /// refuses a tree with an undeclared one. The declaration is a
+        /// deliberate null on every surface unless the caller named a product
+        /// identity, which is the honest row for a crate whose only
+        /// plane-facing surface is its ResourceType vocabulary.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn write_identity(&self, crate_name: &str, product: Option<&str>) {
+            let family = crate_name.strip_prefix("d2b-provider-").expect("provider prefix");
+            let named = product.unwrap_or(family);
+            self.write_raw(
+                &format!("packages/{crate_name}/src/identity.rs"),
+                &format!("pub const PROVIDER_IDENTITY: &str = \"{named}\";\n"),
+            );
+            let (roles, product) = match product {
+                Some(identity) => (
+                    "[\"product\"]".to_owned(),
+                    format!(
+                        "{{\n    \"identity\": \"{identity}\",\n    \"evidence\": [\n      {{\n        \"path\": \"packages/{crate_name}/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }}\n    ]\n  }}"
+                    ),
+                ),
+                None => (
+                    "[\"no-identity\"]".to_owned(),
+                    "{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }".to_owned(),
+                ),
+            };
+            self.write_raw(
+                &format!("packages/{crate_name}/provider-identity.json"),
+                &format!(
+                    "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{family}\",\n  \"roles\": {roles},\n  \"product\": {product},\n  \"runtime\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"session\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"blockers\": []\n}}\n"
+                ),
+            );
+        }
+
+        /// Plant the identity declaration for whichever provider crate this
+        /// write just stood up, so a fixture that adds a crate does not have
+        /// to remember the authority as well as the declaration.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn write_identity_for(&self, relative: &str) {
+            let Some(path) = relative.strip_prefix("packages/") else {
+                return;
+            };
+            let Some((crate_name, rest)) = path.split_once('/') else {
+                return;
+            };
+            if rest != "src/driver.rs" || !crate_name.starts_with("d2b-provider-") {
+                return;
+            }
+            self.write_identity(crate_name, None);
         }
 
         fn write_well_known(&self) {
@@ -1456,6 +1534,26 @@ mod tests {
                     "pub fn fixture_role_surface(role: d2b_core::processes::ProcessRole) -> bool {{\n    matches!(role, {spelled})\n}}\n"
                 ),
             );
+            // A role's `providerRef` resolves against the identity authority,
+            // so every family the fixture's roles point at has to exist in the
+            // fixture's own tree, declared as the product identity it is.
+            for referenced in roles
+                .iter()
+                .filter_map(|(_, provider, _)| *provider)
+                // A reference that is not a `Provider/<name>` is a negative
+                // fixture's own plant: there is nothing to resolve it
+                // against, and the render refuses it by grammar first.
+                .filter_map(|provider| provider.strip_prefix("Provider/").map(str::to_owned))
+                .filter(|provider| !provider.is_empty() && is_provider_reference(&format!("Provider/{provider}")))
+                .collect::<BTreeSet<_>>()
+            {
+                let crate_name = format!("d2b-provider-{referenced}");
+                self.write(
+                    &format!("packages/{crate_name}/src/driver.rs"),
+                    &format!("pub const REFERENCED_PROVIDER: &str = \"{referenced}\";\n"),
+                );
+                self.write_identity(&crate_name, Some(&referenced));
+            }
         }
     }
 
@@ -1993,7 +2091,11 @@ mod tests {
             )]),
             sources: BTreeMap::new(),
         };
-        let nix = render_nix_process_role_providers(&registry).expect("render");
+        let identities = ProviderIdentities::load(
+            &crate::repo_root().expect("resolve repository root"),
+        )
+        .expect("the identity authority loads");
+        let nix = render_nix_process_role_providers(&registry, &identities).expect("render");
         assert!(
             nix.contains("  Audio = \"Provider/audio-pipewire\";\n"),
             "the declared provider reference lands in the Nix map: {nix}"

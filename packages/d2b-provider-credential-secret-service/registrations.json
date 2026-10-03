@@ -1,5 +1,4 @@
 {
   "crate": "d2b-provider-credential-secret-service",
-  "provider": "credential-secret-service",
   "services": []
 }

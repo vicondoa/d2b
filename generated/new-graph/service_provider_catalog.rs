@@ -1,7 +1,9 @@
 // @generated
-// Provenance:emitted from the per-crate `service-catalog.json` declarations
-// by `cargo xtask check-provider-crate-layout --fix`;the layout check's
-// drift gate regenerates this file byte-for-byte,and refuses a hand edit.
+// Provenance:emitted from the per-crate `service-catalog.json` routing
+// facts joined against the per-crate `provider-identity.json` session
+// identities by `cargo xtask check-provider-crate-layout --fix`;the layout
+// check's drift gate regenerates this file byte-for-byte,and refuses a hand
+// edit.
 
 // Generated service-to-provider vocabulary for the zone-plane session
 // contract. The bus is pinned provider-free,so it reads the provider refs
