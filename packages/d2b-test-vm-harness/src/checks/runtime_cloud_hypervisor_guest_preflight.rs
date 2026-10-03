@@ -780,6 +780,24 @@ const SESSION_GENERATION_EXPLAIN: &[DiagRow<'static>] = &[
     ("d2bd.service", "ComponentSession"),
 ];
 
+/// Controller-session and Process launch evidence needed when the Guest VMM
+/// wait finds the runtime controller still Pending.
+const GUEST_VMM_PROCESS_EXPLAIN: &[DiagRow<'static>] = &[
+    ("d2bd.service", "external Provider controller"),
+    ("d2bd.service", "controller session reconciliation degraded"),
+    ("d2bd.service", "controller assignment"),
+    ("d2bd.service", "controller session service task finished"),
+    ("d2bd.service", "supervisor launch effect failed"),
+    ("d2bd.service", "broker refused a process request"),
+    ("d2bd.service", "broker spawn invocation failed"),
+    ("d2bd.service", "broker transport failed for a process request"),
+    ("d2bd.service", "process provider effect failed"),
+    ("d2bd.service", "process launch failed"),
+    ("d2bd.service", "launch request rejected"),
+    ("d2bd.service", "forwarded invocation refused with a reason"),
+    ("d2b-broker.service", "spawn"),
+];
+
 /// The Guest's deletion, retried the fixture's own 30 attempts.
 const GUEST_DELETE: &str = concat!(
     "for attempt in $(seq 1 30); do ",
@@ -1010,10 +1028,7 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
         GUEST_VMM_PROCESS_READY,
         GUEST_BOUND,
         &[row(&process_ready_rows)],
-        &[
-            ("d2bd.service", "acceptance-guest-vmm"),
-            ("d2bd.service", "cloud-hypervisor-runner"),
-        ],
+        GUEST_VMM_PROCESS_EXPLAIN,
     )?;
     let endpoint_ready_rows = saved_rows("Endpoint rows", "/run/d2b-endpoint-ready.json");
     control.diag_wait(
