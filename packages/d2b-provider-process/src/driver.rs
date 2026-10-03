@@ -747,7 +747,7 @@ enum AdoptionOutcome {
     /// never adopted, never signalled. The report is the local Provider's own
     /// evidence for that answer; a target-local classification carries none,
     /// because a target-local realization is either this row's or nothing.
-    Quarantined(Option<ProcessStatusReport>),
+    Quarantined(Option<Box<ProcessStatusReport>>),
 }
 
 /// What one liveness observation found, over either transport.
@@ -1690,7 +1690,7 @@ impl ProcessDriver {
                     ProviderAdoption::Stale { candidate } => AdoptionOutcome::Stale(candidate),
                     ProviderAdoption::ControllerBootstrapMissing => AdoptionOutcome::StopAndRestart,
                     ProviderAdoption::Quarantined(report) => {
-                        AdoptionOutcome::Quarantined(Some(report))
+                        AdoptionOutcome::Quarantined(Some(Box::new(report)))
                     }
                 },
                 Err(error) => return Err(map_provider_error(error, op)),
@@ -5758,16 +5758,21 @@ mod tests {
         row
     }
 
+    /// One frame the driver asked the Guest to realize: the source row, the
+    /// exact resolved spec bytes, and the digest and handle it committed to.
+    type RealizedFrame = (ResourceKey, Vec<u8>, String, String);
+
     /// One recorded target-control session: exactly what the driver asked the
     /// Guest to apply, and the answers it scripts back.
     #[derive(Debug)]
     struct FakeGuestTarget {
-        realized: parking_lot::Mutex<Vec<(ResourceKey, Vec<u8>, String, String)>>,
+        realized: parking_lot::Mutex<Vec<RealizedFrame>>,
         observed: parking_lot::Mutex<VecDeque<TargetObservation>>,
         adopted: parking_lot::Mutex<VecDeque<GuestAdoption>>,
         deleted: parking_lot::Mutex<Vec<ResourceKey>>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl FakeGuestTarget {
         fn new() -> Arc<Self> {
             Arc::new(Self {
@@ -5779,14 +5784,14 @@ mod tests {
         }
 
         fn script_adoption(&self, adoption: GuestAdoption) {
-            self.adopted.lock().push_back(adoption);
+            self.adopted.lock().push_back(adoption); // async-gate-allow: fixture scripts an answer under a short guard and holds no await
         }
 
         fn script_observation(&self, observation: TargetObservation) {
-            self.observed.lock().push_back(observation);
+            self.observed.lock().push_back(observation); // async-gate-allow: fixture scripts an answer under a short guard and holds no await
         }
 
-        fn realized(&self) -> Vec<(ResourceKey, Vec<u8>, String, String)> {
+        fn realized(&self) -> Vec<RealizedFrame> {
             self.realized.lock().clone()
         }
 
@@ -5809,6 +5814,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl d2b_resource_runtime::guest_target::GuestTargetControl for FakeGuestTarget {
         async fn realize(
             &self,
@@ -5910,6 +5916,7 @@ mod tests {
     /// A live authenticated Guest target is where this row runs: the first
     /// pass discovers nothing, realizes the exact host-resolved realization,
     /// and only then reports readiness (R18, R29).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_guest_targeted_process_launches_through_the_session_and_reports_ready() {
         let mut f = GuestFixture::new(guest_row());
@@ -5959,6 +5966,7 @@ mod tests {
 
     /// Deletion removes exactly this row's target-local realization and is
     /// idempotent under retry (F3, R20, R29).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn guest_delete_removes_only_the_exact_source_process_and_repeats_cleanly() {
         let mut f = GuestFixture::new(guest_row());
@@ -5982,6 +5990,7 @@ mod tests {
 
     /// Session loss makes the target unavailable: the row stops reading ready,
     /// no frame is issued, and the reconnect drives a fresh adoption (R21).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_lost_guest_session_quarantines_the_incarnation_until_the_reconnect_adopts() {
         let mut f = GuestFixture::new(guest_row());
@@ -6157,6 +6166,7 @@ mod tests {
         }
 
         #[async_trait::async_trait]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         impl ManagerEndpoint for BindingManager {
             async fn ensure_child(
                 &self,
@@ -6290,6 +6300,7 @@ mod tests {
 
         /// Replace one published view, which is how a case states that the
         /// evidence under a live row moved.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn publish(manager: &BindingManager, view: ResourceView) {
             manager.views.lock().retain(|published| published.key != view.key); // async-gate-allow: fixture rewrites under a short guard and holds no await
             manager.views.lock().push(view); // async-gate-allow: fixture rewrites under a short guard and holds no await
@@ -6297,6 +6308,7 @@ mod tests {
 
         /// The delivery a live Guest Process receives is exactly the sealed
         /// relationship set, and only because the lease revalidated.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         #[tokio::test]
         async fn prepared_endpoint_delivery_reaches_the_guest_only_with_a_live_lease() {
             let (mut f, _manager) = gated_guest_fixture();
@@ -6324,6 +6336,7 @@ mod tests {
         /// A lease that no longer revalidates delivers nothing: the launch
         /// defers and no realize frame - and so no endpoint delivery - is
         /// issued over the session.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         #[tokio::test]
         async fn a_lease_that_moved_before_the_effect_delivers_nothing() {
             let (mut f, manager) = gated_guest_fixture();
@@ -6359,6 +6372,7 @@ mod tests {
         /// non-ready classification in the same pass, and issues no launch -
         /// so a later pass that still sees the withdrawal stays stopped
         /// rather than restarting over revoked authority.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         #[tokio::test]
         async fn a_withdrawn_binding_stops_the_running_process_and_forbids_a_relaunch() {
             let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
@@ -6426,6 +6440,7 @@ mod tests {
         /// Evidence published about ANOTHER incarnation is foreign, which is
         /// terminal for the launch - and it stops the live process on exactly
         /// the same terms a withdrawal does (AE13, R21).
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         #[tokio::test]
         async fn foreign_binding_evidence_stops_the_running_process_too() {
             let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
@@ -6479,6 +6494,7 @@ mod tests {
         /// relationship it consumes - or an `Endpoint` it produces - is still
         /// committed. The effect has already stopped by the time this runs;
         /// this is what keeps the identity available until they are gone.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         #[tokio::test]
         async fn process_row_retirement_waits_for_its_bindings_and_produced_endpoints() {
             // 1. A relationship this exact Process consumes is committed: the

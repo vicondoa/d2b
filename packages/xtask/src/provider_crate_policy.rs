@@ -3153,10 +3153,10 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "the transport-vsock family rollout into its provider crate",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/interaction_composition.rs",
-        token: "vsock",
-        family: "transport-vsock",
-        retires_with: "the transport-vsock family rollout into its provider crate",
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "display_wayland",
+        family: "display-wayland",
+        retires_with: "the daemon installs the display provider's committed-shape vocabulary into the endpoint composition; the daemon composes the wiring, the display provider still owns every display constant and the exact match",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
@@ -9404,7 +9404,7 @@ mod tests {
     #[test]
     fn the_provider_matrix_is_closed_against_the_identity_authority() {
         let root = repo_root().expect("resolve repository root");
-        let identities = ProviderIdentities::load(&root).expect("the identity authority loads");
+        let identities = ProviderIdentities::load(root).expect("the identity authority loads");
         assert_eq!(PROVIDER_MATRIX.len(), 26);
 
         let crates: BTreeSet<&str> = PROVIDER_MATRIX.iter().map(|row| row.crate_name).collect();
@@ -9497,7 +9497,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn every_provider_prefixed_crate_declares_its_classification() {
         let root = repo_root().expect("resolve repository root");
-        let identities = ProviderIdentities::load(&root).expect("the identity authority loads");
+        let identities = ProviderIdentities::load(root).expect("the identity authority loads");
         let mut names: BTreeSet<String> = fs::read_dir(root.join("packages"))
             .expect("read packages directory")
             .map(|entry| entry.expect("read package entry"))
@@ -10228,7 +10228,7 @@ mod tests {
         families.sort_unstable();
         families.dedup();
         let identities =
-            ProviderIdentities::load(&repo_root().expect("resolve repository root"))
+            ProviderIdentities::load(repo_root().expect("resolve repository root"))
                 .expect("the identity authority loads");
         for family in families {
             let catalogued = identities

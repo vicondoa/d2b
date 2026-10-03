@@ -2092,7 +2092,7 @@ mod tests {
             sources: BTreeMap::new(),
         };
         let identities = ProviderIdentities::load(
-            &crate::repo_root().expect("resolve repository root"),
+            crate::repo_root().expect("resolve repository root"),
         )
         .expect("the identity authority loads");
         let nix = render_nix_process_role_providers(&registry, &identities).expect("render");

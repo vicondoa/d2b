@@ -1169,10 +1169,12 @@ mod tests {
             .expect("frontend process reference");
         let proxy = durable_process_ref(&session_uid, DisplayProcessRole::HostProxy)
             .expect("proxy process reference");
-        let expected = vec![
+        let mut expected = vec![
             (compositor.name().as_str().to_owned(), proxy.to_canonical_string()),
             (proxy_endpoint.name().as_str().to_owned(), frontend.to_canonical_string()),
         ];
+        expected.sort();
+        derived.sort();
         assert_eq!(
             derived, expected,
             "the session derives exactly the host proxy's compositor relationship \

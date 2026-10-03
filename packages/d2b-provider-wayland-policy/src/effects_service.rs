@@ -234,7 +234,6 @@ impl InteractionEffectsService {
     }
 
     /// Spec documents of every row of one ResourceType, from the manager.
-
     async fn specs_of_type(
         &self,
         resource_type: &str,

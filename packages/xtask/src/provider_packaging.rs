@@ -387,9 +387,9 @@ fn generated_catalog_shape_module(identities: &ProviderIdentities) -> Result<Str
 /// product does not publish, and a product identity no row packages is an
 /// identity the product has no artifact for - both are refusals rather than
 /// rows with a guessed identity.
-fn product_rows<'a>(
-    identities: &'a ProviderIdentities,
-) -> Result<Vec<(&'a crate::provider_crate_policy::ProviderMatrixRow, &'a str)>, String> {
+fn product_rows(
+    identities: &ProviderIdentities,
+) -> Result<Vec<(&crate::provider_crate_policy::ProviderMatrixRow, &str)>, String> {
     product_rows_for(PROVIDER_MATRIX, identities)
 }
 
@@ -515,7 +515,7 @@ mod tests {
 
     /// The committed repository the catalog shape renders over.
     fn identities() -> ProviderIdentities {
-        ProviderIdentities::load(&crate::repo_root().expect("resolve repository root"))
+        ProviderIdentities::load(crate::repo_root().expect("resolve repository root"))
             .expect("the identity authority loads")
     }
 
@@ -868,7 +868,7 @@ mod tests {
         let root = crate::repo_root().expect("resolve repository root");
         let artifact = root.join("nixos-modules/generated/provider-catalog-shape.nix");
         let before = fs::read_to_string(&artifact).expect("the committed catalog shape reads");
-        let written = gen_provider_packaging(&root).expect("generation succeeds");
+        let written = gen_provider_packaging(root).expect("generation succeeds");
         assert!(!written.is_empty());
         for path in &written {
             assert!(path.is_file(), "{} was not written", path.display());

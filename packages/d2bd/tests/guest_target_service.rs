@@ -771,11 +771,10 @@ struct ProcessEffect {
 
 impl ProcessEffect {
     fn absent() -> Arc<Self> {
-        let effect = Arc::new(Self {
+        Arc::new(Self {
             present: StdMutex::new(false),
             ..Self::default()
-        });
-        effect
+        })
     }
 
     fn applied(&self) -> Vec<(String, Vec<u8>)> {
@@ -789,11 +788,10 @@ impl ProcessEffect {
     /// Refuse every discovery, the way a target whose local effect cannot be
     /// confirmed behaves.
     fn blind() -> Arc<Self> {
-        let effect = Arc::new(Self {
+        Arc::new(Self {
             discovery: StdMutex::new(Some(GuestTargetEffectError::Unavailable)),
             ..Self::default()
-        });
-        effect
+        })
     }
 }
 

@@ -750,7 +750,7 @@ fn endpoint_readiness_view(endpoint: &StoredDesiredResource) -> ResourceView {
         uid: endpoint.uid,
         generation: endpoint.generation,
         deleting: endpoint.deleting,
-        provenance: endpoint.provenance.clone(),
+        provenance: endpoint.provenance,
         spec: endpoint.spec.clone(),
         metadata: endpoint.metadata.clone(),
         owner_key: None,
@@ -1747,14 +1747,14 @@ impl EndpointAccessDispatch for ScriptedDispatch {
         verb: EndpointAccessVerb,
         request: EndpointAccessRequest,
     ) -> Result<EndpointAccessResponse, EndpointAccessDispatchError> {
-        self.sent.lock().expect("sent lock").push(verb);
-        match self.answer.lock().expect("answer lock").clone() {
+        self.sent.lock().expect("sent lock").push(verb); // async-gate-allow: fixture records the scripted verb under a short guard and holds no await
+        match self.answer.lock().expect("answer lock").clone() { // async-gate-allow: fixture answers the scripted dispatch under a short guard and holds no await
             ScriptedAnswer::Answered => Ok(EndpointAccessResponse {
                 endpoint_ref: request.endpoint_ref.clone(),
                 consumer_ref: request.consumer_ref.clone(),
                 socket: request.socket.clone(),
                 socket_device: 0xfd00,
-                socket_inode: *self.pinned.lock().expect("pinned lock"),
+                socket_inode: *self.pinned.lock().expect("pinned lock"), // async-gate-allow: fixture reads the pinned inode under a short guard and holds no await
                 socket_effective_rights: 0o6,
                 ancestors_traversable: true,
                 parent_listable: false,

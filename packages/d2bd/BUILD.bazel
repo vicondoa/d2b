@@ -665,6 +665,7 @@ d2b_rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider-guest:d2b_provider_guest_test_support",
+        "//packages/d2b-provider-process:d2b_provider_process_test_support",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-session:d2b_session_test_support",
         "//packages/d2b-session-unix:d2b_session_unix_test_support",

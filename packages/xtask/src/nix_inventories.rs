@@ -921,7 +921,7 @@ mod tests {
     #[test]
     fn every_projection_owner_is_a_declared_product_identity() {
         let identities = crate::provider_identity_authority::ProviderIdentities::load(
-            &crate::repo_root().expect("resolve repository root"),
+            crate::repo_root().expect("resolve repository root"),
         )
         .expect("the identity authority loads");
         let products: BTreeSet<&str> = identities

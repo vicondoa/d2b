@@ -585,7 +585,7 @@ fn each_worker_requires_exactly_the_canonical_binding_row_publication_names() {
         derived_endpoint(&endpoints, &compositor)
             .consumer_policy()
             .allowed_subjects(),
-        &[proxy.clone()]
+        std::slice::from_ref(&proxy)
     );
 
     // The guest frontend's own Endpoint publishes nothing, so it derives no
