@@ -4925,7 +4925,7 @@
         }
       },
       "deadline": {
-        "tier": "extended"
+        "tier": "standard"
       },
       "service": "d2b.process",
       "method": "open-pidfd",
@@ -5609,7 +5609,7 @@
         }
       },
       "deadline": {
-        "tier": "standard"
+        "tier": "extended"
       },
       "service": "d2b.process",
       "method": "spawn-runner",

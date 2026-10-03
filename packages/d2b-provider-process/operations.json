@@ -94,7 +94,7 @@
         }
       },
       "deadline": {
-        "tier": "extended"
+        "tier": "standard"
       },
       "stateCell": {
         "cell": "runner-pidfd-registry",
@@ -769,7 +769,7 @@
         }
       },
       "deadline": {
-        "tier": "standard"
+        "tier": "extended"
       },
       "fds": {
         "maxFds": 3,
