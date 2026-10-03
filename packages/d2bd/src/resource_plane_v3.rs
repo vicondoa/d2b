@@ -9354,4 +9354,506 @@ HOST_EFFECTS_SERVICE.id,
         }
         plane.shutdown().await;
     }
+    // -----------------------------------------------------------------------
+    // Production-composition acceptance for the display actor graph.
+    //
+    // One manager-owned `WaylandSession` row, admitted through the plane's own
+    // Nix ingest, reconciled by the real per-Zone manager, the real
+    // ProviderSet, the real driver factories, the real interaction effects
+    // service, and the real Endpoint-family committed-shape seam. Nothing here
+    // stands in for the plane: the composition supplies the facet sets the
+    // production composition root supplies, each built by its own family
+    // crate, and the plane assembles and runs every actor itself.
+    //
+    // Why this test exists at all (F5): the display Provider owns the endpoint
+    // shapes it commits, and the ONE vocabulary it commits them into is
+    // installed in two seams - the session driver's child-intent source and
+    // the Endpoint family's committed-shape source. Until the plane wired that
+    // one object into both, a fixture could hand the Endpoint family its own
+    // always-empty registry, and every display `Endpoint` row would be refused
+    // `ShapeUnsupported` for a shape the display Provider does commit, with no
+    // test over the composition able to see why. Every assertion below runs
+    // through both seams at once, because a fixture that wires only one of
+    // them proves nothing about the graph production realizes.
+    // -----------------------------------------------------------------------
+
+    /// The admitted session's row name in this scene.
+    const DISPLAY_SESSION_NAME: &str = "display-work";
+
+    /// The scene's Guest row name, which the session spec names as its
+    /// subject.
+    const DISPLAY_GUEST_NAME: &str = "work";
+
+    /// The session's committed interaction identity: the row's own reference
+    /// and durable uid, and the Guest, Host, and User references its spec
+    /// must name. This is the bounded subset the daemon resolves from its
+    /// durable Zone authority and hands the family as a facet.
+    fn display_session_identity() -> d2b_provider_wayland_policy::InteractionEffectIdentity {
+        let (session_key, session_uid) = display_session_row("test", DISPLAY_SESSION_NAME);
+        assert_eq!(session_key.type_name, WAYLAND_SESSION_TYPE);
+        d2b_provider_wayland_policy::InteractionEffectIdentity {
+            wayland_session_ref: ResourceRef::parse(&format!(
+                "{WAYLAND_SESSION_TYPE}/{DISPLAY_SESSION_NAME}"
+            ))
+            .expect("the session's own canonical reference"),
+            wayland_session_uid: session_uid,
+            subject_ref: ResourceRef::parse("Guest/work").expect("guest ref"),
+            host_execution_ref: ResourceRef::parse("Host/host-system").expect("host ref"),
+            user_ref: ResourceRef::parse("User/alice").expect("user ref"),
+        }
+    }
+
+    /// The committed identity facet, resolved from the row identities the
+    /// manager itself derives rather than from anything the reconcile asked
+    /// for.
+    struct CommittedSessionIdentity(d2b_provider_wayland_policy::InteractionEffectIdentity);
+
+    #[async_trait::async_trait]
+    impl InteractionIdentitySource for CommittedSessionIdentity {
+        async fn identity(&self) -> Option<d2b_provider_wayland_policy::InteractionEffectIdentity> {
+            Some(self.0.clone())
+        }
+    }
+
+    /// The zone's manager-plane row reads, over the very client the plane
+    /// hands its own callers: this facet is the same manager, reached the way
+    /// the production composition reaches it. The cell is filled the moment
+    /// the plane is open and before any display row is admitted, so no
+    /// reconcile can read a manager this facet does not yet hold.
+    struct ManagerPlaneRead(Arc<std::sync::OnceLock<ResourceManagerClient>>);
+
+    #[async_trait::async_trait]
+    impl InteractionPlaneRead for ManagerPlaneRead {
+        async fn get(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ()> {
+            self.0
+                .get()
+                .ok_or(())?
+                .get(key.clone())
+                .await
+                .map_err(|_| ())
+        }
+
+        async fn list(&self, selector: &ResourceSelector) -> Result<Vec<ResourceView>, ()> {
+            self.0
+                .get()
+                .ok_or(())?
+                .list(selector.clone())
+                .await
+                .map_err(|_| ())
+        }
+    }
+
+    /// A Zone whose targets declare no audio capability, which is what the
+    /// display path needs and nothing more.
+    struct NoAudioCapability;
+
+    impl AudioMediatorSource for NoAudioCapability {
+        fn build(&self, _vm_name: &str, _projection: bool) -> Option<Box<dyn AudioMediator>> {
+            None
+        }
+    }
+
+    /// The display scene's construction, with the two doubles the tests script
+    /// held so a test can move the delivery evidence without rebuilding the
+    /// composition.
+    struct DisplayComposition {
+        dir: tempfile::TempDir,
+        inputs: ConstructionInputs,
+        client: Arc<std::sync::OnceLock<ResourceManagerClient>>,
+    }
+
+    /// The composition the display graph reconciles over, rooted at the
+    /// caller's durable directory so a restart can reopen the same Zone.
+    ///
+    /// Every facet set here is built by its own family crate over that
+    /// family's own scripted effect port, exactly as the production
+    /// composition root builds them from the daemon's runtimes. The Guest
+    /// family is given the committed runtime-Provider identity, the enrolled
+    /// controller-session generation, and the committed `Provider` row its
+    /// effects validate before any Provider work runs; the interaction family
+    /// is given the REAL manager-plane reads and this Zone's committed
+    /// identity.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn display_composition() -> DisplayComposition {
+        let client = Arc::new(std::sync::OnceLock::new());
+        let runtime_provider = runtime_provider_ref(GuestKind::CloudHypervisor);
+        let provider_name = runtime_provider
+            .strip_prefix("Provider/")
+            .expect("a runtime Provider reference");
+        let scripted = d2b_provider_guest::test_support::ScriptedFacets::new();
+        scripted.add_committed_provider(
+            ResourceRef::parse(runtime_provider).expect("runtime Provider reference"),
+            ResourceUid::from_bytes(&[0x11; 16]).expect("bounded resource uid"),
+            d2b_contracts_resource::v3::ResourceGeneration::new(1).expect("bounded generation"),
+        );
+        scripted.set_session_generation(Some(
+            d2b_contracts_resource::v3::identity::ReconnectGeneration::new(1)
+                .expect("bounded reconnect generation"),
+        ));
+        // The Guest family's effects read the committed runtime `Provider`
+        // row through their manager facet before any Provider work runs, so
+        // the scene's Guest row has one to find.
+        scripted
+            .add_row(d2b_provider_guest::test_support::row_fixture(
+                "test",
+                "Provider",
+                provider_name,
+                serde_json::json!({}),
+                ResourceStatus::Ready,
+            ))
+            .await;
+        let guest_facets = d2b_provider_guest::facets::GuestEffectFacets {
+            zone: ZoneId::parse("test").expect("bounded zone"),
+            controller_generation: ControllerGeneration::new(1).expect("bounded generation"),
+            manager: Arc::clone(&scripted)
+                as Arc<dyn d2b_provider_guest::facets::GuestManagerView>,
+            cloud_hypervisor: Arc::clone(&scripted)
+                as Arc<dyn d2b_provider_guest::facets::CloudHypervisorGuestRuntime>,
+        };
+        let (dir, mut inputs, _readiness) =
+            test_inputs_over(
+                InteractionEffectFacets::new(
+                    ZoneId::parse("test").expect("bounded zone"),
+                    Arc::new(CommittedSessionIdentity(display_session_identity())),
+                    Arc::new(ManagerPlaneRead(Arc::clone(&client))),
+                    Arc::new(NoAudioCapability),
+                ),
+                guest_facets,
+            );
+        // The serving-socket probe and the host socket surface are the two
+        // facets the display path's delivery and realization evidence ride,
+        // and this test scripts them directly. Both are re-bound over the SAME
+        // display vocabulary the session driver commits its shapes into, so
+        // the composition keeps one object in both seams.
+        let serving = d2b_provider_volume_binding::test_support::FakeServingEffects::new();
+        serving.make_ready();
+        inputs.binding_facets = serving.facet_set();
+        let sockets = d2b_provider_endpoint::test_support::FakeSocketEffects::new();
+        sockets.make_present();
+        inputs.endpoint_facets = sockets
+            .facet_set()
+            .with_committed_shapes(
+                Arc::clone(&inputs.display_endpoint_vocabulary)
+                    as Arc<dyn CommittedEndpointShapeSource>,
+            );
+        DisplayComposition { dir, inputs, client }
+    }
+
+    /// The durable directory the plane's own fixture created is the one this
+    /// composition keeps, so a restart can reopen the same Zone over the same
+    /// store.
+    /// The Host row's own closed contract: the family's canonical Host spec
+    /// behind the Provider selector the Host driver fences on. A row without
+    /// that selector is not a Host row this family admits.
+    fn display_host_spec() -> serde_json::Value {
+        let mut spec =
+            spec_value(&d2b_contracts_resource::v3::host::HostSpec::system_default());
+        spec["providerRef"] = serde_json::Value::String(
+            d2b_contracts_resource::v3::host::HOST_PROVIDER_REF.to_owned(),
+        );
+        spec
+    }
+
+    /// Bind the scene's Guest target-control runtime to this plane, exactly as
+    /// the daemon binds it when the Guest session connects: the runtime the
+    /// runtime serves, one bound session generation, and the plane's own
+    /// target directory told to notify the affected actors.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn bind_display_guest_target(plane: &ResourcePlaneV3) {
+        let guest = TargetRef::guest(DISPLAY_GUEST_NAME).expect("the Guest target reference");
+        let runtime = Arc::new(
+            d2b_resource_runtime::guest_target::GuestTargetRuntime::new(guest.clone()),
+        );
+        runtime.bind_session(1).expect("the guest session binds");
+        let control = runtime.control(1).expect("the guest target control");
+        plane
+            .bind_guest_target(&guest, 1, control)
+            .expect("the plane binds the guest target");
+    }
+
+    /// One spec rendered as the canonical JSON a durable row carries.
+    fn spec_value<T: serde::Serialize>(spec: &T) -> serde_json::Value {
+        serde_json::to_value(spec).expect("the canonical spec document")
+    }
+
+    /// The rows this scene's Nix bundle declares: the session's own Guest,
+    /// Host, User, and policy dependencies, plus the session itself.
+    ///
+    /// Each dependency row carries its family's own canonical spec - the
+    /// closed Host and User contracts and the runtime Provider's own Guest
+    /// selector - because the session's admission refuses a dependency whose
+    /// row the dependency's own driver refuses, and a hand-written stand-in
+    /// would prove nothing about the graph production admits.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn display_scene_bundle(with_session: bool, reconnect_generation: u64) -> ResourceBundle {
+        let mut spec = display_session_spec();
+        if reconnect_generation > 0 {
+            spec = spec
+                .with_reconnect_generation(reconnect_generation)
+                .expect("a bounded reconnect generation");
+        }
+        let mut rows = vec![
+            bundle_row(
+                "Guest",
+                DISPLAY_GUEST_NAME,
+                serde_json::json!({"providerRef": runtime_provider_ref(GuestKind::CloudHypervisor)}),
+            ),
+            bundle_row("Host", "host-system", display_host_spec()),
+            bundle_row(
+                "User",
+                "alice",
+                spec_value(&d2b_contracts_resource::v3::user::UserSpec::minimal(
+                    d2b_contracts_resource::v3::user::OsUsername::parse("alice")
+                        .expect("bounded username"),
+                )),
+            ),
+            bundle_row(
+                "display-wayland.d2bus.org.WaylandPolicy",
+                "default",
+                serde_json::json!({"providerRef": "Provider/display-wayland"}),
+            ),
+        ];
+        if with_session {
+            rows.push(bundle_row(WAYLAND_SESSION_TYPE, DISPLAY_SESSION_NAME, spec_value(&spec)));
+        }
+        test_bundle(rows)
+    }
+
+    /// One admitted display scene over the real composition.
+    struct DisplayScene {
+        _dir: tempfile::TempDir,
+        plane: Arc<ResourcePlaneV3>,
+        vocabulary: Arc<SharedDisplayEndpointVocabulary>,
+        session_key: ResourceKey,
+        session_uid: ResourceUid,
+    }
+
+    /// Open the composition and admit the scene.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn display_scene() -> DisplayScene {
+        let DisplayComposition { dir, inputs, client, .. } = display_composition().await;
+        let vocabulary = Arc::clone(&inputs.display_endpoint_vocabulary);
+        let plane = Arc::new(
+            ResourcePlaneV3::open(inputs)
+                .await
+                .expect("the display composition opens"),
+        );
+        client
+            .set(plane.client().clone())
+            .expect("the plane's client is bound once");
+        bind_display_guest_target(&plane).await;
+        plane
+            .ingest_nix_bundle(&display_scene_bundle(true, 0))
+            .await
+            .expect("the scene's rows commit");
+        let (session_key, session_uid) = display_session_row("test", DISPLAY_SESSION_NAME);
+        DisplayScene {
+            _dir: dir,
+            plane,
+            vocabulary,
+            session_key,
+            session_uid,
+        }
+    }
+
+    /// The manager's view of one row, or a panic naming the row.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn view_of(plane: &ResourcePlaneV3, key: &ResourceKey) -> ResourceView {
+        plane
+            .client()
+            .get(key.clone())
+            .await
+            .expect("the manager serves the row")
+            .unwrap_or_else(|| panic!("the manager holds no row {key}"))
+    }
+
+    /// Every row of one ResourceType this Zone's manager holds, by name.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn rows_of_type(plane: &ResourcePlaneV3, type_name: &str) -> BTreeMap<String, ResourceView> {
+        plane
+            .client()
+            .list(ResourceSelector {
+                zone: Some("test".to_owned()),
+                type_name: Some(type_name.to_owned()),
+                owner: None,
+            })
+            .await
+            .expect("the manager serves the Zone")
+            .into_iter()
+            .map(|view| (view.key.name.as_str().to_owned(), view))
+            .collect()
+    }
+
+
+
+    /// Wait until one row publishes `wanted`, and answer what it published.
+    ///
+    /// The budget is this test's own. `Pending`, `Recovering`, and
+    /// `Reconciling` are what an actor publishes while its pass is still
+    /// running, so a test that stopped there has observed nothing about the
+    /// convergence it is about to assert.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn settled(
+        plane: &ResourcePlaneV3,
+        key: &ResourceKey,
+        wanted: ResourceStatus,
+        budget: Duration,
+    ) -> ResourceStatus {
+        let deadline = tokio::time::Instant::now() + budget;
+        let mut last = ResourceStatus::Pending;
+        loop {
+            if let Some(view) = plane
+                .client()
+                .get(key.clone())
+                .await
+                .expect("the manager serves the row")
+                && let Some(status) = view.observed_status()
+            {
+                last = status.clone();
+                if status == wanted {
+                    return status;
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return last;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// The scene's display graph, exactly as the display Provider's own
+    /// durable derivation builds it: the three `Endpoint` rows in the
+    /// family's preserved order (the host compositor source, the host proxy's
+    /// private carriage, the guest frontend's own endpoint), and the two
+    /// worker `Process` rows.
+    fn derived_display_rows(
+        session_uid: &ResourceUid,
+    ) -> (
+        Vec<(ResourceKey, d2b_provider_display_wayland::EndpointSpec)>,
+        Vec<ResourceKey>,
+    ) {
+        let session_ref = ResourceRef::parse(&format!(
+            "{WAYLAND_SESSION_TYPE}/{DISPLAY_SESSION_NAME}"
+        ))
+        .expect("the session's own canonical reference");
+        let spec = display_session_spec();
+        let endpoints = display_endpoint_child_rows(&session_ref, session_uid, &spec);
+        let processes = d2b_provider_display_wayland::session_children::display_owned_child_intents(
+            &ZoneId::parse("test").expect("zone"),
+            &session_ref,
+            session_uid,
+            &spec,
+            1,
+        )
+        .expect("the durable child derivation")
+        .into_iter()
+        .filter(|intent| intent.target().resource_type().as_str() == "Process")
+        .map(|intent| ResourceKey::new("test", "Process", intent.target().name().as_str()))
+        .collect();
+        (endpoints, processes)
+    }
+
+    /// The production-composition acceptance for the display actor graph: one
+    /// manager-owned `WaylandSession` row, admitted through the plane's own
+    /// Nix ingest and reconciled by the real manager, the real ProviderSet,
+    /// the real driver factories, the real interaction effects service over
+    /// this plane's own manager-plane reads, and the real Endpoint-family
+    /// committed-shape seam.
+    ///
+    /// The graph it realizes is the display Provider's own durable derivation
+    /// and nothing else: two worker `Process` rows, three `Endpoint` rows, and
+    /// exactly two `EndpointBinding` rows derived by the `Endpoint` driver
+    /// from each committed endpoint row's own publication intent.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_admitted_display_session_realizes_its_whole_actor_graph() {
+        let scene = display_scene().await;
+
+        let session = settled(
+            &scene.plane,
+            &scene.session_key,
+            ResourceStatus::Ready,
+            Duration::from_secs(120),
+        )
+        .await;
+        assert_eq!(
+            session,
+            ResourceStatus::Ready,
+            "the manager-owned session row is reconciled by the interaction family's real effects \
+             over this plane's own manager reads"
+        );
+
+        // The ONE display vocabulary the plane installs in both seams admitted
+        // every committed endpoint row. A fixture that handed the Endpoint
+        // family its own always-empty registry would have refused all three
+        // for `ShapeUnsupported`, which no d2bd test could see why.
+        let (endpoints, processes) = derived_display_rows(&scene.session_uid);
+        for (key, spec) in &endpoints {
+            assert!(
+                d2b_provider_endpoint::endpoint_realization(spec, &*scene.vocabulary).is_some(),
+                "{key} is a shape the display Provider commits, admitted by the one vocabulary the \
+                 session driver and the Endpoint family share"
+            );
+        }
+
+        // The graph is exactly the derivation's, and every row in it is a
+        // manager-owned child of the session row.
+        let held_processes = rows_of_type(&scene.plane, "Process").await;
+        let held_endpoints = rows_of_type(&scene.plane, "Endpoint").await;
+        let held_bindings = rows_of_type(&scene.plane, "EndpointBinding").await;
+        assert_eq!(held_processes.len(), 2, "one session derives two worker rows: {held_processes:?}");
+        assert_eq!(held_endpoints.len(), 3, "one session derives three endpoint rows: {held_endpoints:?}");
+        assert_eq!(held_bindings.len(), 2, "one session publishes two relationships: {held_bindings:?}");
+        for key in processes.iter().chain(endpoints.iter().map(|(key, _)| key)) {
+            let view = view_of(&scene.plane, key).await;
+            assert_eq!(
+                view.owner_key.as_ref(),
+                Some(&scene.session_key),
+                "{key} is a manager-owned child of the session row, not a display-local row"
+            );
+        }
+
+        // The two relationships are the ones the committed endpoint rows'
+        // OWN publication intent derives, through the Endpoint family's own
+        // derivation - and the guest frontend's own endpoint publishes
+        // nothing, so it derives none.
+        let zone = ZoneId::parse("test").expect("zone");
+        let mut derived = Vec::new();
+        for (index, (key, spec)) in endpoints.iter().enumerate() {
+            let endpoint_ref =
+                ResourceRef::parse(&format!("Endpoint/{}", key.name)).expect("endpoint ref");
+            let rows = d2b_provider_display_wayland::display_canonical_bindings(
+                &zone,
+                &endpoint_ref,
+                spec,
+            )
+            .expect("the Endpoint family derives this row's published relationships");
+            if index == endpoints.len() - 1 {
+                assert!(
+                    rows.is_empty(),
+                    "the guest frontend's own endpoint publishes no in-Zone relationship, so no row \
+                     is derived for it"
+                );
+            } else {
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "the host compositor source and the host proxy's private carriage each publish \
+                     exactly one relationship: {key} derived {rows:?}"
+                );
+            }
+            derived.extend(rows.into_iter().map(|row| row.name().as_str().to_owned()));
+        }
+        derived.sort();
+        let mut held: Vec<String> = held_bindings.keys().cloned().collect();
+        held.sort();
+        assert_eq!(
+            held, derived,
+            "the committed binding rows are exactly what the endpoint rows' own publication intent \
+             derives"
+        );
+
+        scene.plane.shutdown().await;
+    }
+
 }

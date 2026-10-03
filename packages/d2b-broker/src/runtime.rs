@@ -47,11 +47,12 @@ use crate::ops::audit_op::{
     BrokerAuditRecordClass, OpAuditRecord, OperationFields, UsbAuditDeviceIdentity,
     UsbSerialCorrelation, UsbSerialCorrelationKeyRotationAudit,
 };
+use crate::ops::endpoint_access::EndpointAccessError;
 use crate::protocol::{AsyncSeqpacket, AsyncSeqpacketListener, bind_seqpacket};
 use d2b_contracts_broker::broker_wire::{
     AuditJoinContext, BrokerCallerRole as CallerRole, BrokerErrorResponse, BrokerProfile,
     BrokerRequest, BrokerRequestEnvelope as RequestEnvelope, BrokerResponse, CanonicalAuditDigest,
-    RunnerRole,
+    EndpointAccessResponse, RunnerRole,
 };
 use d2b_core::bundle_resolver::BundleResolver;
 
@@ -290,6 +291,55 @@ fn stale_wire_refusal(retired: &RetiredWireVariant) -> BrokerResponse {
         ),
         action: "upgrade the calling binary so its Hello-negotiated wire version no longer sends retired variants".to_owned(),
     })
+}
+
+/// The disposition and the recorded outcome one exact-endpoint result is
+/// audited under.
+///
+/// The recorded outcome IS the closed class the answer carries, so the record
+/// and the wire speak one vocabulary. Neither field is path-shaped: the socket
+/// is a name that never reaches the record, and the consumer is a number the
+/// broker derived and never logs here.
+fn endpoint_access_record(
+    outcome: &Result<EndpointAccessResponse, EndpointAccessError>,
+) -> (&'static str, &'static str) {
+    match outcome {
+        Ok(_) => ("allowed", "granted"),
+        Err(error) => ("refused", error.code()),
+    }
+}
+
+/// The answer one exact-endpoint result becomes on the wire.
+///
+/// An `Ok` is the kernel's own answer over the whole path and travels as the
+/// `EndpointAccess` body the daemon reads.
+///
+/// The broker's own `EndpointAbsent` class travels as a typed error envelope
+/// whose `kind` is that class verbatim - the same shape
+/// `stale_wire_refusal` gives `STALE_WIRE_VERSION`, and the same class the
+/// audit record carries. A revoke over an entry that was already released, or
+/// never granted, is positive no-grant proof rather than a failure no retry
+/// converges from, so the class has to reach the caller as itself instead of
+/// collapsing into a broker-wide wrapper that names no condition at all.
+///
+/// Every OTHER class stays a live-handler failure. Those say this broker could
+/// not resolve the relationship at all, not that nothing is standing at the
+/// resolved path, so they prove no absence and must not borrow this one.
+fn endpoint_access_answer(
+    operation: &str,
+    outcome: Result<EndpointAccessResponse, EndpointAccessError>,
+) -> Result<BrokerResponse, BrokerError> {
+    match outcome {
+        Ok(response) => Ok(BrokerResponse::EndpointAccess(response)),
+        Err(error @ EndpointAccessError::EndpointAbsent) => Ok(error_response(
+            error.code(),
+            operation,
+            None,
+            "no exact endpoint carries an entry for this consumer principal",
+            "treat the entry as already released; there is no grant standing to revoke",
+        )),
+        Err(error) => Err(BrokerError::LiveHandler(error.to_string())),
+    }
 }
 
 
@@ -5271,42 +5321,26 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 _ => unreachable!("the arm binds exactly the three endpoint variants"),
             };
             let target = crate::ops::endpoint_access::audit_target(access);
-            let response = match crate::ops::endpoint_access::accept_endpoint_access(
+            let outcome = crate::ops::endpoint_access::accept_endpoint_access(
                 &request,
                 broker_runtime_root(config),
                 resolver.as_ref(),
-            ) {
-                Ok(response) => response,
-                Err(error) => {
-                    // A refusal is recorded before it is reported, and the
-                    // closed code is the whole outcome field: no host path,
-                    // no socket name, and no claimed principal reach the log.
-                    audit_log
-                        .write_entry_with_caller_ids(
-                            operation,
-                            caller_uid,
-                            caller_gid,
-                            "refused",
-                            &target,
-                            error.code(),
-                        )
-                        .map_err(|err| BrokerError::Protocol(err.to_string()))?;
-                    return Err(BrokerError::LiveHandler(error.to_string()));
-                }
-            };
+            );
+            // A refusal is recorded before it is reported, and the closed code
+            // is the whole outcome field: no host path, no socket name, and no
+            // claimed principal reach the log.
+            let (disposition, recorded) = endpoint_access_record(&outcome);
             audit_log
                 .write_entry_with_caller_ids(
                     operation,
                     caller_uid,
                     caller_gid,
-                    "allowed",
+                    disposition,
                     &target,
-                    "granted",
+                    recorded,
                 )
                 .map_err(|err| BrokerError::Protocol(err.to_string()))?;
-            Ok(DispatchResult::no_fds(BrokerResponse::EndpointAccess(
-                response,
-            )))
+            Ok(DispatchResult::no_fds(endpoint_access_answer(operation, outcome)?))
         }
         // Every remaining variant is a reserved stub. One table arm serves
         // them all, so the arm count follows the committed dispositions rather
@@ -12385,7 +12419,9 @@ async fn answer_authority_publication_frame(
 mod tests {
     use super::*;
     use d2b_contracts::types::BundleOpId;
-    use d2b_contracts_broker::broker_wire::GuestExecutionBinding;
+    use d2b_contracts_broker::broker_wire::{
+        EndpointAccessRequest, EndpointAccessVerb, GuestExecutionBinding,
+    };
     use nix::unistd::Gid;
     use serde::Serialize;
     use serde_json::Value;
@@ -13085,6 +13121,230 @@ mod tests {
                 "unexpected parser error for {flag}: {error:?}"
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // The exact-endpoint wire answer (U18, R23)
+    // ------------------------------------------------------------------
+
+    /// The exact `Endpoint` row the fixture relationship is admitted against.
+    const FIXTURE_ENDPOINT: &str = "Endpoint/compositor";
+    /// The committed consumer row the fixture relationship acts for.
+    const FIXTURE_CONSUMER: &str = "Process/shell";
+    /// The Zone self-resource uid the fixture bundle is bound to.
+    const FIXTURE_ZONE_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
+    /// The one socket name the fixture relationship names.
+    const FIXTURE_SOCKET: &str = "wayland-0";
+
+    /// One endpoint-access request for `verb`, carrying the authority key the
+    /// broker recomputes over exactly those committed facts.
+    fn fixture_endpoint_access_request(verb: EndpointAccessVerb) -> EndpointAccessRequest {
+        use d2b_contracts_broker::broker_wire::endpoint_access_authority_binding;
+        use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+        use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+
+        let endpoint_ref = ResourceRef::parse(FIXTURE_ENDPOINT).expect("fixture endpoint ref");
+        let consumer_ref = ResourceRef::parse(FIXTURE_CONSUMER).expect("fixture consumer ref");
+        let zone_uid = ResourceUid::parse(FIXTURE_ZONE_UID).expect("fixture zone uid");
+        let socket = BoundedToken::parse(FIXTURE_SOCKET).expect("a legal socket name");
+        EndpointAccessRequest {
+            authority_key: endpoint_access_authority_binding(
+                &endpoint_ref,
+                &consumer_ref,
+                &zone_uid,
+                &socket,
+                verb,
+            ),
+            endpoint_ref,
+            consumer_ref,
+            zone_uid,
+            socket,
+            socket_rights: 0o6,
+            claimed_principal: None,
+            tracing_span_id: None,
+        }
+    }
+
+    /// The answer the kernel gives for a revoke that actually removed an
+    /// entry: one pinned inode, the rights it now applies, and no listing
+    /// authority over the socket's parent.
+    fn fixture_answered_access() -> EndpointAccessResponse {
+        use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+        use d2b_contracts_resource::v3::ResourceRef;
+
+        EndpointAccessResponse {
+            endpoint_ref: ResourceRef::parse(FIXTURE_ENDPOINT).expect("fixture endpoint ref"),
+            consumer_ref: ResourceRef::parse(FIXTURE_CONSUMER).expect("fixture consumer ref"),
+            socket: BoundedToken::parse(FIXTURE_SOCKET).expect("a legal socket name"),
+            socket_device: 1,
+            socket_inode: 2,
+            socket_effective_rights: 0o6,
+            ancestors_traversable: true,
+            parent_listable: false,
+            consumer_uid: 50_000,
+            consumer_gid: 50_000,
+        }
+    }
+
+    /// The absent class crosses the wire AS ITSELF.
+    ///
+    /// A revoke over an entry that was already released, or never granted, is
+    /// positive no-grant proof - but only if the caller can read the class. A
+    /// collapsed live-handler failure renders as a broker-wide wrapper the
+    /// caller cannot match, so the proof is unreachable and a second delete
+    /// pass over a converged row errors forever instead of retiring it.
+    ///
+    /// The kind carries the broker's closed class verbatim, the same way
+    /// `stale_wire_refusal` carries `STALE_WIRE_VERSION`: it is a class, not a
+    /// wrapper, and it is the class the audit record carries too.
+    #[test]
+    fn an_absent_exact_endpoint_answers_its_own_closed_class() {
+        let absent = EndpointAccessError::EndpointAbsent;
+        let response = endpoint_access_answer("EndpointRevokeAccess", Err(absent.clone()))
+            .expect("an absent endpoint is an answer about this endpoint, not a broker failure");
+        let BrokerResponse::Error(refusal) = response else {
+            panic!("the class travels in a typed error envelope, got {response:?}");
+        };
+        assert_eq!(
+            refusal.kind,
+            absent.code(),
+            "the wire kind is the broker's own closed class, not a wrapper"
+        );
+        assert_eq!(
+            refusal.kind, "endpoint-access-endpoint-absent",
+            "and that class is the one the driver's no-grant proof matches"
+        );
+        assert_ne!(
+            refusal.kind, "Broker.LiveHandlerFailed",
+            "a live-handler wrapper is unreadable to the caller"
+        );
+        assert_eq!(refusal.operation, "EndpointRevokeAccess");
+        assert_eq!(refusal.target_wave, None);
+        assert_eq!(
+            endpoint_access_record(&Err(absent.clone())),
+            ("refused", "endpoint-access-endpoint-absent"),
+            "the refusal is still audited under the same closed class"
+        );
+    }
+
+    /// A revoke the kernel answered is still the `EndpointAccess` body: the
+    /// absent class is the only thing that changed shape.
+    #[test]
+    fn an_answered_revoke_still_answers_the_endpoint_access_body() {
+        let answered = fixture_answered_access();
+        let BrokerResponse::EndpointAccess(response) =
+            endpoint_access_answer("EndpointRevokeAccess", Ok(answered.clone()))
+                .expect("a revoke the kernel performed is not a failure")
+        else {
+            panic!("an answered revoke answers with the endpoint's own body");
+        };
+        assert_eq!(response, answered, "the answer is passed through untouched");
+        assert_eq!(
+            endpoint_access_record(&Ok(answered)),
+            ("allowed", "granted"),
+            "and it is audited as an allow, not as a refusal"
+        );
+    }
+
+    /// Only the absent class is special. Every other class says this broker
+    /// could not resolve the relationship at all - not that nothing is
+    /// standing at the resolved path - so it must not borrow the absent
+    /// class, which is a proof rather than a failure.
+    #[test]
+    fn every_other_refusal_class_is_still_a_live_handler_failure() {
+        for error in [
+            EndpointAccessError::NotAnEndpointRequest,
+            EndpointAccessError::EndpointAuthorityRefused,
+            EndpointAccessError::EndpointAuthorityMismatch,
+            EndpointAccessError::SocketRightsOutOfRange,
+            EndpointAccessError::RuntimeRootInvalid,
+            EndpointAccessError::NotADirectChild,
+            EndpointAccessError::EndpointDirectoryAbsent,
+            EndpointAccessError::RuntimeRootUnusable {
+                detail: "the broker's runtime root is not usable".to_owned(),
+            },
+            EndpointAccessError::ConsumerPrincipal {
+                code: "consumer-principal-row-unresolved".to_owned(),
+            },
+            EndpointAccessError::Effect {
+                detail: "the pinned ACL effect failed".to_owned(),
+            },
+        ] {
+            let code = error.code();
+            let failure = endpoint_access_answer("EndpointObserve", Err(error))
+                .err()
+                .unwrap_or_else(|| panic!("{code} must not become an answer about the endpoint"));
+            assert!(
+                matches!(&failure, BrokerError::LiveHandler(detail) if detail == code),
+                "{code}: expected a live-handler failure, got {failure:?}"
+            );
+        }
+    }
+
+    /// The dispatch arm records the class it was handed and answers through
+    /// the same mapper, proved end to end on the refusal class this host can
+    /// reach: an authority key that does not reproduce its own binding is
+    /// decided from the request's committed facts, before any path is
+    /// resolved.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn the_dispatch_arm_audits_its_closed_class_and_still_fails_live() {
+        use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest};
+
+        let root = test_audit_dir("endpoint-access-answer");
+        fs::create_dir_all(&root).expect("create test root");
+        let bundle = build_test_bundle(&root);
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let (log, _capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+
+        let mut repointed = fixture_endpoint_access_request(EndpointAccessVerb::Revoke);
+        repointed.authority_key = format!("sha256:{}", "0".repeat(64));
+        let request = BrokerRequest::EndpointRevokeAccess(repointed);
+        let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("audit context");
+
+        let failure = envelope_call_runtime().block_on(dispatch_request_with_backend(
+            request,
+            1000,
+            Gid::current().as_raw(),
+            caller_role,
+            &audit_context,
+            &config,
+            &log,
+            Some(&bundle.resolver),
+            &backend,
+        ))
+        .expect_err("a refusal that is not the absent class is still a broker failure");
+
+        let mismatch = EndpointAccessError::EndpointAuthorityMismatch;
+        assert!(
+            matches!(&failure, BrokerError::LiveHandler(detail) if detail == mismatch.code()),
+            "the arm must not widen the special case to other classes: {failure:?}"
+        );
+
+        let audit = fs::read_to_string(log.current_daily_path()).expect("read the audit day");
+        assert!(
+            audit.contains(r#""op":"EndpointRevokeAccess""#),
+            "the refusal is recorded against the verb it arrived as: {audit}"
+        );
+        assert!(
+            audit.contains(r#""disposition":"refused""#),
+            "and it is recorded as a refusal: {audit}"
+        );
+        assert!(
+            audit.contains(r#""outcome":"endpoint-access-authority-mismatch""#),
+            "under the same closed class the answer carries: {audit}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
