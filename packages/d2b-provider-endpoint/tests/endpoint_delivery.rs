@@ -72,7 +72,8 @@ use d2b_resource_runtime::context::{
     ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, SpecDecoder,
     WatchId, WatchRegistration,
 };
-use d2b_resource_runtime::driver::ResourceDriverFactory;
+use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
+use d2b_resource_runtime::error::{FailureClass, FailureKinds};
 use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{
     ResourceKey, ResourceProvenance, StoredDesiredResource,
@@ -90,6 +91,9 @@ const ZONE_UID: &str = "11111111-1111-4111-8111-111111111111";
 const ENDPOINT: &str = "Endpoint/compositor";
 const PRODUCER: &str = "Process/compositor";
 const CONSUMER: &str = "Process/frontend";
+/// A second consumer of the same endpoint: what the owning row's narrowed
+/// policy still admits once the fixture's own consumer is withdrawn from it.
+const OTHER_CONSUMER: &str = "Process/shell";
 /// A sibling socket in the broker's own endpoint directory, which the admitted
 /// consumer must never gain anything on.
 const SIBLING: &str = "endpoint-slot-ffffffffffff";
@@ -1658,4 +1662,714 @@ async fn a_provider_committed_row_is_admitted_by_the_installed_vocabulary_and_it
         d2b_resource_runtime::error::FailureClass::Terminal,
         "and it is terminal: a retry cannot turn the near miss into an admission"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Cleanup: the revoke proof a retirement needs
+// ---------------------------------------------------------------------------
+
+/// The wire's own closed refusal class for "no exact endpoint is standing at
+/// the resolved path".
+///
+/// Read out of the broker's own enum rather than restated as a literal, so
+/// "the cleanup converged on a no-grant proof" stays a statement about the
+/// class the broker itself produces.
+fn endpoint_absent_code() -> &'static str {
+    EndpointAccessError::EndpointAbsent.code()
+}
+
+/// One dispatch answer, scripted.
+#[derive(Clone)]
+enum ScriptedAnswer {
+    /// The broker answered the verb.
+    Answered,
+    /// The broker refused, under this wire class.
+    Refused(String),
+    /// The privileged leg never answered at all.
+    Unanswered,
+}
+
+/// The dispatch a cleanup pass drives.
+///
+/// The broker-backed facet beside it proves a request reaches the real
+/// resolution; this one states the ANSWER instead, because what cleanup turns
+/// on is the answer and not the path that produced it. An answered revoke, the
+/// wire's absent class, some other refusal, and a dispatch that never answered
+/// are four different proofs, and only the first two may retire a row.
+struct ScriptedDispatch {
+    answer: Mutex<ScriptedAnswer>,
+    /// The inode this dispatch pins on the next answer. A case moves it
+    /// between passes so a producer that replaced its socket reads as a
+    /// replacement rather than as the same delivery twice.
+    pinned: Mutex<u64>,
+    sent: Mutex<Vec<EndpointAccessVerb>>,
+}
+
+impl ScriptedDispatch {
+    fn new(answer: ScriptedAnswer) -> Arc<Self> {
+        Arc::new(Self {
+            answer: Mutex::new(answer),
+            pinned: Mutex::new(0x5150),
+            sent: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The broker answered, which is what a removal that took effect looks
+    /// like: it reports the inode the removal landed on.
+    fn answered() -> Arc<Self> {
+        Self::new(ScriptedAnswer::Answered)
+    }
+
+    fn refused(code: &str) -> Arc<Self> {
+        Self::new(ScriptedAnswer::Refused(code.to_owned()))
+    }
+
+    fn unavailable() -> Arc<Self> {
+        Self::new(ScriptedAnswer::Unanswered)
+    }
+
+    /// Move the inode this dispatch pins, the way a producer that replaced
+    /// its socket moves it.
+    fn pin(&self, inode: u64) {
+        *self.pinned.lock().expect("pinned lock") = inode;
+    }
+
+    /// Every verb this dispatch was asked for, in order.
+    fn sent(&self) -> Vec<EndpointAccessVerb> {
+        self.sent.lock().expect("sent lock").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl EndpointAccessDispatch for ScriptedDispatch {
+    async fn dispatch(
+        &self,
+        verb: EndpointAccessVerb,
+        request: EndpointAccessRequest,
+    ) -> Result<EndpointAccessResponse, EndpointAccessDispatchError> {
+        self.sent.lock().expect("sent lock").push(verb);
+        match self.answer.lock().expect("answer lock").clone() {
+            ScriptedAnswer::Answered => Ok(EndpointAccessResponse {
+                endpoint_ref: request.endpoint_ref.clone(),
+                consumer_ref: request.consumer_ref.clone(),
+                socket: request.socket.clone(),
+                socket_device: 0xfd00,
+                socket_inode: *self.pinned.lock().expect("pinned lock"),
+                socket_effective_rights: 0o6,
+                ancestors_traversable: true,
+                parent_listable: false,
+                consumer_uid: 0,
+                consumer_gid: 0,
+            }),
+            ScriptedAnswer::Refused(code) => Err(EndpointAccessDispatchError::Refused(code)),
+            ScriptedAnswer::Unanswered => Err(EndpointAccessDispatchError::Unavailable(
+                "the privileged leg did not answer".to_owned(),
+            )),
+        }
+    }
+}
+
+/// The committed relationship the cleanup cases are driven against: the
+/// canonical row the source itself derives, over the whole neighbourhood it
+/// reads.
+fn committed_relationship() -> (EndpointSpec, StoredDesiredResource) {
+    let zone = d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("zone id");
+    let endpoint_ref = ResourceRef::parse(ENDPOINT).expect("endpoint ref");
+    let spec = endpoint_spec(vec![ResourceRef::parse(CONSUMER).expect("consumer ref")]);
+    let deliveries =
+        declared_endpoint_bindings(&zone, &spec, &endpoint_ref).expect("declared deliveries");
+    let derived = canonical_binding_row(&zone, &spec, &endpoint_ref, &deliveries[0])
+        .expect("the source derives its committed row");
+    let binding = stored(
+        ResourceKey::new(ZONE, ENDPOINT_BINDING_TYPE_NAME, derived.name().as_str()),
+        [0x61; 16],
+        Some([0x42; 16]),
+        derived.spec().to_vec(),
+    );
+    (spec, binding)
+}
+
+/// Drive one real `EndpointBindingDriver` cleanup pass over `graph` and read
+/// back what it reported.
+///
+/// A fresh driver is built for every call, which is what a restart looks like
+/// from the row's side: nothing in memory survives, so every pass has to
+/// re-derive the relationship and re-earn its proof. The neighbourhood is
+/// exactly what the case hands over - a missing owning `Endpoint` row and a
+/// missing consumer row are states the graph really can be in, so the view
+/// this builds is empty exactly when the row it reads is absent.
+async fn cleanup_pass(
+    graph: Vec<StoredDesiredResource>,
+    dispatch: Arc<dyn EndpointAccessDispatch>,
+) -> Result<(), d2b_resource_runtime::error::DriverFailure> {
+    let row = graph
+        .iter()
+        .find(|row| row.key.type_name == ENDPOINT_BINDING_TYPE_NAME)
+        .expect("the graph carries the committed relationship")
+        .clone();
+    let views = graph
+        .iter()
+        .find(|row| row.key.type_name == "Endpoint")
+        .map(endpoint_readiness_view)
+        .into_iter()
+        .collect();
+    let manager = RecordingManager::with_views(graph, views);
+    let (mut ctx, _requeue) = context(
+        row.clone(),
+        endpoint_binding_spec_decoder(),
+        Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let mut driver = EndpointBindingDriverFactory::new(EndpointBindingDriverArgs {
+        zone: d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("zone id"),
+        access: dispatch,
+    })
+    .create(&ResourceKey::new(ZONE, ENDPOINT_BINDING_TYPE_NAME, &row.key.name))
+    .await;
+    driver.delete(&mut ctx).await
+}
+
+/// Cleanup never reports success on ambiguity (AE15, R22, R36).
+///
+/// Six states, one real driver, one committed relationship. In each of them
+/// the row's OWN committed bytes are the only thing that names the entry a
+/// revoke would remove, and in each of them the answer the broker gives is
+/// what decides whether the row may retire:
+///
+/// - delivered, then the source narrowed its own policy;
+/// - the owning `Endpoint` row is gone;
+/// - the consumer row is gone;
+/// - the row's own bytes are malformed;
+/// - a restart, which leaves the driver with no memory of what it granted;
+/// - a broker that never answers.
+///
+/// The first three and the last are the ambiguity this barrier exists for:
+/// each of them leaves an entry that MAY be standing, and each of them must
+/// retain ownership - never report a release it cannot prove. They also must
+/// still reach the broker: a source that stopped admitting the relationship
+/// and a parent that stopped existing are states of the world AROUND it, not
+/// evidence that nothing was ever installed.
+///
+/// The malformed row is refused before any verb is built, because bytes that
+/// are not this relationship cannot name an entry at all.
+///
+/// The two answers that MAY retire a row are an answered revoke and the
+/// wire's own absent class - a broker that positively reports no entry for
+/// this consumer over this socket. The same pass converges on each.
+#[tokio::test]
+async fn cleanup_retains_ownership_until_the_broker_proves_the_release() {
+    let (spec, binding) = committed_relationship();
+    let endpoint_key = ResourceKey::new(ZONE, "Endpoint", "compositor");
+    let consumer_key = ResourceKey::new(ZONE, "Process", "frontend");
+    let committed = graph(&spec, &binding);
+
+    // 1. Delivered, then the source narrowed its own consumer policy: the
+    //    parent no longer admits this consumer, and the entry it admitted
+    //    once is still installed.
+    let narrowed = {
+        let mut rows = committed.clone();
+        let parent = rows
+            .iter_mut()
+            .find(|row| row.key == endpoint_key)
+            .expect("the graph carries the owning endpoint");
+        parent.spec = serde_json::to_vec(&endpoint_spec(vec![
+            ResourceRef::parse(OTHER_CONSUMER).expect("the surviving consumer"),
+        ]))
+        .expect("narrowed spec bytes");
+        rows
+    };
+    let dispatch = ScriptedDispatch::unavailable();
+    assert!(
+        cleanup_pass(narrowed, Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_err(),
+        "a narrowed policy retains the relationship: the entry it once admitted may be standing"
+    );
+    assert_eq!(
+        dispatch.sent(),
+        vec![EndpointAccessVerb::Revoke],
+        "and the revoke still reached the broker rather than being skipped"
+    );
+
+    // 2. The owning `Endpoint` row is gone.
+    let orphan = committed
+        .iter()
+        .filter(|row| row.key != endpoint_key)
+        .cloned()
+        .collect::<Vec<_>>();
+    let dispatch = ScriptedDispatch::unavailable();
+    assert!(
+        cleanup_pass(orphan, Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_err(),
+        "a missing parent retains the relationship: an absent source is not an absent grant"
+    );
+    assert_eq!(
+        dispatch.sent(),
+        vec![EndpointAccessVerb::Revoke],
+        "the revoke is derived from the row, not from the parent that is gone"
+    );
+
+    // 3. The consumer row is gone, so the broker can no longer derive the
+    //    principal a revoke names.
+    let orphaned = committed
+        .iter()
+        .filter(|row| row.key != consumer_key)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        cleanup_pass(orphaned, ScriptedDispatch::unavailable() as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_err(),
+        "a missing consumer retains the relationship"
+    );
+
+    // 4. The row's own bytes are malformed: no relationship can be named, so
+    //    no revoke can be built and nothing is asked of the broker.
+    let mut malformed_row = binding.clone();
+    malformed_row.spec = b"{\"endpointRef\":\"Endpoint/compositor\"}".to_vec();
+    let mut malformed = committed.clone();
+    malformed[3] = malformed_row;
+    let dispatch = ScriptedDispatch::answered();
+    assert!(
+        cleanup_pass(malformed, Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_err(),
+        "a malformed row retains the relationship even from an answering broker"
+    );
+    assert!(
+        dispatch.sent().is_empty(),
+        "and it asks nothing: bytes that are not this relationship name no entry"
+    );
+
+    // 5. A restart, and a broker that never answers: the fresh driver holds no
+    //    record of what it granted, so nothing is standing by its account.
+    let dispatch = ScriptedDispatch::unavailable();
+    assert!(
+        cleanup_pass(committed.clone(), Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_err(),
+        "a restart over an unprovable revoke retains the relationship"
+    );
+
+    // 6. The two proofs. The same pass converges on an answered revoke...
+    let dispatch = ScriptedDispatch::answered();
+    assert!(
+        cleanup_pass(committed.clone(), Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_ok(),
+        "an answered revoke is positive proof the entry was removed"
+    );
+    // ...and on the wire's own absent class, which is proof there was none.
+    assert!(
+        cleanup_pass(
+            committed.clone(),
+            ScriptedDispatch::refused(endpoint_absent_code()) as Arc<dyn EndpointAccessDispatch>
+        )
+        .await
+        .is_ok(),
+        "the wire's absent class is positive proof no entry was standing"
+    );
+    // Any other refusal is not proof, and neither is an unanswered dispatch.
+    for refused in [
+        "endpoint-access-consumer-principal/consumer-principal-row-unresolved",
+        "endpoint-access-authority-mismatch",
+        "endpoint-access-effect-failed",
+    ] {
+        assert!(
+            cleanup_pass(
+                committed.clone(),
+                ScriptedDispatch::refused(refused) as Arc<dyn EndpointAccessDispatch>
+            )
+            .await
+            .is_err(),
+            "{refused} proves nothing about a standing entry, so the row is retained"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Retirement barriers: what an owning row waits for
+// ---------------------------------------------------------------------------
+
+/// A manager double over the REAL cleanup contract: a row retires only when
+/// the driver's own cleanup pass for it CONVERGED, and an owned listing
+/// reports exactly the rows that are still committed.
+///
+/// The production `finalize_owned_resources` reads this listing and reports
+/// `ChildrenDraining` while it is non-empty, and that is the barrier an
+/// owning `Endpoint` row's own retirement depends on. Nothing here decides a
+/// verdict: every driver reached through it is the production one, and this
+/// double only reflects what that driver reported.
+struct RetiringManager {
+    rows: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
+    views: tokio::sync::Mutex<Vec<ResourceView>>,
+    requested: tokio::sync::Mutex<Vec<ResourceKey>>,
+}
+
+impl RetiringManager {
+    fn new(rows: Vec<StoredDesiredResource>, views: Vec<ResourceView>) -> Arc<Self> {
+        Arc::new(Self {
+            rows: tokio::sync::Mutex::new(rows),
+            views: tokio::sync::Mutex::new(views),
+            requested: tokio::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Mark one row deleting, which is what the manager's durable mark commits
+    /// before the cleanup pass runs.
+    async fn request(&self, key: &ResourceKey) {
+        self.requested.lock().await.push(key.clone());
+        let mut rows = self.rows.lock().await;
+        if let Some(row) = rows.iter_mut().find(|row| row.key == *key) {
+            row.deleting = true;
+        }
+    }
+
+    /// Remove one row, which is what the manager does once that row's cleanup
+    /// converged.
+    async fn retire(&self, key: &ResourceKey) {
+        self.rows.lock().await.retain(|row| row.key != *key);
+        self.views.lock().await.retain(|view| view.key != *key);
+    }
+
+    /// Every key still committed under the owner uid the given row carries.
+    async fn committed(&self, owner: &[u8; 16]) -> Vec<ResourceKey> {
+        self.rows
+            .lock()
+            .await
+            .iter()
+            .filter(|row| row.owner_uid == Some(*owner))
+            .map(|row| row.key.clone())
+            .collect()
+    }
+
+    /// Every deletion the cleanup passes asked for, in order.
+    async fn requested(&self) -> Vec<ResourceKey> {
+        self.requested.lock().await.clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ManagerEndpoint for RetiringManager {
+    async fn ensure_child(
+        &self,
+        _parent: &ResourceKey,
+        _child: ChildEnsure,
+    ) -> Result<EnsureOutcome, ResourceError> {
+        Err(ResourceError::ManagerRejected {
+            reason: "this lane drives teardown, not the child surface".into(),
+        })
+    }
+
+    async fn get(&self, key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
+        Ok(self.rows.lock().await.iter().find(|row| row.key == *key).cloned())
+    }
+
+    async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+        Ok(self.views.lock().await.iter().find(|view| view.key == *key).cloned())
+    }
+
+    async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
+        self.request(key).await;
+        Ok(())
+    }
+
+    async fn list_owned(
+        &self,
+        owner_uid: [u8; 16],
+    ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+        Ok(self
+            .rows
+            .lock()
+            .await
+            .iter()
+            .filter(|row| row.owner_uid == Some(owner_uid))
+            .cloned()
+            .collect())
+    }
+
+    async fn register_watch(
+        &self,
+        _subscriber: &ResourceKey,
+        _registration: WatchRegistration,
+    ) -> Result<WatchId, ResourceError> {
+        Ok(WatchId(1))
+    }
+
+    async fn cancel_watch(&self, _id: WatchId) -> Result<(), ResourceError> {
+        Ok(())
+    }
+}
+
+/// One production `EndpointBinding` driver over the retiring manager.
+async fn relationship_driver(
+    manager: &Arc<RetiringManager>,
+    binding: &StoredDesiredResource,
+    dispatch: Arc<dyn EndpointAccessDispatch>,
+) -> (
+    ResourceContext,
+    Box<dyn DynResourceDriver>,
+    Arc<RecordingRequeue>,
+) {
+    let (ctx, requeue) = context(
+        binding.clone(),
+        endpoint_binding_spec_decoder(),
+        Arc::clone(manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let driver = EndpointBindingDriverFactory::new(EndpointBindingDriverArgs {
+        zone: d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("zone id"),
+        access: dispatch,
+    })
+    .create(&binding.key)
+    .await;
+    (ctx, driver, requeue)
+}
+
+/// One production `Endpoint` driver over the retiring manager.
+async fn endpoint_driver(
+    manager: &Arc<RetiringManager>,
+    endpoint_row: &StoredDesiredResource,
+) -> (ResourceContext, Box<dyn DynResourceDriver>, Arc<RecordingRequeue>) {
+    let (ctx, requeue) = context(
+        endpoint_row.clone(),
+        endpoint_spec_decoder(),
+        Arc::clone(manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let driver = EndpointDriverFactory::new(EndpointDriverArgs {
+        zone: ZONE.to_owned(),
+        facets: realized_facets(),
+    })
+    .create(&endpoint_row.key)
+    .await;
+    (ctx, driver, requeue)
+}
+
+/// The whole neighbourhood the retirement barriers are read over, with each
+/// row owned by exactly one thing.
+///
+/// The owning `Endpoint` row owns the relationship and nothing else, so the
+/// owned listing a parent's barrier reads contains the relationship and
+/// nothing else; the consumer row belongs to the same session the endpoint
+/// belongs to, exactly as a display session owns both.
+fn barrier_graph() -> (StoredDesiredResource, StoredDesiredResource) {
+    let zone = d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("zone id");
+    let endpoint_ref = ResourceRef::parse(ENDPOINT).expect("endpoint ref");
+    let session = [0x30; 16];
+    let endpoint = [0x42; 16];
+    let spec = endpoint_spec(vec![ResourceRef::parse(CONSUMER).expect("consumer ref")]);
+    let deliveries =
+        declared_endpoint_bindings(&zone, &spec, &endpoint_ref).expect("declared deliveries");
+    let derived = canonical_binding_row(&zone, &spec, &endpoint_ref, &deliveries[0])
+        .expect("the source derives its committed row");
+    let parent = stored(
+        ResourceKey::new(ZONE, "Endpoint", "compositor"),
+        endpoint,
+        Some(session),
+        serde_json::to_vec(&spec).expect("endpoint spec bytes"),
+    );
+    let binding = stored(
+        ResourceKey::new(ZONE, ENDPOINT_BINDING_TYPE_NAME, derived.name().as_str()),
+        [0x61; 16],
+        Some(endpoint),
+        derived.spec().to_vec(),
+    );
+    (parent, binding)
+}
+
+/// The manager the barrier cases share: the whole neighbourhood, with the
+/// owning row's own published readiness.
+fn barrier_manager(
+    parent: &StoredDesiredResource,
+    binding: &StoredDesiredResource,
+) -> Arc<RetiringManager> {
+    RetiringManager::new(
+        vec![
+            stored(
+                ResourceKey::new(ZONE, "Zone", ZONE),
+                zone_uid_bytes(),
+                None,
+                envelope("Zone", ZONE, 0x11, None, serde_json::json!({ "display": "compositor" })),
+            ),
+            stored(
+                ResourceKey::new(ZONE, "Process", "frontend"),
+                [0x31; 16],
+                Some([0x30; 16]),
+                envelope(
+                    "Process",
+                    "frontend",
+                    0x31,
+                    Some(ENDPOINT),
+                    serde_json::json!({ "domain": "system" }),
+                ),
+            ),
+            parent.clone(),
+            binding.clone(),
+        ],
+        vec![endpoint_readiness_view(parent)],
+    )
+}
+
+
+/// Assert that the owning `Endpoint` row is held by its own children-first
+/// finalization and never reaches its teardown.
+async fn endpoint_is_held(
+    manager: &Arc<RetiringManager>,
+    parent: &StoredDesiredResource,
+    label: &str,
+) {
+    let (mut ctx, mut driver, _requeue) = endpoint_driver(manager, parent).await;
+    let failure = driver
+        .finalize(&mut ctx)
+        .await
+        .err()
+        .unwrap_or_else(|| {
+            panic!("the owning endpoint retires while a relationship child is live ({label})")
+        });
+    assert_eq!(
+        failure.class(),
+        FailureClass::Retryable,
+        "{label}: the barrier defers the owning row, it never fails it terminally"
+    );
+    assert_eq!(
+        failure.kind().code(),
+        FailureKinds::CHILDREN_DRAINING.code(),
+        "{label}: the owning row waits on its children, not on its own teardown"
+    );
+}
+
+/// An `Endpoint` row may not retire while any relationship it owns still
+/// holds delivery, a drain, a replacement, or unproven authority (R22).
+///
+/// Five states of ONE real relationship row, each reached by the production
+/// driver and each keeping that row committed. The barrier is the production
+/// children-first finalization: it reports `ChildrenDraining` while any owned
+/// row is committed, and the owning row's teardown does not run until that
+/// listing empties. Only the last case - a revoke the broker positively
+/// proves - empties it.
+#[tokio::test]
+async fn an_endpoint_waits_for_every_relationship_it_still_owns() {
+    let (parent, binding) = barrier_graph();
+    let manager = barrier_manager(&parent, &binding);
+    let endpoint_uid = parent.uid;
+
+    // 1. DELIVERED. A standing grant the broker answered for.
+    let dispatch = ScriptedDispatch::answered();
+    let (mut ctx, mut driver, _requeue) = relationship_driver(
+        &manager,
+        &binding,
+        Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+    driver.reconcile(&mut ctx).await.expect("the delivered pass converges");
+    assert!(
+        matches!(
+            ctx.status::<EndpointBindingDriverStatus>(),
+            Some(EndpointBindingDriverStatus::Delivered { .. })
+        ),
+        "the broker answered for the admitted right, so the relationship is delivered"
+    );
+    endpoint_is_held(&manager, &parent, "delivered").await;
+
+    // 2. REPLACED. A producer rebound its socket: the grant landed on a new
+    //    inode, and the consumer holding the old one has to re-derive.
+    let (mut ctx, mut driver, _requeue) = relationship_driver(
+        &manager,
+        &binding,
+        Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+    driver.reconcile(&mut ctx).await.expect("the first pass converges");
+    dispatch.pin(0x5151);
+    driver.reconcile(&mut ctx).await.expect("the rebound pass converges");
+    assert!(
+        matches!(
+            ctx.status::<EndpointBindingDriverStatus>(),
+            Some(EndpointBindingDriverStatus::EndpointReplaced { .. })
+        ),
+        "a producer that replaced its socket reads as a replacement"
+    );
+    endpoint_is_held(&manager, &parent, "replaced").await;
+
+    // 3. DRAINING. The pre-drain fence is published before any teardown, and
+    //    the revoke has not been proved yet.
+    let unavailable = ScriptedDispatch::unavailable();
+    let (mut ctx, mut driver, _requeue) = relationship_driver(
+        &manager,
+        &binding,
+        Arc::clone(&unavailable) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+    driver.pre_drain(&mut ctx).await.expect("the pre-drain fence publishes");
+    assert_eq!(
+        ctx.status::<EndpointBindingDriverStatus>(),
+        Some(&EndpointBindingDriverStatus::Draining),
+        "new use is fenced before anything is torn down"
+    );
+    assert!(
+        driver.delete(&mut ctx).await.is_err(),
+        "an unanswered revoke retains the relationship"
+    );
+    endpoint_is_held(&manager, &parent, "draining, revoke unproved").await;
+
+    // 4. AMBIGUOUS. A broker that refused for a reason that proves nothing
+    //    about whether an entry is standing.
+    let ambiguous = ScriptedDispatch::refused("endpoint-access-effect-failed");
+    let (mut ctx, mut driver, _requeue) = relationship_driver(
+        &manager,
+        &binding,
+        Arc::clone(&ambiguous) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+    driver.pre_drain(&mut ctx).await.expect("the pre-drain fence publishes");
+    assert!(
+        driver.delete(&mut ctx).await.is_err(),
+        "an effect failure retains the relationship"
+    );
+    endpoint_is_held(&manager, &parent, "ambiguous revoke").await;
+
+    // Every state above left the same row committed, and the owning endpoint
+    // is still held by exactly that row.
+    assert_eq!(
+        manager.committed(&endpoint_uid).await,
+        vec![binding.key.clone()],
+        "the one relationship the owning endpoint still has is what holds it"
+    );
+    assert!(
+        manager
+            .requested()
+            .await
+            .iter()
+            .all(|key| *key == binding.key),
+        "the owning row only ever asks for this relationship to retire: the repeated requests \
+         are the idempotent nudge a children-first finalization issues"
+    );
+
+    // 5. ALREADY REVOKED. The broker positively reports that no entry is
+    //    standing, the cleanup converges, and the owning row may retire.
+    let absent = ScriptedDispatch::refused(endpoint_absent_code());
+    let (mut ctx, mut driver, _requeue) = relationship_driver(
+        &manager,
+        &binding,
+        Arc::clone(&absent) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+    assert!(
+        driver.delete(&mut ctx).await.is_ok(),
+        "the absent class is positive proof there is nothing left to release"
+    );
+    manager.retire(&binding.key).await;
+    assert!(
+        manager.committed(&endpoint_uid).await.is_empty(),
+        "the relationship retired on proof"
+    );
+
+    let (mut ctx, mut driver, _requeue) = endpoint_driver(&manager, &parent).await;
+    driver
+        .finalize(&mut ctx)
+        .await
+        .expect("the owning row converges once its last relationship is gone");
+    driver
+        .delete(&mut ctx)
+        .await
+        .expect("the owning row's own teardown runs last");
 }

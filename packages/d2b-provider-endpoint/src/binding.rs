@@ -3308,6 +3308,33 @@ impl EndpointBindingDriver {
         Ok(())
     }
 
+    /// The relationship facts a cleanup pass revokes from, derived from the
+    /// row itself and never from the state around it.
+    ///
+    /// A grant is installed for exactly what the committed row says - one
+    /// endpoint, one consumer, one canonical slot, one admitted right - and
+    /// everything AROUND that row may have moved since: the owning `Endpoint`
+    /// may have narrowed its consumer policy, the endpoint row may be gone,
+    /// the consumer row may be gone. None of that changes WHAT the standing
+    /// grant is, so cleanup derives the revoke from the row alone. A source
+    /// that narrowed its policy must not leave an installed entry behind
+    /// because its own admission would now refuse the row, and a missing
+    /// parent is not evidence that no grant was ever installed.
+    ///
+    /// Only bytes that are not this relationship are refused here: a spec
+    /// that is not canonical `EndpointBinding`, a name this source would not
+    /// derive, and a committed decision that admits nothing are malformed,
+    /// and a malformed row cannot name the entry a revoke would remove.
+    fn revocation_target(
+        &self,
+        ctx: &ResourceContext,
+        op: DriverOp,
+    ) -> Result<(EndpointBindingSpec, RequestedRights), EndpointBindingDriverError> {
+        let binding = self.decoded_binding(ctx, op)?;
+        let rights = self.check_committed_decision(&binding, op)?;
+        Ok((binding, rights))
+    }
+
     /// Every check one serving pass runs before it touches the broker: the
     /// wire decode, the derived row name, the committed decision, the owning
     /// `Endpoint` row behind its owner fence, that row's own policy at its
@@ -3322,8 +3349,7 @@ impl EndpointBindingDriver {
         ctx: &mut ResourceContext,
         op: DriverOp,
     ) -> Result<(EndpointBindingSpec, RequestedRights), EndpointBindingDriverError> {
-        let binding = self.decoded_binding(ctx, op)?;
-        let rights = self.check_committed_decision(&binding, op)?;
+        let (binding, rights) = self.revocation_target(ctx, op)?;
         let endpoint = self.parent_endpoint(ctx, &binding, op).await?;
         self.check_parent_policy(&endpoint, &binding, op)?;
         // The consumer's store-assigned identity is part of the relationship's
@@ -3641,46 +3667,84 @@ impl ResourceDriver for EndpointBindingDriver {
         Ok(())
     }
 
-    /// Teardown: remove this relationship's exact entry and nothing else.
+    /// Teardown: remove this relationship's exact entry, and retire the row
+    /// only on proof that it is gone (R36, R22).
     ///
-    /// The revoke travels as its own verb, so the key the grant was minted under
-    /// does not reproduce it: a replayed grant cannot become a revoke. The
-    /// broker's ancestors keep the traversal a live relationship still needs,
-    /// so revoking one consumer cannot pull the endpoint out from under another
-    /// (R38). An unanswered revoke withholds cleanup (R36) rather than
-    /// reporting a release it cannot prove. Idempotent under retry, and a row
-    /// whose spec no longer decodes converges without effects.
+    /// The revoke travels as its own verb, so the key the grant was minted
+    /// under does not reproduce it: a replayed grant cannot become a revoke.
+    /// The broker's ancestors keep the traversal a live relationship still
+    /// needs, so revoking one consumer cannot pull the endpoint out from
+    /// under another (R38).
+    ///
+    /// The target is derived from the committed row alone
+    /// ([`Self::revocation_target`]): a source that narrowed its policy, an
+    /// `Endpoint` row that is gone, and a consumer row that is gone are all
+    /// ordinary states of the world AROUND this relationship, and none of
+    /// them releases an entry that may still be installed. The owning row
+    /// stays committed until the broker answers.
+    ///
+    /// Retirement needs POSITIVE proof, and there are exactly two shapes of
+    /// it:
+    ///
+    /// - a revoke the broker answered is proof the entry was removed;
+    /// - a revoke the broker reports as [`ENDPOINT_ACCESS_ABSENT`] is proof
+    ///   that no entry for this exact consumer over this exact socket was
+    ///   standing in the first place, so there is nothing left to release.
+    ///
+    /// Everything else is ambiguous and retains ownership: a malformed row
+    /// that cannot name its own entry, a Zone row the bundle cannot be read
+    /// back from, a broker that refused for any other reason, and a dispatch
+    /// that never answered at all. Ambiguity is never reported as success -
+    /// a row this pass could not prove clean keeps its ACL entry and stays
+    /// committed until a later pass proves the release. Idempotent under
+    /// retry: the second pass over an already-revoked entry reads the absent
+    /// class and converges.
     async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         let op = DriverOp::Delete;
-        let Ok((binding, rights)) = self.structural(ctx, op).await else {
-            // Nothing durable to clean up; converged without effects.
-            return Ok(());
+        let Ok((binding, rights)) = self.revocation_target(ctx, op) else {
+            return Err(self
+                .error(EndpointBindingDriverErrorKind::SpecInvalid, op)
+                .with_detail(
+                    FailureDetail::at("delete/relationship")
+                        .comparison(FailureComparison::new(
+                            "binding.row",
+                            "the relationship this row names",
+                            "malformed",
+                        ))
+                        .with_note(
+                            "a row that does not decode cannot name the entry a revoke would remove",
+                        ),
+                ));
         };
         let Ok(zone_uid) = self.zone_uid(ctx, op).await else {
-            return Err(self.error(
-                EndpointBindingDriverErrorKind::DeliveryRefused,
-                op,
-            ));
+            return Err(self
+                .error(EndpointBindingDriverErrorKind::DeliveryRefused, op)
+                .with_detail(FailureDetail::at("delete/zone").comparison(
+                    FailureComparison::new("zone.uid", "the committed Zone self row", "absent"),
+                )));
         };
         let request =
             endpoint_access_request(&zone_uid, &binding, rights, EndpointAccessVerb::Revoke)
                 .map_err(|_| self.error(EndpointBindingDriverErrorKind::SpecInvalid, op))?;
-        self.access
+        match self
+            .access
             .dispatch(EndpointAccessVerb::Revoke, request)
             .await
-            .map(|_| ())
-            .map_err(|error| {
-                self.error(EndpointBindingDriverErrorKind::DeliveryRefused, op)
-                    .with_detail(
-                        FailureDetail::at("delete/endpointAccess").comparison(
-                            FailureComparison::new(
-                                "endpoint.access",
-                                "revoked",
-                                error.code(),
-                            ),
+        {
+            Ok(_) => Ok(()),
+            Err(error) if proves_no_grant(&error) => Ok(()),
+            Err(error) => Err(self
+                .error(EndpointBindingDriverErrorKind::DeliveryRefused, op)
+                .with_detail(
+                    FailureDetail::at("delete/endpointAccess").comparison(
+                        FailureComparison::new(
+                            "endpoint.access",
+                            "revoked or provably never granted",
+                            error.code(),
                         ),
-                    )
-            })
+                    ),
+                )),
+        }
     }
 }
 
@@ -3689,6 +3753,33 @@ const ENDPOINT_EFFECTIVE_ACCESS_MISSING: &str = "endpoint-access-effective-acces
 
 /// The closed slug an exact endpoint whose parent is listable reports.
 const ENDPOINT_PARENT_LISTABLE: &str = "endpoint-access-parent-listable";
+
+/// The wire's own closed refusal class for "no exact endpoint is standing at
+/// the resolved path" (R36).
+///
+/// The broker answers EVERY verb with this class when the principal it
+/// resolved holds no entry on the socket it resolved - including the revoke
+/// verb, which reports the removal it performed against the inode it landed
+/// on precisely so a retry can tell a removal that took effect from one that
+/// found nothing. Read on a revoke it is therefore POSITIVE NO-GRANT PROOF:
+/// the authority a cleanup would have released is provably not standing, so
+/// the row converges without this pass inventing a success for an effect it
+/// never performed.
+///
+/// It is named here rather than imported because it is the broker's wire
+/// vocabulary rather than a type this family owns, and this crate holds no
+/// daemon edge (R2). Every other refusal class - and an unanswered dispatch -
+/// proves nothing and retains ownership.
+const ENDPOINT_ACCESS_ABSENT: &str = "endpoint-access-endpoint-absent";
+
+/// Whether one dispatch answer is positive proof that no grant is standing
+/// for this exact relationship.
+fn proves_no_grant(error: &crate::facets::EndpointAccessDispatchError) -> bool {
+    matches!(
+        error,
+        crate::facets::EndpointAccessDispatchError::Refused(code) if code == ENDPOINT_ACCESS_ABSENT
+    )
+}
 
 /// The closed slug a relationship whose owning endpoint has published no
 /// current realization evidence reports (KTD8).

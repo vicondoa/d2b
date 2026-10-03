@@ -74,7 +74,7 @@ use d2b_resource_runtime::error::{
     DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
     FailureKinds,
 };
-use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
 use d2b_resource_runtime::manager::ResourceView;
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::target::{TargetBinding, TargetError, TargetObservation};
@@ -1067,6 +1067,69 @@ fn binding_key(ctx: &ResourceContext, binding_ref: &ResourceRef) -> ResourceKey 
         ENDPOINT_BINDING_RESOURCE_TYPE,
         binding_ref.name().as_str(),
     )
+}
+
+/// One committed row that still holds a `Process` row's retirement.
+///
+/// Every variant names a condition, never a row: the detail carries the
+/// closed slug and no key, no spec, and no host material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetirementBlocker {
+    /// An `EndpointBinding` row naming this exact Process as its consumer.
+    ConsumedBinding,
+    /// An `Endpoint` row naming this exact Process as its producer.
+    ProducedEndpoint,
+    /// A row of one of those two types whose committed bytes could not be
+    /// read at all.
+    Unreadable,
+}
+
+impl RetirementBlocker {
+    /// The closed slug the retention failure names.
+    const fn code(self) -> &'static str {
+        match self {
+            Self::ConsumedBinding => "binding.consumer-retiring",
+            Self::ProducedEndpoint => "endpoint.producer-retiring",
+            Self::Unreadable => "dependency.unreadable",
+        }
+    }
+}
+
+/// Whether one owner-scoped sibling is an `Endpoint` row this exact Process
+/// produces, and so still holds its retirement (R22).
+///
+/// The blocker is read from the committed bytes rather than from the row name,
+/// because the producer is not derivable from a key. Bytes that cannot be
+/// read at all are a blocker too: a retirement barrier fails closed, because a
+/// row this pass cannot read is a row whose release this pass cannot prove.
+fn produced_endpoint_blocker(
+    row: &StoredDesiredResource,
+    process: &ResourceRef,
+) -> Option<RetirementBlocker> {
+    match row.key.type_name.as_str() {
+        ENDPOINT_ROW_TYPE => match endpoint_producer_ref(&row.spec) {
+            Some(producer) if producer == *process => Some(RetirementBlocker::ProducedEndpoint),
+            Some(_) => None,
+            None => Some(RetirementBlocker::Unreadable),
+        },
+        _ => None,
+    }
+}
+
+/// The producer one `Endpoint` row's committed bytes name.
+///
+/// The `Endpoint` spec belongs to the Endpoint family and this driver never
+/// holds another family's type (R2), so the one committed fact the barrier
+/// needs is read out of the stored document instead of through a typed
+/// decode that would pin this crate to that family's contract. Both
+/// persisted shapes answer: the spec-store envelope and the bare typed
+/// document.
+fn endpoint_producer_ref(spec: &[u8]) -> Option<ResourceRef> {
+    let document = serde_json::from_slice::<serde_json::Value>(spec).ok()?;
+    let reference = document
+        .pointer("/producerRef")
+        .or_else(|| document.pointer("/spec/producerRef"))?;
+    ResourceRef::parse(reference.as_str()?).ok()
 }
 
 /// One non-empty string field of a published entry, or the fact that it is
@@ -2113,6 +2176,182 @@ impl ProcessDriver {
         Ok(observation)
     }
 
+    /// Refuse to retire this row while a relationship it consumes, or an
+    /// `Endpoint` it produces, is still committed (R22).
+    ///
+    /// The broker derives the principal a revoke names from this row's own
+    /// committed consumer reference, so a `Process` row that retired first
+    /// would leave its own release unprovable - and the ACL entry it
+    /// installed standing. The row therefore outlives them: the effect has
+    /// already stopped by the time this runs, and this stage is what keeps
+    /// the consumer identity available until every relationship naming it and
+    /// every `Endpoint` it produces is gone.
+    ///
+    /// The two blockers are found the way each is actually written down, out
+    /// of one owner-scoped sibling listing: a session owns its `Process` rows
+    /// and its `Endpoint` rows together.
+    ///
+    /// A CONSUMED relationship is named by the publication intent of the
+    /// endpoints in that listing - the same `/endpoint/bindings` layer the
+    /// launch gate reads, and the only place a relationship is named that
+    /// outlives the relationship row itself. It is read here rather than
+    /// through the launch observation because the two ask different
+    /// questions: at launch an unseen relationship is an ordinary not-yet,
+    /// while at retirement an UNSEEN relationship row is a release that has
+    /// already been proved and retired, and must not hold this row forever.
+    /// A PRODUCED `Endpoint` is named by its own committed bytes instead,
+    /// because a producer is a fact the endpoint carries, not something a key
+    /// carries.
+    ///
+    /// Idempotent under retry. A manager that cannot answer, a view it cannot
+    /// read, and a sibling whose committed bytes cannot be decoded all retain
+    /// the row rather than guessing at it: a barrier that failed open would
+    /// retire the very identity the release needs.
+    async fn retain_until_dependencies_retired(
+        &self,
+        ctx: &mut ResourceContext,
+        identity: &ProcessResourceIdentity,
+    ) -> Result<(), ProcessDriverError> {
+        let op = DriverOp::Delete;
+        let retained = |slug: &'static str, observed: &str| {
+            self.error(ProcessDriverErrorKind::DrainPending, op).with_detail(
+                FailureDetail::at("delete/relationships")
+                    .comparison(FailureComparison::new("delete.dependencies", "retired", observed))
+                    .with_note(slug),
+            )
+        };
+        let siblings = ctx
+            .owner_siblings()
+            .await
+            .map_err(|_| retained("dependency.unreadable", "unavailable"))?;
+        for endpoint in siblings
+            .iter()
+            .filter(|row| row.key.type_name == ENDPOINT_ROW_TYPE)
+        {
+            let published = match ctx.lookup_view(&endpoint.key).await {
+                RowLookup::Present { row, .. } => row.observed_status_projection().cloned(),
+                // A view the manager cannot answer is not evidence that
+                // nothing is published for this consumer.
+                RowLookup::Unavailable { .. } | RowLookup::Error { .. } => {
+                    return Err(retained("dependency.unreadable", "unavailable"));
+                }
+                // No view at all: the endpoint's own actor published no
+                // publication intent, which names no relationship here.
+                RowLookup::Absent { .. } => None,
+            };
+            let entries = published
+                .as_ref()
+                .and_then(|layer| layer.pointer("/endpoint/bindings"))
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for entry in entries {
+                let publishes_this_consumer = published_field(&entry, "/consumer").as_deref()
+                    == Some(identity.resource_ref.to_canonical_string().as_str());
+                if !publishes_this_consumer {
+                    continue;
+                }
+                let Some(name) = published_field(&entry, "/name") else {
+                    continue;
+                };
+                let key = ResourceKey::new(
+                    ctx.key().zone.as_str(),
+                    ENDPOINT_BINDING_RESOURCE_TYPE,
+                    &name,
+                );
+                if matches!(ctx.lookup(&key).await, RowLookup::Present { .. }) {
+                    return Err(retained(RetirementBlocker::ConsumedBinding.code(), "committed"));
+                }
+            }
+        }
+        if let Some(blocker) = siblings
+            .iter()
+            .find_map(|row| produced_endpoint_blocker(row, &identity.resource_ref))
+        {
+            return Err(retained(blocker.code(), "committed"));
+        }
+        Ok(())
+    }
+
+    /// Stop the verified live incarnation whose delivery authority was
+    /// withdrawn, and never report readiness behind it (R21, R22).
+    ///
+    /// A required relationship that is no longer `Delivered` at the
+    /// realization this row launched over is an authority withdrawal, not a
+    /// not-yet. Two facts are established here and neither is optional:
+    ///
+    /// 1. The row stops being ready. `Ready` is what a dependent reads as
+    ///    "this consumer may use its endpoint" and what a phase gate mints
+    ///    identities from, so this pass publishes a non-ready classification
+    ///    before it returns whatever the stop decided.
+    /// 2. The verified live incarnation stops. A process that keeps running
+    ///    over access its source no longer grants is exactly the effect the
+    ///    barrier exists to prevent, so this pass stops the exact identity it
+    ///    can verify through the same adoption evidence every other stop uses.
+    ///
+    /// Nothing here launches. The next pass relaunches only after the gate
+    /// answers `Ready` with a freshly sealed lease, so a withdrawn delivery
+    /// defers a relaunch rather than forbidding the row forever. An identity
+    /// this Host cannot attribute is left alone and never signalled: it is
+    /// reported as not-ready and replaced by nothing.
+    ///
+    /// Returns whether a live incarnation was stopped, so the caller can keep
+    /// an already-published terminal classification rather than restating it.
+    async fn stop_withdrawn_effect(
+        &mut self,
+        ctx: &mut ResourceContext,
+        identity: &ProcessResourceIdentity,
+        spec: &ProcessSpec,
+    ) -> Result<bool, ProcessDriverError> {
+        let op = DriverOp::Reconcile;
+        let mut guest = self.guest_arm(ctx.target().cloned(), op).await?;
+        if self.has_active_process(guest.as_ref(), identity, op).await? {
+            tracing::warn!(
+                resource = %identity.resource_ref.to_canonical_string(),
+                "a required binding is no longer delivered; stopping the live incarnation"
+            );
+            self.stop_process(guest.as_mut(), identity, spec, op).await?;
+            ctx.set_status(ProcessDriverStatus::Succeeded {
+                code: "binding-delivery-withdrawn",
+            });
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Stop the verified live one-shot whose delivery authority was
+    /// withdrawn (R21, R22).
+    ///
+    /// The same two facts as the durable arm over the one-shot's own
+    /// stop-and-finalize effect: the row stops reading ready and the
+    /// verified incarnation stops, and no relaunch is issued here. A one-shot
+    /// that never started has nothing live to stop, so this converges on the
+    /// gate's own answer.
+    async fn stop_withdrawn_one_shot(
+        &mut self,
+        ctx: &mut ResourceContext,
+        identity: &ProcessResourceIdentity,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<bool, ProcessDriverError> {
+        let op = DriverOp::Reconcile;
+        if !self.effects.has_active(
+            &identity.zone,
+            identity.zone_uid.as_ref(),
+            &identity.resource_ref,
+        ) {
+            return Ok(false);
+        }
+        tracing::warn!(
+            resource = %identity.resource_ref.to_canonical_string(),
+            "a required binding is no longer delivered; stopping the live one-shot"
+        );
+        self.stop_and_finalize_ephemeral(identity, spec, op).await?;
+        ctx.set_status(ProcessDriverStatus::Succeeded {
+            code: "binding-delivery-withdrawn",
+        });
+        Ok(true)
+    }
+
     async fn reconcile_process(
         &mut self,
         ctx: &mut ResourceContext,
@@ -2186,19 +2425,28 @@ impl ProcessDriver {
         // The launch binding gate (KTD6, R18). `NotRequired` is a real answer
         // - this row requires no `EndpointBinding` - and every path below then
         // runs exactly as it did before the gate existed. `Ready` carries the
-        // sealed authority the effect revalidates. `Pending` is the ordinary
-        // not-yet: no launch, no adoption, no readiness claim, and one
-        // retryable requeue on the cadence this arm already uses. `Refused` is
-        // terminal, because retrying the same malformed or foreign evidence
-        // cannot change the answer.
+        // sealed authority the effect revalidates.
+        //
+        // The two closed answers that are NOT `Ready` are where a live
+        // process would otherwise keep running over access its source no
+        // longer grants (R21). `Pending` is the ordinary not-yet for a row
+        // that never launched, and an authority withdrawal for one that did:
+        // either way the verified incarnation stops, the row stops reading
+        // ready, and exactly one retryable requeue runs on the cadence this
+        // arm already uses - a relaunch waits for a freshly sealed lease, it
+        // is never issued here. `Refused` is terminal for the launch, because
+        // retrying the same malformed or foreign evidence cannot change the
+        // answer, and it stops the live effect on exactly the same terms.
         let lease = match &binding {
             ProcessBindingPreparation::NotRequired => None,
             ProcessBindingPreparation::Ready(lease) => Some(lease),
             ProcessBindingPreparation::Pending => {
+                self.stop_withdrawn_effect(ctx, &identity, spec).await?;
                 let _ = ctx.requeue_after(PROCESS_RESYNC);
                 return Ok(ReconcileOutcome::RetryScheduled);
             }
             ProcessBindingPreparation::Refused(error) => {
+                self.stop_withdrawn_effect(ctx, &identity, spec).await?;
                 return Err(self.binding_gate_refused(&identity, *error));
             }
         };
@@ -2482,15 +2730,20 @@ impl ProcessDriver {
         // The launch binding gate, answered exactly as the long-running arm
         // answers it and AFTER the bounded-runtime stop above: a one-shot whose
         // runtime deadline elapsed still stops exactly, because the stop is
-        // the fence, not a use of the authority (R18, R22).
+        // the fence, not a use of the authority (R18, R22). The two answers
+        // that are not `Ready` stop a verified live one-shot on the same
+        // terms the durable arm does (R21): the row stops reading ready, the
+        // incarnation stops, and neither path launches.
         let lease = match &binding {
             ProcessBindingPreparation::NotRequired => None,
             ProcessBindingPreparation::Ready(lease) => Some(lease),
             ProcessBindingPreparation::Pending => {
+                self.stop_withdrawn_one_shot(ctx, identity, spec).await?;
                 let _ = ctx.requeue_after(PROCESS_RESYNC);
                 return Ok(ReconcileOutcome::RetryScheduled);
             }
             ProcessBindingPreparation::Refused(error) => {
+                self.stop_withdrawn_one_shot(ctx, identity, spec).await?;
                 return Err(self.binding_gate_refused(identity, *error));
             }
         };
@@ -3165,6 +3418,14 @@ impl ResourceDriver for ProcessDriver {
     /// adoption evidence, and an absent process converges without effects.
     /// An ambiguous identity refuses destructive action (old
     /// `stale_candidate_for_deletion`).
+    ///
+    /// Two stages, and the second one is what makes the first safe (R22). The
+    /// EFFECT stops here exactly as it always has, immediately, whatever the
+    /// surrounding graph looks like. The ROW retires only after
+    /// [`Self::retain_until_dependencies_retired`] finds no committed
+    /// relationship this row consumes and no `Endpoint` it produces, because
+    /// the release of the first depends on this row's consumer identity still
+    /// being there to resolve.
     async fn delete(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         let Ok((envelope, spec)) = self.decoded_spec(ctx, DriverOp::Delete) else {
             // Nothing launchable to clean up (old behavior: absent record
@@ -3185,7 +3446,8 @@ impl ResourceDriver for ProcessDriver {
 
         match &spec {
             ProcessFamilySpec::Ephemeral(ephemeral) => {
-                return self.delete_ephemeral(&identity, ephemeral).await;
+                self.delete_ephemeral(&identity, ephemeral).await?;
+                return self.retain_until_dependencies_retired(ctx, &identity).await;
             }
             ProcessFamilySpec::Process(process) => {
                 // Teardown reaches the realization target too, so a Guest-targeted
@@ -3199,10 +3461,10 @@ impl ResourceDriver for ProcessDriver {
                         self.stop_process(guest.as_mut(), &identity, process, DriverOp::Delete)
                             .await?;
                     }
-                    return Ok(());
+                    return self.retain_until_dependencies_retired(ctx, &identity).await;
                 }
 
-                match self
+                let stopped = match self
                     .adopt_process(guest.as_mut(), &identity, process, DriverOp::Delete)
                     .await?
                 {
@@ -3241,7 +3503,9 @@ impl ResourceDriver for ProcessDriver {
                                 ),
                             )))
                     }
-                }
+                };
+                stopped?;
+                self.retain_until_dependencies_retired(ctx, &identity).await
             }
         }
     }
@@ -5844,7 +6108,9 @@ mod tests {
             )
         }
 
-        fn binding_view(delivered: bool) -> ResourceView {
+        /// One relationship view: delivered at this exact realization, or not
+        /// delivered at all.
+        fn binding_view_over(incarnation: &str, delivered: bool) -> ResourceView {
             view(
                 binding_key(),
                 [0x61; 16],
@@ -5854,7 +6120,7 @@ mod tests {
                         serde_json::json!({
                             "state": "delivered",
                             "generation": 3,
-                            "incarnation": INCARNATION,
+                            "incarnation": incarnation,
                         })
                     } else {
                         serde_json::json!({ "state": "undelivered" })
@@ -5862,6 +6128,10 @@ mod tests {
                 })),
                 binding_spec_bytes(),
             )
+        }
+
+        fn binding_view(delivered: bool) -> ResourceView {
+            binding_view_over(INCARNATION, delivered)
         }
 
         fn endpoint_row() -> StoredDesiredResource {
@@ -5961,6 +6231,70 @@ mod tests {
             )
         }
 
+        /// One endpoint row whose committed bytes name the producer that
+        /// realized it, which is where the producer a barrier reads lives.
+        fn endpoint_row_with_spec(spec: &[u8]) -> StoredDesiredResource {
+            StoredDesiredResource {
+                spec: spec.to_vec(),
+                ..endpoint_row()
+            }
+        }
+
+        /// The `Endpoint` spec document a display Provider commits, reduced
+        /// to the one field the retirement barrier reads.
+        fn endpoint_spec_naming(producer: &str) -> Vec<u8> {
+            serde_json::to_vec(&serde_json::json!({
+                "providerRef": "Provider/display-wayland",
+                "producerRef": producer,
+            }))
+            .expect("an endpoint spec document")
+        }
+
+        /// The committed relationship the endpoint published, owned by the
+        /// endpoint that published it - so it is a sibling of the consumer
+        /// and never one of the consumer's own children.
+        fn binding_row() -> StoredDesiredResource {
+            StoredDesiredResource {
+                key: binding_key(),
+                uid: [0x61; 16],
+                generation: 3,
+                owner_uid: Some([0x62; 16]),
+                provenance: ResourceProvenance::Resource,
+                deleting: false,
+                spec: binding_spec_bytes(),
+                metadata: Vec::new(),
+                created_at: 0,
+            }
+        }
+
+        /// One host `Process` row owned by the same owner the `Endpoint` rows
+        /// are, so the launch gate and the retirement barrier read one
+        /// neighbourhood.
+        fn owned_host_row() -> StoredDesiredResource {
+            let mut row = test_row();
+            row.owner_uid = Some(OWNER_UID);
+            row.metadata =
+                br#"{"annotations":{},"labels":{},"ownerRef":"Provider/runtime-local"}"#.to_vec();
+            row
+        }
+
+        fn binding_manager(
+            rows: Vec<StoredDesiredResource>,
+            views: Vec<ResourceView>,
+        ) -> Arc<BindingManager> {
+            Arc::new(BindingManager {
+                rows,
+                views: parking_lot::Mutex::new(views),
+            })
+        }
+
+        /// Replace one published view, which is how a case states that the
+        /// evidence under a live row moved.
+        fn publish(manager: &BindingManager, view: ResourceView) {
+            manager.views.lock().retain(|published| published.key != view.key); // async-gate-allow: fixture rewrites under a short guard and holds no await
+            manager.views.lock().push(view); // async-gate-allow: fixture rewrites under a short guard and holds no await
+        }
+
         /// The delivery a live Guest Process receives is exactly the sealed
         /// relationship set, and only because the lease revalidated.
         #[tokio::test]
@@ -6013,6 +6347,223 @@ mod tests {
                 "a relationship that is no longer delivered defers the launch"
             );
             assert_eq!(f.target.realized().len(), 1, "a revoked lease delivers nothing");
+        }
+
+        /// A delivery withdrawn from a running `Process` stops the incarnation
+        /// that was launched over it, and nothing relaunches until the gate
+        /// opens again (AE13, R21, R22).
+        ///
+        /// The withdrawal is an authority change, not a not-yet: the process
+        /// is running over access its source no longer grants. The pass that
+        /// observes it stops the exact identity it verified, publishes a
+        /// non-ready classification in the same pass, and issues no launch -
+        /// so a later pass that still sees the withdrawal stays stopped
+        /// rather than restarting over revoked authority.
+        #[tokio::test]
+        async fn a_withdrawn_binding_stops_the_running_process_and_forbids_a_relaunch() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![endpoint_view(), binding_view(true)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            expect_in_progress(d.reconcile(&mut f.ctx).await);
+            yield_until_effects_settled().await;
+            assert_eq!(fake.launch_calls().len(), 1, "the delivered gate admits one launch");
+
+            // The next pass adopts the exact live identity and reads ready.
+            fake.push_adoption(ProviderAdoption::Adopted(adopted_report()));
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the adopted pass"),
+                ReconcileOutcome::Satisfied
+            );
+            assert_eq!(
+                f.ctx.status::<ProcessDriverStatus>().copied(),
+                Some(ProcessDriverStatus::Ready { adopted: true }),
+                "a delivered relationship is what the row is ready over"
+            );
+
+            // The relationship stopped being delivered at the realization this
+            // row launched over.
+            publish(&manager, binding_view(false));
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the withdrawn pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            assert_eq!(
+                fake.stop_calls().len(),
+                1,
+                "the verified live incarnation stops the moment the delivery is withdrawn"
+            );
+            assert_eq!(
+                f.ctx.status::<ProcessDriverStatus>().copied(),
+                Some(ProcessDriverStatus::Succeeded {
+                    code: "binding-delivery-withdrawn"
+                }),
+                "and the row stops reading ready behind an incarnation it no longer \
+                 has authority for"
+            );
+            assert_eq!(
+                fake.launch_calls().len(),
+                1,
+                "no relaunch is issued over a withdrawn delivery"
+            );
+
+            // Every later pass over the same withdrawal stays stopped.
+            fake.set_active(false);
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the still-withdrawn pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            assert_eq!(fake.launch_calls().len(), 1, "and still no relaunch");
+        }
+
+        /// Evidence published about ANOTHER incarnation is foreign, which is
+        /// terminal for the launch - and it stops the live process on exactly
+        /// the same terms a withdrawal does (AE13, R21).
+        #[tokio::test]
+        async fn foreign_binding_evidence_stops_the_running_process_too() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![endpoint_view(), binding_view(true)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            fake.push_adoption(ProviderAdoption::Adopted(adopted_report()));
+            expect_in_progress(d.reconcile(&mut f.ctx).await);
+            yield_until_effects_settled().await;
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the adopted pass"),
+                ReconcileOutcome::Satisfied
+            );
+            assert_eq!(
+                f.ctx.status::<ProcessDriverStatus>().copied(),
+                Some(ProcessDriverStatus::Ready { adopted: true })
+            );
+
+            // A delivery somebody else re-derived: the evidence names a
+            // different realization than the one this row launched over.
+            publish(&manager, binding_view_over("incarnation-OTHER", true));
+            d.reconcile(&mut f.ctx)
+                .await
+                .expect_err("foreign evidence refuses the pass");
+            assert_eq!(
+                fake.stop_calls().len(),
+                1,
+                "the live incarnation stops before the terminal refusal is reported"
+            );
+            assert_eq!(fake.launch_calls().len(), 1, "and nothing relaunches");
+            assert!(
+                !matches!(
+                    f.ctx.status::<ProcessDriverStatus>().copied(),
+                    Some(ProcessDriverStatus::Ready { .. })
+                ),
+                "the row is not ready behind an incarnation it can no longer attribute"
+            );
+        }
+
+        /// The consumer identity outlives its own release (R22).
+        ///
+        /// The broker derives the principal a revoke names from the consumer's
+        /// own committed reference, so the row must not retire while a
+        /// relationship it consumes - or an `Endpoint` it produces - is still
+        /// committed. The effect has already stopped by the time this runs;
+        /// this is what keeps the identity available until they are gone.
+        #[tokio::test]
+        async fn process_row_retirement_waits_for_its_bindings_and_produced_endpoints() {
+            // 1. A relationship this exact Process consumes is committed: the
+            //    relationship row is owned by the ENDPOINT that published it,
+            //    so the barrier has to resolve it from the publication rather
+            //    than from the owner's own children.
+            let manager = binding_manager(
+                vec![
+                    endpoint_row_with_spec(&endpoint_spec_naming("Process/other")),
+                    binding_row(),
+                ],
+                vec![endpoint_view(), binding_view(true)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
+                adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
+                ..FakeFacetsConfig::default()
+            }));
+            let mut d = driver(Arc::clone(&fake)).await;
+            let held = d
+                .delete(&mut f.ctx)
+                .await
+                .expect_err("a committed relationship holds the consumer row");
+            assert_eq!(
+                held.class(),
+                FailureClass::Retryable,
+                "the barrier defers the row rather than failing it"
+            );
+            assert!(
+                !fake.stop_calls().is_empty(),
+                "the EFFECT stopped first: the row is held, the process is gone"
+            );
+
+            // 2. An `Endpoint` this exact Process produces holds it too, with
+            //    no relationship row left at all.
+            let manager = binding_manager(
+                vec![endpoint_row_with_spec(&endpoint_spec_naming(CONSUMER))],
+                vec![endpoint_view()],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
+            assert!(
+                d.delete(&mut f.ctx).await.is_err(),
+                "an endpoint this row produces holds its retirement"
+            );
+
+            // 3. Neither holds it: the endpoint belongs to another producer and
+            //    the relationship this row consumed is gone.
+            let manager = binding_manager(
+                vec![endpoint_row_with_spec(&endpoint_spec_naming("Process/other"))],
+                vec![endpoint_view()],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
+            let outcome = d.delete(&mut f.ctx).await;
+            assert!(
+                outcome.is_ok(),
+                "with nothing of its own committed, the row retires: {outcome:?}"
+            );
+
+            // 4. A sibling whose committed bytes cannot be read fails closed:
+            //    a row this pass cannot read is a row whose release this pass
+            //    cannot prove.
+            let manager = binding_manager(
+                vec![endpoint_row_with_spec(b"not-an-endpoint-document")],
+                vec![endpoint_view()],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
+            assert!(
+                d.delete(&mut f.ctx).await.is_err(),
+                "an unreadable endpoint row retains the consumer row"
+            );
         }
     }
 }
