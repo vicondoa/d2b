@@ -390,6 +390,12 @@ pub struct ResourceContext {
     /// owner uid. Drivers select their launch shape from it; `None` for
     /// roots and for rows whose owner row is not in this manager.
     owner_key: Option<crate::identity::ResourceKey>,
+    /// The committed target binding the manager resolved for this row (R19,
+    /// R29). It carries the exact execution target, the committed uid, and -
+    /// for a Guest-targeted row - the live session generation, so a driver
+    /// reaches the authenticated target session through the binding instead
+    /// of through a coarse handle that said nothing about authority.
+    target: Option<crate::target::TargetBinding>,
 }
 
 impl ResourceContext {
@@ -415,6 +421,7 @@ impl ResourceContext {
             status: None,
             status_projection: None,
             owner_key: None,
+            target: None,
         }
     }
 
@@ -422,6 +429,23 @@ impl ResourceContext {
     pub fn with_owner_key(mut self, owner_key: Option<crate::identity::ResourceKey>) -> Self {
         self.owner_key = owner_key;
         self
+    }
+
+    /// Attach the committed target binding (manager-resolved, U13).
+    pub fn with_target(mut self, target: crate::target::TargetBinding) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    /// The committed target binding this row realizes through.
+    ///
+    /// `None` only for a context assembled outside the resource actor (a unit
+    /// test driving a driver directly), where no target layer exists. A row
+    /// the manager committed always has one, including a Host-targeted row:
+    /// its binding reports [`TargetBinding::is_guest`] as `false` and the
+    /// driver runs its effects locally.
+    pub fn target(&self) -> Option<&crate::target::TargetBinding> {
+        self.target.as_ref()
     }
 
     /// The owning resource's key, when this resource is an owned child and

@@ -285,9 +285,12 @@ impl RequeueScheduler for ActorTimers {
 pub struct ResourceActorArgs {
     /// Committed durable row: the manager persisted it before spawning.
     pub row: StoredDesiredResource,
-    /// Execution target for effects (R19); the coarse handle derived from
-    /// the resolved directory binding when the manager resolved one.
-    pub target: crate::target::TargetHandle,
+    /// Execution target for effects (R19, R29): the directory-backed binding
+    /// the manager resolved and committed for this row. It carries the exact
+    /// target, the committed uid, and the live Guest session generation, so a
+    /// driver works through it instead of through the coarse handle that said
+    /// nothing about authority.
+    pub target: crate::target::TargetBinding,
     /// Provider directory resolved in `pre_start`. A lookup failure fails
     /// the spawn AFTER the row committed (F1): the row stays durable and a
     /// restart or Ensure recovers it.
@@ -321,6 +324,8 @@ pub struct ResourceActorState {
     retry_backoff: Duration,
     /// The owning resource's key (see [`ResourceActorArgs::owner_key`]).
     owner_key: Option<crate::identity::ResourceKey>,
+    /// The committed target binding (see [`ResourceActorArgs::target`]).
+    target: crate::target::TargetBinding,
     /// Requeue timers (ractor timers, runtime-only, R13).
     timers: Arc<ActorTimers>,
 
@@ -576,7 +581,8 @@ impl ResourceActorState {
             self.effect_tx.clone(),
             self.watch_tx.clone(),
         )
-        .with_owner_key(self.owner_key.clone());
+        .with_owner_key(self.owner_key.clone())
+        .with_target(self.target.clone());
         self.ctx = ctx;
     }
 
@@ -763,7 +769,8 @@ impl Actor for ResourceActor {
             effect_tx.clone(),
             watch_tx.clone(),
         )
-        .with_owner_key(args.owner_key.clone());
+        .with_owner_key(args.owner_key.clone())
+        .with_target(args.target.clone());
         Ok(ResourceActorState {
             manager: args.manager,
             manager_endpoint,
@@ -771,6 +778,7 @@ impl Actor for ResourceActor {
             backoff: args.backoff,
             retry_backoff: args.backoff,
             owner_key: args.owner_key,
+            target: args.target,
             timers,
             deleting: row.deleting,
             status: ResourceStatus::Pending,

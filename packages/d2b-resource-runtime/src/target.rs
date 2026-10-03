@@ -508,6 +508,78 @@ impl TargetBinding {
         self.assignment.target().guest()
     }
 
+    /// Whether this row realizes through a Guest target.
+    ///
+    /// A Host-targeted row runs its effects locally; a Guest-targeted row
+    /// carries its whole lifecycle over the authenticated ComponentSession.
+    pub const fn is_guest(&self) -> bool {
+        matches!(self.assignment.target(), ResolvedTarget::Guest(_))
+    }
+
+    /// The exact Guest identity this binding resolves to, when it has one.
+    ///
+    /// The reference is the commitment every frame of the session carries:
+    /// a request naming any other Guest is refused by the target, so a driver
+    /// that needs to name the target reads it here rather than composing one.
+    pub fn guest_reference(&self) -> Option<&TargetRef> {
+        self.guest().map(GuestTargetHandle::reference)
+    }
+
+    /// The authenticated session generation this binding is bound to.
+    ///
+    /// `None` while no session is live. The assignment itself survives a
+    /// disconnect unchanged (R21), and every operation below re-validates
+    /// against the directory's live session rather than trusting this value.
+    pub const fn session_generation(&self) -> Option<u64> {
+        self.assignment.session_generation()
+    }
+
+    /// The guest target's live session generation right now.
+    ///
+    /// Distinct from [`Self::session_generation`], which reports the
+    /// generation this assignment was bound under and is therefore a
+    /// snapshot. A reconnect makes this newer; a caller that compares the two
+    /// learns that its binding no longer speaks for the live session and must
+    /// re-adopt before it acts (F5).
+    pub fn live_generation(&self) -> Option<u64> {
+        self.guest_reference().and_then(|reference| self.directory.live_generation(reference))
+    }
+
+    /// The Host-zone resource this assignment binds.
+    pub const fn source(&self) -> &ResourceKey {
+        self.assignment.source()
+    }
+
+    /// The committed uid of the resource this assignment binds.
+    ///
+    /// A replacement source has a different uid, and the target refuses to
+    /// let it inherit the previous source's realization.
+    pub const fn source_uid(&self) -> &[u8; 16] {
+        self.assignment.uid()
+    }
+
+    /// The desired generation this assignment was committed at.
+    pub const fn assignment_generation(&self) -> u64 {
+        self.assignment.desired_generation()
+    }
+
+    /// The live session generation this binding may act under.
+    ///
+    /// This is the pre-effect fence (R19): a caller reads it, performs its
+    /// manager-side work, and issues the frame only while the value still
+    /// stands. A Host row, and a Guest row with no live session, both refuse.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TargetError::NotGuestTarget`] for a Host-targeted row and
+    /// [`TargetError::GuestUnavailable`] while no Guest session is live.
+    pub fn live_session(&self) -> Result<u64, TargetError> {
+        if !self.is_guest() {
+            return Err(TargetError::NotGuestTarget);
+        }
+        self.session_generation().ok_or(TargetError::GuestUnavailable)
+    }
+
     /// Realize (create or update) the target-local instance through the live
     /// guest session. The spec is this driver's target-local shape; the host
     /// resolved it and the target applies exactly it.
@@ -761,6 +833,25 @@ impl TargetDirectory {
                 (None, None) => TargetAvailability::Unknown,
             },
         }
+    }
+
+    /// The session generation of one guest target that is live right now.
+    ///
+    /// This is the only way a holder of a binding learns that its target
+    /// reconnected: an assignment records the generation it was bound under,
+    /// so without this read a reconnect is indistinguishable from an
+    /// unchanged session (R21, F5). Synchronous via the non-blocking
+    /// `try_lock`; a collision reports `None` fail-closed, which every caller
+    /// already reads as "no session".
+    pub fn live_generation(&self, guest: &TargetRef) -> Option<u64> {
+        let Ok(state) = self.inner.try_lock() else {
+            return None;
+        };
+        state
+            .guests
+            .get(guest)
+            .and_then(|record| record.live.as_ref())
+            .map(|live| live.session_generation)
     }
 
     fn new_guest_record() -> GuestRecord {

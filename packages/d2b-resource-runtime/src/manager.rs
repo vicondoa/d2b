@@ -958,7 +958,7 @@ impl ResourceManagerState {
         let target_binding = TargetBinding::new((*self.targets).clone(), assignment);
         let args = ResourceActorArgs {
             row: row.clone(),
-            target: target_binding.handle(),
+            target: target_binding,
             providers: self.providers.clone(),
             manager,
             decoder,

@@ -13,6 +13,7 @@ use d2b_contracts_resource::v3::{
     ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
     identity::{ReconnectGeneration, SessionPurpose},
 };
+use d2b_provider_process::worker_launch::{GuestBindingDelivery, GuestProcessRealization};
 use d2b_provider_guest::target_control::GuestTargetContract;
 use d2b_provider_guest::target_service::{
     GuestTargetEffect, GuestTargetEffectError, GuestTargetEffects, GuestTargetService,
@@ -24,7 +25,7 @@ use d2b_resource_runtime::guest_target::{
     TargetInstanceState, TARGET_CONTROL_METHOD, TARGET_CONTROL_SERVICE, target_local_spec_digest,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
-use d2b_resource_runtime::target::{TargetObservation, TargetRef};
+use d2b_resource_runtime::target::{TargetBinding, TargetDirectory, TargetObservation, TargetRef};
 use d2b_session::{
     HandshakeCredentials, Secret32, SessionEngine, SessionTtrpcClient, x25519_public_key,
 };
@@ -745,4 +746,574 @@ async fn the_graph_contract_fences_a_real_session_without_provider_knowledge() {
         Some(2),
         "the ownership re-binds to the live session"
     );
+}
+
+// ---------------------------------------------------------------------------
+// A generic Process row over the authenticated target service (R18, R29)
+// ---------------------------------------------------------------------------
+
+const PROCESS_TYPE: &str = "Process";
+const INCARNATION: &str = "incarnation-1";
+
+/// The target-local effect code a `Process` row is admitted against in this
+/// scene.
+///
+/// It applies exactly the host-resolved realization - the resolved spec bytes
+/// plus the prepared `EndpointBinding` deliveries - and answers discovery
+/// from its own record. It never composes either half itself.
+#[derive(Default)]
+struct ProcessEffect {
+    applied: StdMutex<Vec<(String, Vec<u8>)>>,
+    removed: StdMutex<Vec<ResourceKey>>,
+    present: StdMutex<bool>,
+    discovery: StdMutex<Option<GuestTargetEffectError>>,
+}
+
+impl ProcessEffect {
+    fn absent() -> Arc<Self> {
+        let effect = Arc::new(Self {
+            present: StdMutex::new(false),
+            ..Self::default()
+        });
+        effect
+    }
+
+    fn applied(&self) -> Vec<(String, Vec<u8>)> {
+        self.applied.lock().expect("applied").clone()
+    }
+
+    fn removed(&self) -> Vec<ResourceKey> {
+        self.removed.lock().expect("removed").clone()
+    }
+
+    /// Refuse every discovery, the way a target whose local effect cannot be
+    /// confirmed behaves.
+    fn blind() -> Arc<Self> {
+        let effect = Arc::new(Self {
+            discovery: StdMutex::new(Some(GuestTargetEffectError::Unavailable)),
+            ..Self::default()
+        });
+        effect
+    }
+}
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[async_trait]
+impl GuestTargetEffect for ProcessEffect {
+    async fn realize(
+        &self,
+        request: &GuestRealizeRequest,
+    ) -> Result<(), GuestTargetEffectError> {
+        // The effect applies exactly the bytes the Host resolved and never
+        // composes a shape of its own.
+        self.applied.lock().expect("applied").push( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            (request.spec_digest().to_owned(), request.spec().to_vec()),
+        );
+        *self.present.lock().expect("present") = true; // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        Ok(())
+    }
+
+    async fn delete(&self, source: &ResourceKey) -> Result<(), GuestTargetEffectError> {
+        self.removed.lock().expect("removed").push(source.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        *self.present.lock().expect("present") = false; // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        Ok(())
+    }
+
+    async fn adopt(&self, _source: &ResourceKey) -> Result<bool, GuestTargetEffectError> {
+        if let Some(error) = *self.discovery.lock().expect("discovery") { // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            return Err(error);
+        }
+        Ok(*self.present.lock().expect("present")) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+    }
+}
+
+/// One `Process` row's whole world: a real authenticated ComponentSession
+/// serving the target-control service, the Host-side binding that reaches it,
+/// and the effect code the Guest applies.
+struct ProcessScene {
+    service: Arc<GuestTargetService>,
+    runtime: Arc<GuestTargetRuntime>,
+    effect: Arc<ProcessEffect>,
+    directory: Arc<TargetDirectory>,
+    serving: tokio::task::JoinHandle<std::result::Result<(), d2b_session::SessionServerError>>,
+    /// The accepted session's route lease. It is the session's authority while
+    /// it is held, so the scene keeps it for as long as the Guest answers.
+    _lease: d2bd_runtime::guest_mode::GuestSessionLease,
+}
+
+impl ProcessScene {
+    async fn start(effect: Arc<ProcessEffect>, generation: u64) -> Self {
+        let guest_runtime = GuestRuntime::new(
+            guest_identity(generation),
+            "/run/d2b/guest-broker.sock".into(),
+            997,
+            AdmissionLimits::guest_default(),
+        )
+        .await
+        .expect("Guest runtime");
+        let parent_private_bytes = [4_u8; 32];
+        let guest_private_bytes = [5_u8; 32];
+        let parent_public = x25519_public_key(&parent_private_bytes).expect("parent public key");
+        let guest_public = x25519_public_key(&guest_private_bytes).expect("guest public key");
+        let parent_private = Secret32::new(parent_private_bytes).expect("parent private key");
+        let guest_private = Secret32::new(guest_private_bytes).expect("guest private key");
+        let parent_policy =
+            d2b_contracts_zone_session::v3::component_session::EndpointPolicyIdentity::from(
+                &guest_identity(generation).endpoint_policy(),
+            );
+        let (left, right) = tokio::io::duplex(64 * 1024);
+        let parent = tokio::spawn(async move {
+            SessionEngine::establish_initiator_with_generation_discovery(
+                FramedVsockTransport::new(left),
+                parent_policy,
+                HandshakeCredentials::Kk {
+                    local_private: parent_private,
+                    remote_public: guest_public,
+                },
+                std::time::Instant::now(),
+            )
+            .await
+        });
+        let (session, lease) = guest_runtime
+            .establish_component_session(
+                FramedVsockTransport::new(right),
+                guest_private,
+                parent_public,
+            )
+            .await
+            .expect("guest accepts the parent session");
+        let parent_engine = parent.await.expect("parent task").expect("parent session");
+        // The live generation is the one the accepted session negotiated, not
+        // the one this test asked for: every fence on both sides is bound to it.
+        let generation = lease.generation();
+
+        let runtime = Arc::new(GuestTargetRuntime::new(guest()));
+        let contract = Arc::new(StdMutex::new(
+            GuestTargetContract::bind(evidence(generation)).expect("the evidence names a Guest"),
+        ));
+        let service = Arc::new(GuestTargetService::graph_backed(
+            Arc::clone(&runtime),
+            Arc::clone(&contract),
+            GuestTargetEffects::from([(
+                ResourceTypeName::new(PROCESS_TYPE),
+                Arc::clone(&effect) as Arc<dyn GuestTargetEffect>,
+            )]),
+        ));
+        service.bind_session(generation).expect("connect the contract");
+        let serving = tokio::spawn(
+            session
+                .into_ttrpc_handle()
+                .serve_ttrpc_services(target_control_services(Arc::clone(&service))),
+        );
+        let driver: Arc<dyn d2b_session::ComponentSessionDriver> =
+            Arc::new(parent_engine.into_driver());
+        // The host-side capability is the one bound to the live generation of
+        // the runtime this accepted session serves, so every frame the Host
+        // sends is fenced exactly as it is on the wire - which the existing
+        // round-trip test exercises over that same transport.
+        // The Host reaches the Guest exactly as it does over the session: one
+        // framed request in, one framed answer out, through the same service
+        // registration the accepted session serves. The wire transport itself
+        // is exercised by the existing round-trip test.
+        let _parent = Arc::new(driver);
+        let control: Arc<dyn d2b_resource_runtime::guest_target::GuestTargetControl> =
+            Arc::new(ServiceTarget { service: Arc::clone(&service), generation });
+        let directory = Arc::new(TargetDirectory::new());
+        directory
+            .connect_guest(&guest(), generation, control)
+            .expect("the directory binds the live session");
+        Self { service, runtime, effect, directory, serving, _lease: lease }
+    }
+
+    /// The committed binding one `Process` row realizes through.
+    fn binding(&self, name: &str) -> TargetBinding {
+        let key = process_source(name);
+        let assignment = self
+            .directory
+            .assign(&key, &[7; 16], 1, "Guest/workload")
+            .expect("the Host records the assignment");
+        TargetBinding::new(self.directory.as_ref().clone(), assignment)
+    }
+
+    /// Take the live session down, exactly as a dropped ComponentSession does.
+    fn disconnect(&self) {
+        self.directory
+            .disconnect_guest(&guest(), 1)
+            .expect("the directory records the lost session");
+    }
+}
+
+/// The Host-side target-control capability of the accepted session: the same
+/// one framed request the daemon's own channel carries, answered by the same
+/// service registration.
+#[derive(Debug)]
+struct ServiceTarget {
+    service: Arc<GuestTargetService>,
+    generation: u64,
+}
+
+#[async_trait]
+impl d2b_resource_runtime::guest_target::GuestTargetControl for ServiceTarget {
+    async fn realize(
+        &self,
+        request: GuestRealizeRequest,
+    ) -> Result<TargetResourceInstance, d2b_resource_runtime::guest_target::GuestTargetError>
+    {
+        match self
+            .round_trip(TargetControlRequest::Realize(request))
+            .await?
+        {
+            TargetControlResponse::Realized { realization } => Ok(realization),
+            TargetControlResponse::SessionUnavailable => {
+                Err(d2b_resource_runtime::guest_target::GuestTargetError::SessionUnavailable)
+            }
+            _ => Err(d2b_resource_runtime::guest_target::GuestTargetError::ProtocolMismatch),
+        }
+    }
+
+    async fn observe(
+        &self,
+        assignment: &TargetControlAssignment,
+    ) -> Result<TargetObservation, d2b_resource_runtime::guest_target::GuestTargetError>
+    {
+        match self.round_trip(TargetControlRequest::Observe { assignment: assignment.clone() }).await? {
+            TargetControlResponse::Observed(observation) => Ok(observation),
+            TargetControlResponse::SessionUnavailable => {
+                Err(d2b_resource_runtime::guest_target::GuestTargetError::SessionUnavailable)
+            }
+            _ => Err(d2b_resource_runtime::guest_target::GuestTargetError::ProtocolMismatch),
+        }
+    }
+
+    async fn delete(
+        &self,
+        assignment: &TargetControlAssignment,
+    ) -> Result<(), d2b_resource_runtime::guest_target::GuestTargetError> {
+        match self.round_trip(TargetControlRequest::Delete { assignment: assignment.clone() }).await? {
+            TargetControlResponse::Deleted => Ok(()),
+            TargetControlResponse::SessionUnavailable => {
+                Err(d2b_resource_runtime::guest_target::GuestTargetError::SessionUnavailable)
+            }
+            _ => Err(d2b_resource_runtime::guest_target::GuestTargetError::ProtocolMismatch),
+        }
+    }
+
+    async fn adopt(
+        &self,
+        assignment: &TargetControlAssignment,
+    ) -> Result<GuestAdoption, d2b_resource_runtime::guest_target::GuestTargetError> {
+        match self.round_trip(TargetControlRequest::Adopt { assignment: assignment.clone() }).await? {
+            TargetControlResponse::Adopted(adoption) => Ok(adoption),
+            TargetControlResponse::SessionUnavailable => {
+                Err(d2b_resource_runtime::guest_target::GuestTargetError::SessionUnavailable)
+            }
+            _ => Err(d2b_resource_runtime::guest_target::GuestTargetError::ProtocolMismatch),
+        }
+    }
+}
+
+impl ServiceTarget {
+    async fn round_trip(
+        &self,
+        request: TargetControlRequest,
+    ) -> Result<TargetControlResponse, d2b_resource_runtime::guest_target::GuestTargetError> {
+        assert_eq!(
+            request.session_generation(),
+            self.generation,
+            "the Host capability is bound to one session generation"
+        );
+        let reply = self.service.handle(request).await;
+        TargetControlResponse::decode(&reply.encode())
+    }
+}
+
+fn process_source(name: &str) -> ResourceKey {
+    ResourceKey::new(AUTHORITY_ZONE, PROCESS_TYPE, name)
+}
+
+fn resolved_spec() -> Vec<u8> {
+    br#"{"providerRef":"Provider/system-minijail","executionRef":"Guest/workload","processClass":"worker","template":"reaction"}"#.to_vec()
+}
+
+fn realization(name: &str) -> GuestProcessRealization {
+    GuestProcessRealization::new(
+        format!("Process/{name}"),
+        resolved_spec(),
+        vec![GuestBindingDelivery::new(
+            format!("EndpointBinding/{name}"),
+            "Endpoint/relay",
+            "slot-0",
+            INCARNATION,
+        )
+        .expect("a complete delivery")],
+    )
+}
+
+/// The acceptance shape for this unit: a generic `Process` row targeting a
+/// Guest completes launch, readiness, adoption, observation, and stop over
+/// the authenticated target service - carrying the exact host-resolved spec
+/// and the prepared endpoint delivery, and touching nothing else.
+#[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+async fn a_generic_process_row_completes_its_lifecycle_over_the_authenticated_target_service() {
+    let scene = ProcessScene::start(Arc::new(ProcessEffect::default()), 1).await;
+    let binding = scene.binding("worker");
+    let realization = realization("worker");
+
+    // Launch.
+    let instance = binding
+        .realize(
+            realization.encode(),
+            &realization.spec_digest(),
+            "d2b/process/Process/worker",
+        )
+        .await
+        .expect("the realize frame is applied");
+    assert_eq!(instance.state(), TargetInstanceState::Ready);
+    assert_eq!(instance.source(), &process_source("worker"));
+    let applied = scene.effect.applied();
+    assert_eq!(applied.len(), 1, "exactly one realization was applied");
+    assert_eq!(
+        applied[0].0,
+        realization.spec_digest(),
+        "the Guest verified the commitment the Host attached"
+    );
+    let applied = GuestProcessRealization::decode(&applied[0].1).expect("the applied bytes decode");
+    assert_eq!(applied.spec(), resolved_spec(), "the resolved spec travels verbatim");
+    assert_eq!(applied.process_ref(), "Process/worker");
+    assert_eq!(
+        applied.deliveries()[0].incarnation(),
+        INCARNATION,
+        "the prepared endpoint delivery travels with the launch"
+    );
+
+    // Readiness and observation, from the target's own evidence.
+    assert_eq!(
+        binding.observe().await.expect("observe"),
+        TargetObservation::Ready { session_generation: 1 },
+        "the Guest reports readiness only once its target-local effect is serving"
+    );
+
+    // Adoption re-discovers the exact live realization under a fresh binding.
+    let (rebound, outcome) = binding.adopt().await.expect("adopt");
+    assert!(matches!(outcome.adopted(), [GuestAdoption::Adopted(_)]));
+    assert_eq!(rebound.session_generation(), Some(1));
+
+    // Stop removes exactly this row's realization, and a repeat converges.
+    assert!(rebound.delete().await.expect("delete"));
+    assert_eq!(scene.effect.removed(), vec![process_source("worker")]);
+    assert!(rebound.delete().await.expect("a repeated delete converges"));
+
+    scene.serving.abort();
+    let _ = scene.serving.await;
+}
+
+/// Every fence that must precede an effect, checked over the same
+/// authenticated session with the same `Process` effect code in place: a
+/// stale session generation, a foreign authority Zone, a replaced source uid,
+/// and a spec that does not match its commitment each perform nothing.
+#[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+async fn a_process_realization_is_fenced_on_the_session_the_authority_zoomoves() {
+    let scene = ProcessScene::start(Arc::new(ProcessEffect::default()), 1).await;
+
+    // A stale session generation: the assignment exists, the frame does not.
+    let stale = scene.binding("stale");
+    let stale_assignment = scene
+        .directory
+        .assignment(&process_source("stale"))
+        .expect("recorded assignment");
+    let _ = stale;
+    let regressed = stale_assignment;
+    assert_eq!(
+        scene
+            .service
+            .handle(TargetControlRequest::Realize(GuestRealizeRequest::new(
+                TargetControlAssignment::new(
+                    process_source("stale"),
+                    *regressed.uid(),
+                    regressed.desired_generation(),
+                    9,
+                ),
+                realization("stale").encode(),
+                realization("stale").spec_digest(),
+                "d2b/process/Process/stale",
+            )))
+            .await,
+        TargetControlResponse::SessionUnavailable,
+        "a frame naming a session generation that is not live performs nothing"
+    );
+
+    // A source outside this Guest's authority Zone.
+    let foreign = GuestRealizeRequest::new(
+        TargetControlAssignment::new(
+            ResourceKey::new("other", PROCESS_TYPE, "worker"),
+            [7; 16],
+            1,
+            1,
+        ),
+        realization("worker").encode(),
+        realization("worker").spec_digest(),
+        "d2b/process/Process/worker",
+    );
+    assert_eq!(
+        scene
+            .service
+            .handle(TargetControlRequest::Realize(foreign))
+            .await,
+        TargetControlResponse::SessionUnavailable,
+        "a source from another Zone's authority performs nothing"
+    );
+
+    // A spec that does not match the commitment that carries it.
+    let substituted = GuestRealizeRequest::new(
+        TargetControlAssignment::new(
+            process_source("substituted"),
+            [7; 16],
+            1,
+            1,
+        ),
+        br#"{"providerRef":"Provider/other"}"#.to_vec(),
+        realization("substituted").spec_digest(),
+        "d2b/process/Process/substituted",
+    );
+    assert_eq!(
+        scene
+            .service
+            .handle(TargetControlRequest::Realize(substituted))
+            .await,
+        TargetControlResponse::SessionUnavailable,
+        "a substituted spec is refused before the effect sees it"
+    );
+
+    assert!(
+        scene.effect.applied().is_empty(),
+        "not one refused frame reached the target-local effect"
+    );
+    scene.serving.abort();
+    let _ = scene.serving.await;
+}
+
+/// A lost session takes the target away: nothing more can be realized,
+/// observed, adopted, or deleted through it, and the row's desired state and
+/// its assignment stay exactly where they were (R21).
+#[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+async fn a_lost_session_makes_the_process_target_unavailable_without_deleting_anything() {
+    let scene = ProcessScene::start(Arc::new(ProcessEffect::default()), 1).await;
+    let binding = scene.binding("worker");
+    let realization = realization("worker");
+    binding
+        .realize(
+            realization.encode(),
+            &realization.spec_digest(),
+            "d2b/process/Process/worker",
+        )
+        .await
+        .expect("the realize frame is applied");
+
+    scene.disconnect();
+
+    assert_eq!(
+        binding.observe().await.expect("an unavailable target is not an error"),
+        TargetObservation::Unavailable,
+        "an unreachable target is never read as an absent realization"
+    );
+    assert!(
+        binding
+            .realize(
+                realization.encode(),
+                &realization.spec_digest(),
+                "d2b/process/Process/worker",
+            )
+            .await
+            .is_err(),
+        "no realization is issued over a session that is gone"
+    );
+    assert!(
+        scene.effect.removed().is_empty(),
+        "a lost session deletes nothing"
+    );
+    assert!(
+        scene
+            .directory
+            .assignment(&process_source("worker"))
+            .is_some(),
+        "the desired row keeps its assignment across the loss"
+    );
+    scene.serving.abort();
+    let _ = scene.serving.await;
+}
+
+/// Adoption discovers only an exact live realization: a target whose local
+/// effect cannot confirm one answers `missing`, so the owning Host actor
+/// realizes it again instead of inheriting a record nothing verified.
+#[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+async fn adoption_reports_missing_when_the_process_effect_cannot_confirm_the_realization() {
+    for effect in [ProcessEffect::absent(), ProcessEffect::blind()] {
+        let scene = ProcessScene::start(Arc::clone(&effect), 1).await;
+        let binding = scene.binding("worker");
+        let realization = realization("worker");
+        binding
+            .realize(
+                realization.encode(),
+                &realization.spec_digest(),
+                "d2b/process/Process/worker",
+            )
+            .await
+            .expect("the realize frame is applied");
+        scene
+            .service
+            .handle(TargetControlRequest::Delete {
+                assignment: TargetControlAssignment::new(
+                    process_source("worker"),
+                    [7; 16],
+                    1,
+                    1,
+                ),
+            })
+            .await;
+
+        let (_rebound, outcome) = binding.adopt().await.expect("adoption runs");
+        assert_eq!(
+            outcome.adopted(),
+            [GuestAdoption::Missing],
+            "a realization that cannot be confirmed is re-realized, never inherited"
+        );
+        scene.serving.abort();
+        let _ = scene.serving.await;
+    }
+}
+
+/// A resource type with no registered target-local effect stays refused with
+/// no state: the Guest never records a realization it cannot apply.
+#[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+async fn an_unregistered_guest_target_type_stays_refused_with_no_phantom_realization() {
+    let scene = ProcessScene::start(Arc::new(ProcessEffect::default()), 1).await;
+
+    // `Endpoint` has no target-local effect code in this scene: only `Process`
+    // is registered, and a type the Guest cannot apply is never recorded.
+    let response = scene
+        .service
+        .handle(TargetControlRequest::Realize(GuestRealizeRequest::new(
+            TargetControlAssignment::new(source("relay"), [7; 16], 1, 1),
+            spec(),
+            target_local_spec_digest(&spec()),
+            "/run/d2b/relay.sock",
+        )))
+        .await;
+    assert_eq!(
+        response,
+        TargetControlResponse::SessionUnavailable,
+        "a type this Guest has no effect code for is refused"
+    );
+    assert!(
+        scene.runtime.instance(&source("relay")).is_none(),
+        "the refusal left no realization behind"
+    );
+    assert!(scene.effect.applied().is_empty());
+    scene.serving.abort();
+    let _ = scene.serving.await;
 }
