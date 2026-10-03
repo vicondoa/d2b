@@ -4925,7 +4925,7 @@
         }
       },
       "deadline": {
-        "tier": "standard"
+        "tier": "extended"
       },
       "service": "d2b.process",
       "method": "open-pidfd",

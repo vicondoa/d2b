@@ -2722,7 +2722,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: None,
         state_cell: Some("runner-pidfd-registry"),
         cell_durability: Some(CellDurability::Ephemeral),
-        deadline_tier: DeadlineTier::Standard,
+        deadline_tier: DeadlineTier::Extended,
     },
     BrokerOperationRow {
         operation: BrokerOperationName::OpenPeerPidfdFromAcceptedSocket,
