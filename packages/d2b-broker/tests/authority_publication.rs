@@ -617,6 +617,46 @@ async fn an_unpublished_zone_reports_no_authority() {
     assert_eq!(projection.epoch().await, 1, "the first open mints epoch one");
 }
 
+/// A Zone that has had its session minted but has published nothing yet
+/// admits nothing either.
+///
+/// The case above reads a Zone the broker has never heard of. This one covers
+/// the Zone it HAS heard of: a session open is what creates the durable
+/// record, and it creates it before the manager has streamed anything. That
+/// record used to be created `Unfenced`, so from the open until the first
+/// `BeginSnapshot` - a window that spans the open's two fsyncs - the Zone
+/// reported open ordinary admission under an initial cursor with no rows and
+/// no store generation, and an effect dispatched inside it was admitted
+/// against authority this broker does not hold. A minted session is not an
+/// accepted document, and the durable leg has to say so the same way the
+/// in-memory leg already did.
+#[tokio::test]
+async fn a_zoned_but_unpublished_zone_admits_nothing_until_its_first_document_lands() {
+    // `start` opens the session, so the record exists from here on.
+    let mut harness = Harness::start().await;
+
+    let state = harness.projection.status(ZONE).await;
+    assert_eq!(
+        state,
+        ZoneAuthorityState::Unprovisioned,
+        "a minted session is not an accepted document"
+    );
+    assert!(!state.is_provisioned(), "the Zone holds no authority yet");
+    assert!(state.accepted().is_none(), "there is no accepted cursor");
+    assert!(
+        state.is_fenced(),
+        "a Zone with a session but no accepted document admits nothing"
+    );
+
+    // The Zone's FIRST document is an install, not a resynchronization: there
+    // is no prior projection to prove it against, so the fix must not close
+    // the door a Zone is provisioned through.
+    harness.install_reader_grant().await;
+    let installed = harness.projection.status(ZONE).await;
+    assert_eq!(accepted_sequence(&installed), Some(1), "the document landed");
+    assert!(!installed.is_fenced(), "the first document opens admission");
+}
+
 /// A published binding row rebuilds its accepted source under the exact key
 /// its resolved identity produces, through the real publication path.
 ///

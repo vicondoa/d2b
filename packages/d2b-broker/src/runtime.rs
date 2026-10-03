@@ -15970,6 +15970,17 @@ mod tests {
             BrokerCallerRole, BrokerRequest, EnvelopeInvokeRequest, FdKind,
         };
 
+        // The resolver-dependent kernels below are pinned on their
+        // fail-closed missing-intent refusal, so this case makes a claim about
+        // the ABSENCE of a verified bundle. Under `cfg(test)` the resolver
+        // reads the process-wide injected slot in preference to the unused
+        // `bundle_path` above, and the spawn-kernel tests install a real
+        // bundle there for the whole of their own test. Read unguarded, this
+        // case would be answered from a neighbour's fixture and observe its
+        // intent instead of the absence, so it owns the slot for its whole
+        // body - the same pin `the_installed_admitted_effect_table_serves_no_operation`
+        // takes for the same claim.
+        let _no_verified_bundle = TestKernelBundleResolver::empty();
         let root = test_audit_dir("network-kernels-envelope");
         fs::create_dir_all(&root).expect("create test root");
         let config = test_server_config(&root, &root.join("unused-bundle.json"));
@@ -17784,7 +17795,21 @@ mod tests {
 
     /// Drop the test-only kernel bundle override, so the next kernel
     /// invocation falls back to its own on-disk bundle path.
+    ///
+    /// Under [`TEST_KERNEL_BUNDLE_LOCK`], because that slot is shared: every
+    /// installer holds the lock for the whole of its own test and restores
+    /// the previous value on drop, so a clear taken WITHOUT it can land in
+    /// the window between one test releasing the lock and the next test
+    /// acquiring it, and wipe the bundle that second test installed and is
+    /// relying on for the rest of its body. The order stays
+    /// registry-then-bundle on both sides - the guard takes the registry lock
+    /// before this, and every installer runs inside it - so acquiring the
+    /// bundle lock here cannot invert into a cycle.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn clear_test_kernel_bundle() {
+        let _lock = TEST_KERNEL_BUNDLE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         TEST_KERNEL_BUNDLE_RESOLVER
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

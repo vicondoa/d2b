@@ -316,6 +316,27 @@ struct PreparedRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "posture", rename_all = "kebab-case")]
 enum PersistedPosture {
+    /// The broker holds a durable record for the Zone and has accepted
+    /// nothing for it yet.
+    ///
+    /// This is the posture [`Self::zone_mut`] gives a Zone on first sight, and
+    /// it is what makes "a Zone is not unfenced before its first publication"
+    /// hold on the durable leg rather than only on the in-memory one. A
+    /// session open creates the record so the open can be answered with a
+    /// binding, and it does so before the manager has streamed anything; were
+    /// that record `Unfenced`, every ordinary effect between the open and the
+    /// first accepted snapshot would be admitted under an initial cursor with
+    /// no rows and no store generation. The window is not theoretical: the
+    /// open persists (two fsyncs) before the transfer that fences the Zone
+    /// begins, and it is widest exactly when the store is slowest.
+    ///
+    /// It reports as [`ZoneAuthorityState::Unprovisioned`] - no authority here
+    /// rather than authority without a fence - and it is NOT a
+    /// reconciliation: a transfer opened from it installs, because this is
+    /// the Zone's first document and there is no prior projection to prove it
+    /// against. A restart moves it to [`Self::Reconciling`] like every other
+    /// posture that is not a replayable fence.
+    Unprovisioned,
     /// Ordinary admission is open under the accepted cursor.
     Unfenced,
     /// A prepared candidate holds the Zone's new-effect admission.
@@ -483,6 +504,11 @@ impl ProjectionWorkerState {
         let store = zone_state.store_incarnation.clone();
         let accepted = zone_state.accepted.clone();
         match &zone_state.posture {
+            // A record the broker created on first sight has accepted nothing
+            // yet, so it answers with the same "no authority here" posture a
+            // Zone with no record at all answers with - never with an open
+            // admission under an initial cursor.
+            PersistedPosture::Unprovisioned => ZoneAuthorityState::Unprovisioned,
             PersistedPosture::Unfenced => ZoneAuthorityState::Unfenced {
                 store_incarnation: store,
                 accepted,
@@ -555,6 +581,14 @@ impl ProjectionWorkerState {
     }
 
     /// The Zone's durable record, created on first sight.
+    ///
+    /// A record created here has accepted nothing: no snapshot has landed, so
+    /// its posture is [`PersistedPosture::Unprovisioned`] and ordinary
+    /// admission stays closed until the manager's first document is accepted.
+    /// Opening the admission here instead would admit every ordinary effect
+    /// between this creation and the `BeginSnapshot` that follows the open -
+    /// across two fsyncs - under an initial cursor with no rows and no store
+    /// generation.
     fn zone_mut(&mut self, zone: &str) -> &mut PersistedZone {
         self.durable.zones.entry(zone.to_owned()).or_insert_with(|| {
             PersistedZone {
@@ -566,7 +600,7 @@ impl ProjectionWorkerState {
                 root_subject: AuthoritySubject::unresourced(AuthoritySubjectKind::Bootstrap),
                 accepted: AuthorityCursor::initial(),
                 session: None,
-                posture: PersistedPosture::Unfenced,
+                posture: PersistedPosture::Unprovisioned,
                 rows: BTreeMap::new(),
                 effects: BTreeMap::new(),
                 reservations: BTreeMap::new(),
@@ -1928,7 +1962,11 @@ fn prepare_change_locked(
                     true,
                 ));
             }
-            Some(PersistedPosture::Unfenced) => None,
+            // A Zone whose record exists but has accepted nothing holds no
+            // fence to replay and no fence to conflict with: preparing against
+            // its initial cursor is the manager's first move, exactly as it is
+            // for a Zone this broker has opened before.
+            Some(PersistedPosture::Unprovisioned) | Some(PersistedPosture::Unfenced) => None,
         };
         if let Some(prepared) = replay {
             return Ok(PreparedTransaction {
