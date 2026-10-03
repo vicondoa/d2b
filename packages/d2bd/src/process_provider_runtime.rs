@@ -863,10 +863,10 @@ impl std::fmt::Debug for ProductionProcessProviders {
 /// It is the Process family's own declared per-call deadline: every
 /// Process-family row (`SpawnRunner`, and the `spawn_process` kernel it
 /// forwards to) declares `DeadlineTier::Standard`, the carrier mints that
-/// budget for the call, and both execution legs serve it as their handler
-/// deadline. The client therefore waits through both Standard legs, bounded
-/// by the shared context ceiling. A shorter poll abandons a call the broker
-/// is still entitled to serve, and an abandoned spawn is not inert: the
+/// budget for the call. SpawnRunner and its nested spawn-process kernel both
+/// use the Extended tier, so the client waits through the shared context
+/// ceiling. A shorter poll abandons a call the broker is still entitled to
+/// serve, and an abandoned spawn is not inert: the
 /// broker has already created the child and holds its runner registration, so
 /// `reserve_runner_id_for_spawn` refuses every relaunch as a duplicate and
 /// the Process wedges with no recovery.
@@ -4637,21 +4637,13 @@ mod tests {
     };
 
     #[test]
-    fn broker_io_timeout_covers_both_standard_execution_legs() {
-        assert!(
-            BROKER_IO_TIMEOUT
-                > Duration::from_millis(
-                    d2b_contracts_broker::broker_wire::DEFAULT_CONTEXT_DEADLINE_MS
-                        .saturating_mul(2),
-                ),
-            "client polling must outlive both Standard-budget handler legs"
-        );
-        assert!(
-            BROKER_IO_TIMEOUT
-                <= Duration::from_millis(
-                    d2b_contracts_broker::broker_wire::MAX_CONTEXT_DEADLINE_MS,
-                ),
-            "client polling must remain within the shared context ceiling"
+    fn broker_io_timeout_covers_the_nested_extended_execution_path() {
+        assert_eq!(
+            BROKER_IO_TIMEOUT,
+            Duration::from_millis(
+                d2b_contracts_broker::broker_wire::MAX_CONTEXT_DEADLINE_MS,
+            ),
+            "client polling must use the nested path's Extended ceiling"
         );
     }
 
