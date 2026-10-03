@@ -20,6 +20,17 @@
 //! ([`crate::effects_service::ENDPOINT_EFFECTS_SERVICE`]) per zone from the
 //! family's registered factory; no externally built port appears at any
 //! construction site (R2).
+//!
+//! A declaring Provider that realizes a shape this crate knows nothing about
+//! commits it through [`EndpointPurposeVocabulary::committed_endpoint_shape`]
+//! and owns every constant and every field of that match itself: this crate
+//! never names a Provider, a Provider type, or a Provider's vocabulary
+//! (KTD5). A shape committed that way is realized behind one of the two
+//! evidence kinds the shape names - the daemon's private observation of a
+//! host socket ([`crate::facets::HostSocketEvidenceSource`]) or the
+//! generation-fenced producer row the Endpoint itself declares - and the
+//! incarnation token it publishes is a digest over committed facts and the
+//! Provider's own reconnect generation, never over a locator (KTD8).
 
 #![deny(missing_docs)]
 
@@ -34,10 +45,12 @@ mod facets;
 pub mod test_support;
 
 pub use driver::{
-    EndpointDriver, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverError,
-    EndpointDriverFactory, EndpointDriverStatus, EndpointPurposeVocabulary, EndpointRealization,
-    GuestControlProducer, VIRTIOFSD_PURPOSE, endpoint_child_support_ceiling,
+    CommittedEndpointShape, EndpointConnectability, EndpointDriver, EndpointDriverArgs,
+    EndpointDriverEffects, EndpointDriverError, EndpointDriverFactory, EndpointDriverStatus,
+    EndpointPurposeVocabulary, EndpointRealization, GuestControlProducer,
+    ProviderRealizationEvidence, VIRTIOFSD_PURPOSE, endpoint_child_support_ceiling,
     endpoint_descriptor, endpoint_realization, endpoint_spec_decoder,
+    provider_committed_endpoint_shape,
 };
 pub use effects_service::{
     ENDPOINT_EFFECTS_SERVICE, EndpointEffectsService, EndpointEffectsServiceFactory,
@@ -48,6 +61,8 @@ pub use facets::{
     DeviceWorkerEvidenceSource, EndpointAccessDispatch, EndpointAccessDispatchError,
     UnwiredEndpointAccess,
     EndpointEffectFacets, EndpointSocketSource, GuestVmmEvidenceSource,
+    HostSocketEvidenceSource, MIN_REALIZATION_NONCE_CHARS, RealizationHandle,
+    UnwiredHostSocketEvidence,
 };
 
 pub use binding::{

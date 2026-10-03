@@ -33,11 +33,19 @@ pub use process::{
 pub use session_children::{
     COMPOSITOR_BINDING_PURPOSE, COMPOSITOR_BINDING_SLOT, COMPOSITOR_ENDPOINT_FINGERPRINT,
     DISPLAY_EXECUTION_POLICY_ANNOTATION, DisplayEndpointBinding, DisplayEndpointObservation,
-    DisplayEndpointAdmission, FRONTEND_ENDPOINT_FINGERPRINT, PROXY_BINDING_PURPOSE,
+    DisplayEndpointAdmission, DisplayEndpointRole, FRONTEND_ENDPOINT_FINGERPRINT,
+    PROXY_BINDING_PURPOSE,
     PROXY_BINDING_SLOT,
     PROXY_ENDPOINT_FINGERPRINT, admit_display_endpoint, decode_endpoint_spec,
     display_endpoint_bindings,
     durable_compositor_endpoint_ref,
+};
+// The endpoint shapes this Provider commits are reachable only from a test or
+// non-production composition until the ownership cutover installs them as the
+// Endpoint driver's injected vocabulary (U5 -> U6, KTD5).
+#[cfg(any(test, feature = "test-support"))]
+pub use session_children::{
+    DisplayEndpointVocabulary, display_committed_endpoint_shape,
 };
 pub use d2b_provider_endpoint::endpoint::EndpointSpec;
 pub use runtime::{

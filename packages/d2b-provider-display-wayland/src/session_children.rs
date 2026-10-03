@@ -518,6 +518,26 @@ fn durable_endpoint_payload(
     producer_ref: &ResourceRef,
     generation: u64,
 ) -> Result<Vec<u8>, WorkerEffectError> {
+    endpoint_envelope(
+        zone,
+        session_ref,
+        &durable_endpoint_ref(session_uid, role)?,
+        worker_endpoint_spec(session_uid, spec, role, producer_ref)?,
+        generation,
+    )
+}
+
+/// The committed shape of one worker role's private Endpoint row.
+///
+/// This is the ONE derivation of that shape: the durable payload the session
+/// commits and the shape this Provider admits into the Endpoint plane are
+/// the same value, so the two can never drift (KTD5).
+fn worker_endpoint_spec(
+    session_uid: &ResourceUid,
+    spec: &WaylandSessionSpec,
+    role: DisplayProcessRole,
+    producer_ref: &ResourceRef,
+) -> Result<EndpointSpec, WorkerEffectError> {
     let (endpoint_class, transport, purpose, fingerprint) = match role {
         DisplayProcessRole::HostProxy => (
             EndpointClass::Data,
@@ -552,41 +572,36 @@ fn durable_endpoint_payload(
         }
         DisplayProcessRole::GuestFrontend => vec![EndpointOperation::Resolve],
     };
-    let endpoint_spec = EndpointSpec::new(
-        display_provider_ref()?,
-        producer_ref.clone(),
-        endpoint_class,
-        transport,
-        BoundedToken::parse(purpose).map_err(|_| WorkerEffectError::LaunchRejected)?,
-        Some(BoundedText::parse(fingerprint).map_err(|_| WorkerEffectError::LaunchRejected)?),
-        EndpointLocality::CrossDomain,
-        EndpointVisibility::Owner,
-        EndpointAttachmentPolicy::new(
-            matches!(role, DisplayProcessRole::HostProxy),
-            u16::from(matches!(role, DisplayProcessRole::HostProxy)),
-        )
-        .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        EndpointConsumerPolicy::new(allowed_subjects, Vec::new(), allowed_operations)
+    Ok(
+        EndpointSpec::new(
+            display_provider_ref()?,
+            producer_ref.clone(),
+            endpoint_class,
+            transport,
+            BoundedToken::parse(purpose).map_err(|_| WorkerEffectError::LaunchRejected)?,
+            Some(BoundedText::parse(fingerprint).map_err(|_| WorkerEffectError::LaunchRejected)?),
+            EndpointLocality::CrossDomain,
+            EndpointVisibility::Owner,
+            EndpointAttachmentPolicy::new(
+                matches!(role, DisplayProcessRole::HostProxy),
+                u16::from(matches!(role, DisplayProcessRole::HostProxy)),
+            )
             .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        EndpointLifecyclePolicy::RecycleWithProducer,
-    )
-    .map_err(|_| WorkerEffectError::LaunchRejected)?
-    // An empty subject list is the `none` class, not an empty `named` list:
-    // "publishes nothing" and "publishes to nobody I listed" are the same
-    // commitment here, and spelling it as `none` keeps the guest frontend's
-    // endpoint honest about having no in-Zone relationship at all (R20).
-    .with_binding_publication(if published_subjects.is_empty() {
-        EndpointBindingPublication::None
-    } else {
-        EndpointBindingPublication::named(published_subjects)
-            .map_err(|_| WorkerEffectError::LaunchRejected)?
-    });
-    endpoint_envelope(
-        zone,
-        session_ref,
-        &durable_endpoint_ref(session_uid, role)?,
-        endpoint_spec,
-        generation,
+            EndpointConsumerPolicy::new(allowed_subjects, Vec::new(), allowed_operations)
+                .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            EndpointLifecyclePolicy::RecycleWithProducer,
+        )
+        .map_err(|_| WorkerEffectError::LaunchRejected)?
+        // An empty subject list is the `none` class, not an empty `named` list:
+        // "publishes nothing" and "publishes to nobody I listed" are the same
+        // commitment here, and spelling it as `none` keeps the guest frontend's
+        // endpoint honest about having no in-Zone relationship at all (R20).
+        .with_binding_publication(if published_subjects.is_empty() {
+            EndpointBindingPublication::None
+        } else {
+            EndpointBindingPublication::named(published_subjects)
+                .map_err(|_| WorkerEffectError::LaunchRejected)?
+        }),
     )
 }
 
@@ -600,39 +615,226 @@ fn durable_compositor_endpoint_payload(
     spec: &WaylandSessionSpec,
     generation: u64,
 ) -> Result<Vec<u8>, WorkerEffectError> {
-    let proxy_ref = durable_process_ref(session_uid, DisplayProcessRole::HostProxy)?;
-    let endpoint_spec = EndpointSpec::new(
-        display_provider_ref()?,
-        spec.host_ref().clone(),
-        EndpointClass::Transport,
-        EndpointTransport::Unix,
-        BoundedToken::parse(compositor_purpose(spec))
-            .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        Some(
-            BoundedText::parse(expected_compositor_fingerprint(spec))
-                .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        ),
-        EndpointLocality::CrossDomain,
-        EndpointVisibility::Owner,
-        EndpointAttachmentPolicy::new(false, 0)
-            .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        EndpointConsumerPolicy::new(vec![proxy_ref.clone()], Vec::new(), vec![EndpointOperation::Resolve])
-            .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        EndpointLifecyclePolicy::RecycleWithProducer,
-    )
-    .map_err(|_| WorkerEffectError::LaunchRejected)?
-    // The compositor socket is published to exactly one consumer: this
-    // session's host proxy row. Nothing else reaches it.
-    .with_binding_publication(EndpointBindingPublication::named(vec![proxy_ref]).map_err(
-        |_| WorkerEffectError::LaunchRejected,
-    )?);
     endpoint_envelope(
         zone,
         session_ref,
         &durable_compositor_endpoint_ref(session_uid)?,
-        endpoint_spec,
+        compositor_endpoint_spec(session_uid, spec)?,
         generation,
     )
+}
+
+/// The committed shape of the session's host compositor Endpoint row.
+///
+/// This is the ONE derivation of that shape: the durable payload the session
+/// commits and the shape this Provider admits into the Endpoint plane are
+/// the same value, so the two can never drift (KTD5).
+fn compositor_endpoint_spec(
+    session_uid: &ResourceUid,
+    spec: &WaylandSessionSpec,
+) -> Result<EndpointSpec, WorkerEffectError> {
+    let proxy_ref = durable_process_ref(session_uid, DisplayProcessRole::HostProxy)?;
+    Ok(
+        EndpointSpec::new(
+            display_provider_ref()?,
+            spec.host_ref().clone(),
+            EndpointClass::Transport,
+            EndpointTransport::Unix,
+            BoundedToken::parse(compositor_purpose(spec))
+                .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            Some(
+                BoundedText::parse(expected_compositor_fingerprint(spec))
+                    .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            ),
+            EndpointLocality::CrossDomain,
+            EndpointVisibility::Owner,
+            EndpointAttachmentPolicy::new(false, 0)
+                .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            EndpointConsumerPolicy::new(
+                vec![proxy_ref.clone()],
+                Vec::new(),
+                vec![EndpointOperation::Resolve],
+            )
+            .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            EndpointLifecyclePolicy::RecycleWithProducer,
+        )
+        .map_err(|_| WorkerEffectError::LaunchRejected)?
+        // The compositor socket is published to exactly one consumer: this
+        // session's host proxy row. Nothing else reaches it.
+        .with_binding_publication(EndpointBindingPublication::named(vec![proxy_ref]).map_err(
+            |_| WorkerEffectError::LaunchRejected,
+        )?),
+    )
+}
+
+/// The endpoint shapes this Provider commits for one display session.
+///
+/// The roles are the Provider's own vocabulary. The Endpoint plane never names
+/// them: it asks which shape a committed row is, and this Provider answers
+/// with its own exact match (KTD5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayEndpointRole {
+    /// The session's host compositor socket: a transport the session's Host
+    /// execution target resolves privately, reached by exactly one consumer.
+    Compositor,
+    /// The host proxy's private data carriage: the cross-domain attachment the
+    /// session's guest frontend consumes.
+    HostProxy,
+    /// The guest frontend's own cross-domain transport, published to nobody.
+    GuestFrontend,
+}
+
+impl DisplayEndpointRole {
+    /// The realization the Endpoint plane serves this shape behind.
+    ///
+    /// Published because the mapping is this Provider's own vocabulary and a
+    /// reader of a committed row needs to know which evidence stands behind
+    /// it; the admission answers with the same value.
+    pub const fn realization(self) -> d2b_provider_endpoint::EndpointRealization {
+        use d2b_provider_endpoint::EndpointRealization as Realization;
+        match self {
+            // The compositor socket is realized behind the daemon's private
+            // observation of it; both worker shapes are realized behind the
+            // live row of the worker this Provider launched.
+            Self::Compositor => Realization::HostSocketTransport,
+            Self::HostProxy => Realization::WorkerDataAttachment,
+            Self::GuestFrontend => Realization::WorkerCrossDomainTransport,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+use d2b_provider_endpoint::EndpointPurposeVocabulary;
+#[cfg(any(test, feature = "test-support"))]
+use d2b_provider_endpoint::{CommittedEndpointShape, provider_committed_endpoint_shape};
+
+/// The endpoint shapes this Provider has committed, keyed by the producer
+/// each one is realized behind (U5, KTD5).
+///
+/// The vocabulary is a registry rather than a single session's answer because
+/// the Endpoint driver asks about one committed row at a time and a Zone
+/// serves more than one display session. Each entry holds the shape the
+/// Provider committed in full, so the admission is an exact comparison: a
+/// committed row that differs from the committed shape on the provider
+/// reference, the producer, the class, the transport, the purpose, the
+/// locality, the visibility, the lifecycle, the reconnect fingerprint, the
+/// consumer policy, the attachment posture, or the publication intent is
+/// simply not a shape this Provider commits, and the Endpoint driver refuses
+/// it terminally.
+///
+/// The committed shapes are the SAME values the durable child rows are built
+/// from, so the row this Provider commits and the shape this Provider admits
+/// cannot drift apart.
+///
+/// # Wiring
+///
+/// This registry is reachable only from a test or non-production
+/// composition. The production composition keeps exactly one active display
+/// owner - the legacy child derivation above - until the atomic ownership
+/// cutover installs this vocabulary as the injection the Endpoint driver
+/// reads (U6). Until then, admitting these shapes as well would give the
+/// display graph two owners at once, which is why the type is gated.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, Default)]
+pub struct DisplayEndpointVocabulary {
+    committed: std::collections::BTreeMap<String, (EndpointSpec, CommittedEndpointShape)>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl DisplayEndpointVocabulary {
+    /// Commit the three endpoint shapes of one admitted session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkerEffectError::LaunchRejected`] when the session's own
+    /// durable derivation refuses, which is the same answer the durable child
+    /// rows would have given.
+    pub fn for_session(
+        session_uid: &ResourceUid,
+        spec: &WaylandSessionSpec,
+    ) -> Result<Self, WorkerEffectError> {
+        Self::default().with_session(session_uid, spec)
+    }
+
+    /// Commit another session's shapes into this vocabulary.
+    ///
+    /// # Errors
+    ///
+    /// The refusals [`Self::for_session`] reports.
+    pub fn with_session(
+        mut self,
+        session_uid: &ResourceUid,
+        spec: &WaylandSessionSpec,
+    ) -> Result<Self, WorkerEffectError> {
+        let reconnect_generation = spec.reconnect_generation();
+        let proxy_ref = durable_process_ref(session_uid, DisplayProcessRole::HostProxy)?;
+        let frontend_ref = durable_process_ref(session_uid, DisplayProcessRole::GuestFrontend)?;
+        let committed = [
+            (
+                DisplayEndpointRole::Compositor,
+                compositor_endpoint_spec(session_uid, spec)?,
+            ),
+            (
+                DisplayEndpointRole::HostProxy,
+                worker_endpoint_spec(
+                    session_uid,
+                    spec,
+                    DisplayProcessRole::HostProxy,
+                    &proxy_ref,
+                )?,
+            ),
+            (
+                DisplayEndpointRole::GuestFrontend,
+                worker_endpoint_spec(
+                    session_uid,
+                    spec,
+                    DisplayProcessRole::GuestFrontend,
+                    &frontend_ref,
+                )?,
+            ),
+        ];
+        for (role, endpoint) in committed {
+            // The reconnect generation travels with the shape: the shape is
+            // admitted only while its fingerprint is the one this session's
+            // currently authenticated generation mints, and the Endpoint
+            // driver's incarnation derivation is bounded by that same number.
+            self.committed.insert(
+                endpoint.producer_ref().to_canonical_string(),
+                (
+                    endpoint,
+                    CommittedEndpointShape::new(role.realization(), reconnect_generation),
+                ),
+            );
+        }
+        Ok(self)
+    }
+
+    /// The shape this Provider commits for `spec`, matched in full.
+    fn committed_shape(&self, spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
+        self.committed
+            .get(&spec.producer_ref().to_canonical_string())
+            .filter(|(committed, _)| committed == spec)
+            .map(|(_, shape)| *shape)
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl EndpointPurposeVocabulary for DisplayEndpointVocabulary {
+    fn committed_endpoint_shape(&self, spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
+        self.committed_shape(spec)
+    }
+}
+
+/// Whether `spec` is one of the shapes this Provider commits for `session_uid`.
+///
+/// The question the Endpoint driver asks through its own provider-neutral seam,
+/// answered here by this crate's own vocabulary (KTD5).
+#[cfg(any(test, feature = "test-support"))]
+pub fn display_committed_endpoint_shape(
+    vocabulary: &DisplayEndpointVocabulary,
+    spec: &EndpointSpec,
+) -> Option<CommittedEndpointShape> {
+    provider_committed_endpoint_shape(spec, vocabulary)
 }
 
 /// The display Provider reference the session's endpoint rows declare.

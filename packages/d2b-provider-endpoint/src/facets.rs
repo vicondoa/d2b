@@ -3,16 +3,19 @@
 //!
 //! The Endpoint family's driver effects are served by this crate's own
 //! implementation (see [`crate::effects_service`]) over the preserved
-//! endpoint realization. The realization splits into three daemon-owned
-//! surfaces, and each crosses the provider boundary as a declared facet
-//! rather than a daemon call: the host socket effect for the binding-owned
+//! endpoint realization. The realization splits into daemon-owned surfaces,
+//! and each crosses the provider boundary as a declared facet rather than a
+//! daemon call: the host socket effect for the binding-owned
 //! virtiofsd socket (resolve the producer's private socket target and probe
-//! or mutate the bound socket on the host target), and the two
-//! row-evidence probes (the guest-runtime control endpoints read the
-//! guest's committed VMM Process row; the device-worker endpoints read the
-//! producer worker Process row). The purpose derivations that classify one
-//! purpose onto those surfaces are this crate's own knowledge (see
-//! [`crate::effects_service`]), so the facets never see a purpose decision.
+//! or mutate the bound socket on the host target), the two row-evidence
+//! probes (the guest-runtime control endpoints read the guest's committed
+//! VMM Process row; the device-worker endpoints read the producer worker
+//! Process row), and the private host observation a Provider-committed
+//! socket shape is realized behind. The purpose derivations that classify
+//! one purpose onto those surfaces are this crate's own knowledge (see
+//! [`crate::effects_service`]), so the facets never see a purpose decision,
+//! and a host observation answers with an opaque minted handle rather than
+//! with the socket it looked at (KTD8).
 
 use std::sync::Arc;
 
@@ -20,6 +23,7 @@ use async_trait::async_trait;
 use d2b_contracts_broker::broker_wire::{
     EndpointAccessRequest, EndpointAccessResponse, EndpointAccessVerb,
 };
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, redacted_debug};
 use d2b_contracts_resource::v3::ResourceRef;
 
 /// The daemon-supplied facet set the provider-owned Endpoint effects are
@@ -88,6 +92,106 @@ pub trait GuestVmmEvidenceSource: Send + Sync + 'static {
 pub trait DeviceWorkerEvidenceSource: Send + Sync + 'static {
     /// Whether the producer's evidence row reports `Ready`.
     async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool;
+}
+
+/// The narrowest nonce a realization-handle source may offer (KTD8).
+///
+/// KTD8 sets the floor for an incarnation token at 128 bits of
+/// unpredictability. The handle takes its nonce from the source that mints
+/// it, so this is the width that floor names. The width is a FLOOR on the
+/// source's claim and never a proof of its entropy; it exists so a source
+/// that cannot state 128 bits cannot be installed as the fence a launch
+/// gate compares.
+pub const MIN_REALIZATION_NONCE_CHARS: usize = 32;
+
+/// The daemon-minted opaque handle of one realization that is CURRENT.
+///
+/// A handle is minted when the realization it names becomes current and
+/// rotated when that realization is replaced or when the daemon restarts:
+/// the daemon is the only party that knows both, so the daemon mints it.
+///
+/// Nothing about WHERE the realization lives takes part. No path, no
+/// `(dev, ino)` pair, and no socket name enters a handle, so it cannot be
+/// turned back into a locator by anyone who reads one; `Debug` renders the
+/// redacted marker rather than the value, so a log line built from a handle
+/// leaks neither the token nor the thing it names (KTD8, R15).
+#[derive(Clone, PartialEq, Eq)]
+pub struct RealizationHandle {
+    nonce: BoundedToken,
+    rotation: u64,
+}
+
+impl RealizationHandle {
+    /// Bind one minted handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns `None` when the nonce is narrower than
+    /// [`MIN_REALIZATION_NONCE_CHARS`]: a source that cannot state the
+    /// KTD8 floor has not minted an incarnation fence, and installing one
+    /// anyway would make a guessable token the thing a launch gate trusts.
+    pub fn mint(nonce: BoundedToken, rotation: u64) -> Option<Self> {
+        if nonce.as_str().len() < MIN_REALIZATION_NONCE_CHARS {
+            return None;
+        }
+        Some(Self { nonce, rotation })
+    }
+
+    /// Borrow the opaque minted nonce.
+    ///
+    /// Only a realization-incarnation derivation reads this value: it is an
+    /// input to a digest, never something a projection or a log carries.
+    pub const fn nonce(&self) -> &BoundedToken {
+        &self.nonce
+    }
+
+    /// The rotation counter this handle was minted at.
+    ///
+    /// The counter moves when the realization is replaced and when the
+    /// daemon restarts, so it is one of the facts a replacement cannot
+    /// reproduce.
+    pub const fn rotation(&self) -> u64 {
+        self.rotation
+    }
+}
+
+redacted_debug!(RealizationHandle);
+
+/// The daemon-supplied private host observation (U5, KTD5, KTD8).
+///
+/// A host socket realization is resolved and owned by the daemon: it knows
+/// the locator the endpoint owner committed, the exact socket that locator
+/// currently stands for, and whether that socket accepts a connection. None
+/// of that crosses this facet - only the minted [`RealizationHandle`] does,
+/// and only for an observation that proved it (KTD8).
+#[async_trait]
+pub trait HostSocketEvidenceSource: Send + Sync + 'static {
+    /// The realization standing behind `endpoint_ref` for `purpose`, or
+    /// `None` when nothing is standing there.
+    ///
+    /// The three ways a socket can fail to be the one this endpoint named -
+    /// nothing bound at the locator, something bound that does not accept a
+    /// connection, and a socket replaced under the same locator - are ONE
+    /// answer here. They read the same way to a consumer, so the facet
+    /// answers the same way, and the exact socket identity stays inside the
+    /// daemon that compared it.
+    async fn observe(&self, endpoint_ref: &ResourceRef, purpose: &str) -> Option<RealizationHandle>;
+}
+
+/// The host observation a plane built without a daemon can answer with.
+///
+/// A host socket realization belongs to the daemon that owns it (KTD5), so a
+/// plane carrying no daemon has observed no exact socket and answers none:
+/// the endpoint behind it stays unrealized instead of reporting readiness
+/// nothing proved.
+#[derive(Clone, Copy, Default)]
+pub struct UnwiredHostSocketEvidence;
+
+#[async_trait]
+impl HostSocketEvidenceSource for UnwiredHostSocketEvidence {
+    async fn observe(&self, _endpoint_ref: &ResourceRef, _purpose: &str) -> Option<RealizationHandle> {
+        None
+    }
 }
 
 /// Why one exact-endpoint dispatch did not answer.

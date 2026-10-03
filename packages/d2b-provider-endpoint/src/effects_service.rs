@@ -35,8 +35,10 @@ use d2b_provider_toolkit::{
 };
 use d2b_resource_types::{ServiceDecl, ServiceMethod};
 
-use crate::driver::{EndpointDriverEffects, EndpointPurposeVocabulary, GuestControlProducer};
-use crate::endpoint::EndpointClass;
+use crate::driver::{
+    CommittedEndpointShape, EndpointDriverEffects, EndpointPurposeVocabulary, GuestControlProducer,
+};
+use crate::endpoint::{EndpointClass, EndpointSpec};
 use crate::facets::EndpointEffectFacets;
 
 /// The bounded budget one endpoint realization waits for its evidence
@@ -205,6 +207,18 @@ impl EndpointPurposeVocabulary for EndpointEffectsService {
     fn device_worker_endpoint_class(&self, purpose: &str) -> Option<EndpointClass> {
         device_worker_endpoint_class(purpose)
     }
+
+    fn committed_endpoint_shape(
+        &self,
+        _spec: &EndpointSpec,
+    ) -> Option<CommittedEndpointShape> {
+        // No Provider vocabulary is injected into the production composition
+        // yet, so no Provider-committed shape is admitted here (U5). The
+        // seam exists and this value is the closed answer; U6's ownership
+        // cutover is where a composition root injects a Provider's own
+        // implementation and the committed shapes become reachable.
+        None
+    }
 }
 
 #[async_trait]
@@ -255,6 +269,19 @@ impl EndpointDriverEffects for EndpointEffectsService {
             return Ok(());
         }
         self.socket.remove(producer_ref, purpose).await
+    }
+
+    async fn observe_host_socket(
+        &self,
+        _endpoint_ref: &ResourceRef,
+        _purpose: &str,
+    ) -> Option<crate::facets::RealizationHandle> {
+        // The private host observation is the daemon's own facet and it is
+        // not wired into this construction yet (U6). Answering `None` is the
+        // honest answer for a composition that carries no daemon: a
+        // Provider-committed host socket shape stays unrealized rather than
+        // reporting a readiness no observation proved.
+        None
     }
 }
 

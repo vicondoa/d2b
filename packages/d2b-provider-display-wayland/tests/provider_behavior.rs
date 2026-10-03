@@ -1,9 +1,11 @@
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
 use d2b_provider_display_wayland::{
-    DisplayController, DisplayIdentity, DisplayLabelPosition, DisplayProcessRole, FilterInput,
-    Phase, PolicyWarning, PrincipalPool, ProcessObservation, WaylandPolicy, WaylandPolicySnapshot,
-    WaylandSessionSpec,
+    DisplayController, DisplayEndpointVocabulary, DisplayIdentity, DisplayLabelPosition,
+    DisplayProcessRole, EndpointSpec, FilterInput, Phase, PolicyWarning, PrincipalPool,
+    ProcessObservation, WaylandPolicy, WaylandPolicySnapshot, WaylandSessionSpec,
+    display_committed_endpoint_shape,
 };
+use d2b_provider_endpoint::{CommittedEndpointShape, EndpointRealization};
 
 fn refs() -> (ResourceRef, ResourceRef, ResourceRef, ResourceRef) {
     (
@@ -872,4 +874,230 @@ fn filtering_still_applies_to_a_session_with_admitted_endpoint_access() {
     assert!(!compiled.is_allowed("zwp_linux_dmabuf_v1"));
     assert!(!compiled.is_allowed("wl_data_device_manager"));
     assert!(compiled.is_allowed("wl_compositor"));
+}
+
+// -- the endpoint shapes this Provider commits (U5, KTD5) ----------------------
+
+/// The session uid one committed set of shapes is derived from.
+fn committed_session_uid() -> ResourceUid {
+    ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap()
+}
+
+/// One admitted display session: its committed spec and its durable row
+/// identity.
+fn committed_session() -> (ResourceUid, ResourceRef, WaylandSessionSpec) {
+    let spec = WaylandSessionSpec::new(
+        ResourceRef::parse("Guest/work").unwrap(),
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ResourceRef::parse("User/alice").unwrap(),
+        ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/default").unwrap(),
+        DisplayIdentity::new("work", "#112233", "#223344", "#334455").unwrap(),
+        true,
+    )
+    .unwrap();
+    (
+        committed_session_uid(),
+        ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland").unwrap(),
+        spec,
+    )
+}
+
+/// The endpoint contracts the session's durable child rows carry, decoded back
+/// out of the envelopes it commits.
+fn committed_endpoint_specs(
+    uid: &ResourceUid,
+    session_ref: &ResourceRef,
+    spec: &WaylandSessionSpec,
+) -> Vec<EndpointSpec> {
+    d2b_provider_display_wayland::session_children::display_owned_child_intents(
+        &ZoneId::parse("work").unwrap(),
+        session_ref,
+        uid,
+        spec,
+        4,
+    )
+    .unwrap()
+    .into_iter()
+    .filter(|intent| intent.target().resource_type().as_str() == "Endpoint")
+    .map(|intent| {
+        let value: serde_json::Value =
+            serde_json::from_slice(intent.canonical_resource()).unwrap();
+        serde_json::from_value(value["spec"].clone()).unwrap()
+    })
+    .collect()
+}
+
+/// One committed shape with a single field edited, built through the contract's
+/// own wire form so the result still decodes as a valid Endpoint spec: a
+/// look-alike, not a malformed row.
+fn mutated(spec: &EndpointSpec, field: &str, value: serde_json::Value) -> EndpointSpec {
+    let mut wire = serde_json::to_value(spec).unwrap();
+    wire.as_object_mut().unwrap().insert(field.to_owned(), value);
+    serde_json::from_value(wire).unwrap()
+}
+
+/// The vocabulary admits exactly the three shapes the session's durable rows
+/// carry, each with the realization it is served behind and the reconnect
+/// generation its fingerprint is bound to (R14, R15).
+///
+/// The rows are read back out of the envelopes the session commits, so this
+/// case proves the two derivations are ONE: what this Provider admits into the
+/// Endpoint plane is exactly what it commits as a child row.
+#[test]
+fn the_vocabulary_admits_exactly_the_three_durable_shapes() {
+    let (uid, session_ref, spec) = committed_session();
+    let vocabulary = DisplayEndpointVocabulary::for_session(&uid, &spec).unwrap();
+    let shapes = committed_endpoint_specs(&uid, &session_ref, &spec);
+    assert_eq!(shapes.len(), 3, "the session commits three endpoint rows");
+
+    let expected = [
+        (0, EndpointRealization::HostSocketTransport),
+        (1, EndpointRealization::WorkerDataAttachment),
+        (2, EndpointRealization::WorkerCrossDomainTransport),
+    ];
+    for (index, realization) in expected {
+        let committed = display_committed_endpoint_shape(&vocabulary, &shapes[index]);
+        assert_eq!(
+            committed.map(CommittedEndpointShape::realization),
+            Some(realization),
+            "the committed row is the shape the Endpoint plane serves"
+        );
+        assert_eq!(
+            committed.map(CommittedEndpointShape::reconnect_generation),
+            Some(spec.reconnect_generation()),
+            "and the shape is bound to this session's reconnect generation"
+        );
+    }
+}
+
+/// A look-alike on ANY committed axis is a shape this Provider does not commit,
+/// and the Endpoint driver refuses it terminally (R14).
+#[test]
+fn a_look_alike_on_any_committed_axis_is_not_committed() {
+    let (uid, session_ref, spec) = committed_session();
+    let vocabulary = DisplayEndpointVocabulary::for_session(&uid, &spec).unwrap();
+    let shapes = committed_endpoint_specs(&uid, &session_ref, &spec);
+    let proxy = shapes
+        .iter()
+        .find(|shape| shape.producer_ref().resource_type().as_str() == "Process")
+        .expect("the host proxy's own endpoint row");
+    assert!(
+        display_committed_endpoint_shape(&vocabulary, proxy).is_some(),
+        "the committed proxy shape is admitted"
+    );
+
+    let look_alikes = [
+        (
+            "provider",
+            mutated(
+                proxy,
+                "providerRef",
+                serde_json::json!("Provider/device-tpm"),
+            ),
+        ),
+        (
+            "producer",
+            mutated(proxy, "producerRef", serde_json::json!("Process/impostor")),
+        ),
+        ("class", mutated(proxy, "endpointClass", serde_json::json!("service"))),
+        ("transport", mutated(proxy, "transport", serde_json::json!("tcp"))),
+        (
+            "purpose",
+            mutated(proxy, "purpose", serde_json::json!("wayland-other")),
+        ),
+        (
+            "locality",
+            mutated(proxy, "locality", serde_json::json!("host-local")),
+        ),
+        (
+            "visibility",
+            mutated(proxy, "visibility", serde_json::json!("provider")),
+        ),
+        (
+            "lifecycle",
+            mutated(proxy, "lifecyclePolicy", serde_json::json!("pinned")),
+        ),
+        (
+            "attachment",
+            mutated(
+                proxy,
+                "attachmentPolicy",
+                serde_json::json!({"supported": true, "maxAttachments": 2}),
+            ),
+        ),
+        (
+            "publication",
+            mutated(proxy, "bindingPublication", serde_json::json!("none")),
+        ),
+    ];
+    assert_eq!(look_alikes.len(), 10, "every committed axis is covered");
+    for (axis, look_alike) in look_alikes {
+        assert_ne!(&look_alike, proxy, "the {axis} fixture is edited");
+        assert!(
+            display_committed_endpoint_shape(&vocabulary, &look_alike).is_none(),
+            "this Provider commits no {axis} look-alike"
+        );
+    }
+}
+
+/// A shape minted for another reconnect generation is not a shape this
+/// Provider commits now (R15).
+///
+/// The fingerprint is bound to the generation the session currently
+/// authenticates, so a row still carrying an earlier generation's fingerprint
+/// is refused rather than realized under the current one.
+#[test]
+fn a_shape_from_another_reconnect_generation_is_not_committed() {
+    let (uid, session_ref, spec) = committed_session();
+    let later = WaylandSessionSpec::new(
+        spec.guest_ref().clone(),
+        spec.host_ref().clone(),
+        spec.user_ref().clone(),
+        spec.policy_ref().clone(),
+        DisplayIdentity::new("work", "#112233", "#223344", "#334455").unwrap(),
+        true,
+    )
+    .unwrap()
+    .with_reconnect_generation(spec.reconnect_generation() + 1)
+    .unwrap();
+    let now = committed_endpoint_specs(&uid, &session_ref, &spec);
+    let next = committed_endpoint_specs(&uid, &session_ref, &later);
+    assert_ne!(now, next, "the fingerprint is bound to the generation");
+
+    let vocabulary = DisplayEndpointVocabulary::for_session(&uid, &spec).unwrap();
+    for shape in &now {
+        assert!(
+            display_committed_endpoint_shape(&vocabulary, shape).is_some(),
+            "the current generation's shapes are committed"
+        );
+    }
+    for shape in &next {
+        assert!(
+            display_committed_endpoint_shape(&vocabulary, shape).is_none(),
+            "the next generation's fingerprint is not a shape this session commits yet"
+        );
+    }
+    let advanced = DisplayEndpointVocabulary::for_session(&uid, &later).unwrap();
+    for shape in &next {
+        assert_eq!(
+            display_committed_endpoint_shape(&advanced, shape)
+                .map(CommittedEndpointShape::reconnect_generation),
+            Some(spec.reconnect_generation() + 1),
+            "and once it does commit them, each shape carries that generation"
+        );
+    }
+}
+
+/// One session's vocabulary commits nothing of another session's.
+#[test]
+fn a_vocabulary_commits_only_its_own_sessions_shapes() {
+    let (uid, session_ref, spec) = committed_session();
+    let other_uid = ResourceUid::parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").unwrap();
+    let vocabulary = DisplayEndpointVocabulary::for_session(&uid, &spec).unwrap();
+    for shape in committed_endpoint_specs(&other_uid, &session_ref, &spec) {
+        assert!(
+            display_committed_endpoint_shape(&vocabulary, &shape).is_none(),
+            "another session's endpoint row is not a shape this vocabulary commits"
+        );
+    }
 }
