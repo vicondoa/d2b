@@ -249,7 +249,6 @@ struct AuthorityRegistry {
 /// Run the authority's gates: parity, drift, and regeneration idempotence,
 /// over every artifact the authority emits: the Rust type authority const and
 /// the Nix type registry and resource inventory.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn check(repo_root: &Path) -> Result<(), String> {
     let registry = load(repo_root)?;
     let errors = parity_errors(&registry);
@@ -323,7 +322,6 @@ pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 /// inventory. The Nix registry and the inventory's `coreSchemaPointers` are
 /// derived from the declared standard (unqualified) types; the inventory's
 /// remaining tables are committed facts the shared renderer holds.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn render_artifacts(
     repo_root: &Path,
     registry: &AuthorityRegistry,
@@ -355,7 +353,6 @@ fn render_artifacts(
 /// allocation, which the new graph does not read. The declaration-internal
 /// gates run here; the source-parity gate stays a separate cross-check the
 /// new-graph closure runs over the composition.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, String> {
     let loaded = load_declarations(repo_root)?;
     let registry = AuthorityRegistry {
@@ -705,7 +702,6 @@ fn load_sources(
 
 /// Extract the type names each declaring crate's descriptor registers from
 /// its Rust sources.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_descriptors(
     repo_root: &Path,
     sources: &BTreeMap<String, String>,
@@ -1011,7 +1007,6 @@ fn authority_bound_errors(registry: &AuthorityRegistry) -> Vec<String> {
 }
 
 /// Emit the generated authority artifact text.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn render(registry: &AuthorityRegistry) -> Result<String, String> {
     let mut declared_all = BTreeSet::new();
     for types in registry.declarations.values() {
@@ -1327,7 +1322,6 @@ pub(crate) mod declaration_fixture {
 }
 
 #[cfg(test)]
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 mod tests {
     use super::*;
     use std::fs;
@@ -1383,7 +1377,6 @@ mod tests {
             Self { root }
         }
 
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write(&self, relative: &str, content: &str) {
             self.write_raw(relative, content);
             self.write_identity_for(relative);
@@ -1405,7 +1398,6 @@ mod tests {
         /// deliberate null on every surface unless the caller named a product
         /// identity, which is the honest row for a crate whose only
         /// plane-facing surface is its ResourceType vocabulary.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_identity(&self, crate_name: &str, product: Option<&str>) {
             let family = crate_name.strip_prefix("d2b-provider-").expect("provider prefix");
             let named = product.unwrap_or(family);
@@ -1436,7 +1428,6 @@ mod tests {
         /// Plant the identity declaration for whichever provider crate this
         /// write just stood up, so a fixture that adds a crate does not have
         /// to remember the authority as well as the declaration.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_identity_for(&self, relative: &str) {
             let Some(path) = relative.strip_prefix("packages/") else {
                 return;
@@ -1465,7 +1456,6 @@ mod tests {
         /// standard type, the four semantic projection schemas, and the two provider
         /// farm schemas. The render only verifies existence, so empty files
         /// suffice.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_nix_inventory_schemas(&self, standard_types: &[&str]) {
             for resource_type in standard_types {
                 self.write(
@@ -1494,7 +1484,6 @@ mod tests {
         /// parity and authority-bound gates have their surface. Passing a
         /// spelled list different from the declared names drives the parity
         /// disagreement direction.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_process_fixture(
             &self,
             roles: &[(&str, Option<&str>, Option<&str>)],
@@ -1888,7 +1877,6 @@ mod tests {
     /// spell fails the role parity naming both the crate and the role, and a
     /// role the sources spell that the declaration omits fails the same way.
     #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_role_parity_fails_when_the_declaration_disagrees_with_the_descriptor() {
         let fixture = Fixture::new("role-parity");
         fixture.write_well_known();
@@ -1933,7 +1921,6 @@ mod tests {
     /// A role declared by two crates fails the role parity naming both
     /// crates.
     #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_role_parity_fails_when_two_crates_declare_the_same_role() {
         let fixture = Fixture::new("role-twice");
         fixture.write_well_known();
@@ -1965,7 +1952,6 @@ mod tests {
     /// A role whose owning provider reference is not a `Provider/<name>`
     /// reference fails the role parity naming the role.
     #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_role_parity_fails_on_a_malformed_provider_reference() {
         let fixture = Fixture::new("role-provider-ref");
         fixture.write_well_known();

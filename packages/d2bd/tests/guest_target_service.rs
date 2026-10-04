@@ -763,39 +763,38 @@ const INCARNATION: &str = "incarnation-1";
 /// from its own record. It never composes either half itself.
 #[derive(Default)]
 struct ProcessEffect {
-    applied: StdMutex<Vec<(String, Vec<u8>)>>,
-    removed: StdMutex<Vec<ResourceKey>>,
-    present: StdMutex<bool>,
-    discovery: StdMutex<Option<GuestTargetEffectError>>,
+    applied: tokio::sync::Mutex<Vec<(String, Vec<u8>)>>,
+    removed: tokio::sync::Mutex<Vec<ResourceKey>>,
+    present: tokio::sync::Mutex<bool>,
+    discovery: tokio::sync::Mutex<Option<GuestTargetEffectError>>,
 }
 
 impl ProcessEffect {
     fn absent() -> Arc<Self> {
         Arc::new(Self {
-            present: StdMutex::new(false),
+            present: tokio::sync::Mutex::new(false),
             ..Self::default()
         })
     }
 
-    fn applied(&self) -> Vec<(String, Vec<u8>)> {
-        self.applied.lock().expect("applied").clone()
+    async fn applied(&self) -> Vec<(String, Vec<u8>)> {
+        self.applied.lock().await.clone()
     }
 
-    fn removed(&self) -> Vec<ResourceKey> {
-        self.removed.lock().expect("removed").clone()
+    async fn removed(&self) -> Vec<ResourceKey> {
+        self.removed.lock().await.clone()
     }
 
     /// Refuse every discovery, the way a target whose local effect cannot be
     /// confirmed behaves.
     fn blind() -> Arc<Self> {
         Arc::new(Self {
-            discovery: StdMutex::new(Some(GuestTargetEffectError::Unavailable)),
+            discovery: tokio::sync::Mutex::new(Some(GuestTargetEffectError::Unavailable)),
             ..Self::default()
         })
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[async_trait]
 impl GuestTargetEffect for ProcessEffect {
     async fn realize(
@@ -804,24 +803,22 @@ impl GuestTargetEffect for ProcessEffect {
     ) -> Result<(), GuestTargetEffectError> {
         // The effect applies exactly the bytes the Host resolved and never
         // composes a shape of its own.
-        self.applied.lock().expect("applied").push( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            (request.spec_digest().to_owned(), request.spec().to_vec()),
-        );
-        *self.present.lock().expect("present") = true; // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        self.applied.lock().await.push((request.spec_digest().to_owned(), request.spec().to_vec()));
+        *self.present.lock().await = true;
         Ok(())
     }
 
     async fn delete(&self, source: &ResourceKey) -> Result<(), GuestTargetEffectError> {
-        self.removed.lock().expect("removed").push(source.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-        *self.present.lock().expect("present") = false; // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        self.removed.lock().await.push(source.clone());
+        *self.present.lock().await = false;
         Ok(())
     }
 
     async fn adopt(&self, _source: &ResourceKey) -> Result<bool, GuestTargetEffectError> {
-        if let Some(error) = *self.discovery.lock().expect("discovery") { // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        if let Some(error) = *self.discovery.lock().await {
             return Err(error);
         }
-        Ok(*self.present.lock().expect("present")) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        Ok(*self.present.lock().await)
     }
 }
 
@@ -1069,7 +1066,7 @@ async fn a_generic_process_row_completes_its_lifecycle_over_the_authenticated_ta
         .expect("the realize frame is applied");
     assert_eq!(instance.state(), TargetInstanceState::Ready);
     assert_eq!(instance.source(), &process_source("worker"));
-    let applied = scene.effect.applied();
+    let applied = scene.effect.applied().await;
     assert_eq!(applied.len(), 1, "exactly one realization was applied");
     assert_eq!(
         applied[0].0,
@@ -1099,7 +1096,7 @@ async fn a_generic_process_row_completes_its_lifecycle_over_the_authenticated_ta
 
     // Stop removes exactly this row's realization, and a repeat converges.
     assert!(rebound.delete().await.expect("delete"));
-    assert_eq!(scene.effect.removed(), vec![process_source("worker")]);
+    assert_eq!(scene.effect.removed().await, vec![process_source("worker")]);
     assert!(rebound.delete().await.expect("a repeated delete converges"));
 
     scene.serving.abort();
@@ -1185,7 +1182,7 @@ async fn a_process_realization_is_fenced_on_the_session_the_authority_zoomoves()
     );
 
     assert!(
-        scene.effect.applied().is_empty(),
+        scene.effect.applied().await.is_empty(),
         "not one refused frame reached the target-local effect"
     );
     scene.serving.abort();
@@ -1229,7 +1226,7 @@ async fn a_lost_session_makes_the_process_target_unavailable_without_deleting_an
         "no realization is issued over a session that is gone"
     );
     assert!(
-        scene.effect.removed().is_empty(),
+        scene.effect.removed().await.is_empty(),
         "a lost session deletes nothing"
     );
     assert!(
@@ -1311,7 +1308,7 @@ async fn an_unregistered_guest_target_type_stays_refused_with_no_phantom_realiza
         scene.runtime.instance(&source("relay")).is_none(),
         "the refusal left no realization behind"
     );
-    assert!(scene.effect.applied().is_empty());
+    assert!(scene.effect.applied().await.is_empty());
     scene.serving.abort();
     let _ = scene.serving.await;
 }

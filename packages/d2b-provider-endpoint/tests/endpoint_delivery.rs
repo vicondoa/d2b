@@ -1722,20 +1722,20 @@ enum ScriptedAnswer {
 /// wire's absent class, some other refusal, and a dispatch that never answered
 /// are four different proofs, and only the first two may retire a row.
 struct ScriptedDispatch {
-    answer: Mutex<ScriptedAnswer>,
+    answer: tokio::sync::Mutex<ScriptedAnswer>,
     /// The inode this dispatch pins on the next answer. A case moves it
     /// between passes so a producer that replaced its socket reads as a
     /// replacement rather than as the same delivery twice.
-    pinned: Mutex<u64>,
-    sent: Mutex<Vec<EndpointAccessVerb>>,
+    pinned: tokio::sync::Mutex<u64>,
+    sent: tokio::sync::Mutex<Vec<EndpointAccessVerb>>,
 }
 
 impl ScriptedDispatch {
     fn new(answer: ScriptedAnswer) -> Arc<Self> {
         Arc::new(Self {
-            answer: Mutex::new(answer),
-            pinned: Mutex::new(0x5150),
-            sent: Mutex::new(Vec::new()),
+            answer: tokio::sync::Mutex::new(answer),
+            pinned: tokio::sync::Mutex::new(0x5150),
+            sent: tokio::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -1755,13 +1755,13 @@ impl ScriptedDispatch {
 
     /// Move the inode this dispatch pins, the way a producer that replaced
     /// its socket moves it.
-    fn pin(&self, inode: u64) {
-        *self.pinned.lock().expect("pinned lock") = inode;
+    async fn pin(&self, inode: u64) {
+        *self.pinned.lock().await = inode;
     }
 
     /// Every verb this dispatch was asked for, in order.
-    fn sent(&self) -> Vec<EndpointAccessVerb> {
-        self.sent.lock().expect("sent lock").clone()
+    async fn sent(&self) -> Vec<EndpointAccessVerb> {
+        self.sent.lock().await.clone()
     }
 }
 
@@ -1772,14 +1772,15 @@ impl EndpointAccessDispatch for ScriptedDispatch {
         verb: EndpointAccessVerb,
         request: EndpointAccessRequest,
     ) -> Result<EndpointAccessResponse, EndpointAccessDispatchError> {
-        self.sent.lock().expect("sent lock").push(verb); // async-gate-allow: fixture records the scripted verb under a short guard and holds no await
-        match self.answer.lock().expect("answer lock").clone() { // async-gate-allow: fixture answers the scripted dispatch under a short guard and holds no await
+        self.sent.lock().await.push(verb);
+        let answer = self.answer.lock().await.clone();
+        match answer {
             ScriptedAnswer::Answered => Ok(EndpointAccessResponse {
                 endpoint_ref: request.endpoint_ref.clone(),
                 consumer_ref: request.consumer_ref.clone(),
                 socket: request.socket.clone(),
                 socket_device: 0xfd00,
-                socket_inode: *self.pinned.lock().expect("pinned lock"), // async-gate-allow: fixture reads the pinned inode under a short guard and holds no await
+                socket_inode: *self.pinned.lock().await,
                 socket_effective_rights: 0o6,
                 ancestors_traversable: true,
                 parent_listable: false,
@@ -1910,7 +1911,7 @@ async fn cleanup_retains_ownership_until_the_broker_proves_the_release() {
         "a narrowed policy retains the relationship: the entry it once admitted may be standing"
     );
     assert_eq!(
-        dispatch.sent(),
+        dispatch.sent().await,
         vec![EndpointAccessVerb::Revoke],
         "and the revoke still reached the broker rather than being skipped"
     );
@@ -1929,7 +1930,7 @@ async fn cleanup_retains_ownership_until_the_broker_proves_the_release() {
         "a missing parent retains the relationship: an absent source is not an absent grant"
     );
     assert_eq!(
-        dispatch.sent(),
+        dispatch.sent().await,
         vec![EndpointAccessVerb::Revoke],
         "the revoke is derived from the row, not from the parent that is gone"
     );
@@ -1962,7 +1963,7 @@ async fn cleanup_retains_ownership_until_the_broker_proves_the_release() {
         "a malformed row retains the relationship even from an answering broker"
     );
     assert!(
-        dispatch.sent().is_empty(),
+        dispatch.sent().await.is_empty(),
         "and it asks nothing: bytes that are not this relationship name no entry"
     );
 
@@ -2304,7 +2305,7 @@ async fn an_endpoint_waits_for_every_relationship_it_still_owns() {
     )
     .await;
     driver.reconcile(&mut ctx).await.expect("the first pass converges");
-    dispatch.pin(0x5151);
+    dispatch.pin(0x5151).await;
     driver.reconcile(&mut ctx).await.expect("the rebound pass converges");
     assert!(
         matches!(

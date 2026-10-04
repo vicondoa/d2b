@@ -679,13 +679,13 @@ pub(crate) struct ProcessDriver {
     budget: Arc<RestartBudget>,
     ephemeral: Arc<EphemeralRuntime>,
     durable: Arc<DurableRuntime>,
-    /// The dependency rows this actor currently holds a live evidence watch
-    /// on, each with the registration standing in that row's mailbox and the
-    /// evidence it was armed against. A runtime watch is one-shot (AE2), so
-    /// this is the LIVE set and not a record of rows once watched: a
-    /// registration whose target has since moved its evidence is spent, and
-    /// the next pass releases it and arms the row again, which is what keeps
-    /// the subscription alive past its first projection change (R21).
+    /// The dependency rows this actor currently holds an evidence watch on,
+    /// each with the registration standing in that row's mailbox. A runtime
+    /// watch is one-shot (AE2), so this is the LIVE set and not a record of
+    /// rows once watched: a registration the target has since notified on is
+    /// spent, and the next pass releases it and arms the row again, which is
+    /// what keeps the subscription alive past its first projection change
+    /// (R21).
     watched: Vec<ArmedWatch>,
     /// The authenticated Guest target transport of this row, re-bound to the
     /// live session generation (R19, R29). `None` for a Host-targeted row and
@@ -915,56 +915,24 @@ const ENDPOINT_ROW_TYPE: &str = "Endpoint";
 struct BindingObservation {
     expected: Vec<ExpectedBindingRow>,
     observed: Vec<ObservedBinding>,
-    /// The rows this read took evidence from: the endpoints it derived
+    /// The rows this pass subscribes to: the endpoints it derived
     /// expectations from and the relationships it observed.
-    dependencies: Vec<DependencyRow>,
+    dependencies: Vec<ResourceKey>,
 }
 
-/// One dependency row this pass subscribes to, beside the evidence its watch
-/// conditions are evaluated against.
+/// One armed internal watch: the dependency, and the registration standing in
+/// that dependency's mailbox.
 ///
-/// The evidence is captured from the SAME view the gate read, so arming costs
-/// no manager read of its own. `None` is a row this pass named but could not
-/// read - the read faulted at or before it - and the subscription still
-/// belongs to that row: it is left exactly as it stands rather than released,
-/// because a row this pass never reached says nothing about whether the
-/// registration on it is still live.
-#[derive(Clone)]
-struct DependencyRow {
-    key: ResourceKey,
-    evidence: Option<WatchEvidence>,
-}
-
-/// The evidence one dependency row's watch conditions are evaluated against.
-///
-/// Exactly the pair its own actor compares when it publishes a transition
-/// (R11): the phase for [`WatchCondition::Ready`], the projection layer for
-/// [`WatchCondition::ProjectionChanged`]. A row mid-pass republishes both as
-/// its pass concludes, so a fingerprint that moved is a registration the
-/// target has already satisfied and removed, and one that stood is a
-/// registration still live in the target's mailbox - which is what makes
-/// re-arming on a moved fingerprint both necessary and sufficient (AE2, R12,
-/// R21).
-#[derive(Clone, PartialEq)]
-struct WatchEvidence {
-    status: Option<ResourceStatus>,
-    projection: Option<serde_json::Value>,
-}
-
-impl WatchEvidence {
-    /// The evidence one manager view carries, read as the actor published it.
-    fn of(view: &ResourceView) -> Self {
-        Self { status: view.status.clone(), projection: view.status_projection.clone() }
-    }
-}
-
-/// One armed internal watch: the dependency, the registration id standing in
-/// that dependency's mailbox, and the evidence it was armed against.
+/// The id IS the record. No fingerprint of the target's published evidence
+/// can stand in for it, because a target pass satisfies every registration it
+/// holds and can then republish the very pair it published before - so the
+/// evidence reads the same whether the registration was spent or standing.
+/// What tells the two apart is [`ResourceContext::watch_is_live`], which
+/// answers for the runtime's own record of the spend (AE2, R12, R21).
 #[derive(Clone)]
 struct ArmedWatch {
     target: ResourceKey,
     watch: WatchId,
-    evidence: WatchEvidence,
 }
 
 impl BindingObservation {
@@ -1024,12 +992,12 @@ enum BindingObservationFault {
     /// relationship whose realization or committed row it has not proven yet:
     /// the launch defers and issues no effect. Whatever the read had already
     /// proven rides with it, as the dependency rows to subscribe to.
-    Unproven(Vec<DependencyRow>),
+    Unproven(Vec<ResourceKey>),
     /// The manager holds no row for a relationship a published intent
     /// requires: a proven binding loss, and the same `Pending` a withdrawn
     /// delivery produces. Whatever the read had already proven rides with it,
     /// as the dependency rows to subscribe to.
-    Absent(Vec<DependencyRow>),
+    Absent(Vec<ResourceKey>),
     /// The published evidence is malformed or foreign: terminal, because
     /// retrying the same evidence cannot change the answer.
     Refused(BindingGateError),
@@ -1138,8 +1106,7 @@ async fn observe_endpoint_bindings(
             return Err(BindingObservationFault::Refused(BindingGateError::Malformed));
         };
         let key = binding_key(ctx, binding_ref.name().as_str());
-        let read = observation.dependencies.len();
-        observation.dependencies.push(DependencyRow { key: key.clone(), evidence: None });
+        observation.dependencies.push(key.clone());
         let relation = match ctx.lookup_view(&key).await {
             RowLookup::Present { row, .. } => row,
             // The publication intent names this relationship and the manager
@@ -1162,7 +1129,6 @@ async fn observe_endpoint_bindings(
                 ));
             }
         };
-        observation.dependencies[read].evidence = Some(WatchEvidence::of(&relation));
         let committed: EndpointBindingSpec = serde_json::from_slice(&relation.spec).map_err(|_| {
             BindingObservationFault::Refused(BindingGateError::EvidenceUnreadable)
         })?;
@@ -1233,7 +1199,7 @@ async fn observe_one_endpoint(
     observation: &mut BindingObservation,
 ) -> Result<(), BindingObservationFault> {
     let read = observation.dependencies.len();
-    observation.dependencies.push(DependencyRow { key: key.clone(), evidence: None });
+    observation.dependencies.push(key.clone());
     let view = match ctx.lookup_view(key).await {
         RowLookup::Present { row, .. } => row,
         // The scope named this endpoint, and the manager then answered that it
@@ -1258,12 +1224,6 @@ async fn observe_one_endpoint(
             ));
         }
     };
-    // The endpoint row itself was READ, so what this pass knows about it is
-    // the evidence its watch is armed against - even when what it reads is
-    // that the row has published nothing yet. Capturing it only on the far
-    // side of the call below would drop exactly the source a deferred gate
-    // most needs to hear from again.
-    observation.dependencies[read].evidence = Some(WatchEvidence::of(&view));
     if !observe_endpoint_bindings(ctx, &view, process_ref, observation).await? {
         // This source has published, and it publishes nothing for this
         // consumer: it is not this row's evidence, so this row neither keeps
@@ -2437,69 +2397,50 @@ impl ProcessDriver {
     /// its evidence layer changes underneath it, so a readiness phase can
     /// never be the wake-up this row needs.
     ///
-    /// A runtime registration is one-shot: AE2 satisfies it and REMOVES it. A
-    /// registration this actor remembered was therefore a spent registration,
-    /// and skipping a target already in that set made every subscription a
-    /// single-use wake-up - after the first projection change this actor was
-    /// never woken by that target again, so a second downgrade (a relaunch
-    /// over a replaced socket, a withdrawn authorization) reached the row only
-    /// through its resync cadence.
+    /// A runtime registration is one-shot: the target actor satisfies it,
+    /// REMOVES it and notifies this row, which reaches this actor as the
+    /// recorded spend (see [`ResourceContext::watch_is_live`]). So the re-arm
+    /// reads the SPEND and nothing else - an id this actor still holds live is
+    /// standing in that target's mailbox, and an id the target notified on is
+    /// gone.
     ///
-    /// Re-arming is therefore driven by the EVIDENCE, never by the pass. The
-    /// registration this actor holds was armed against one exact fingerprint,
-    /// and a target only ever satisfies a registration by moving the very pair
-    /// of values that fingerprint is built from - so a target whose fingerprint
-    /// stands still has not spent it, and releasing and re-arming it would buy
-    /// nothing while spending two manager round trips per dependency per pass.
-    /// The fingerprint comes from the view the gate has already read, so the
-    /// comparison itself is free.
+    /// No fingerprint of the published evidence can stand in for that. A
+    /// target pass satisfies every registration it holds and can then
+    /// republish the very pair it published before, so the evidence reads
+    /// identically for a spent registration and a standing one: a latch over
+    /// `(status, projection)` places nothing after the first spend, leaves
+    /// this actor holding an id no target has, and a pass that reads unchanged
+    /// evidence never corrects it. The runtime's own record is the answer,
+    /// and it is complete - a spend is the only thing that ends a
+    /// registration's life besides its target's actor going away, and that
+    /// ends it in [`ResourceContext::mark_target_watches_lost`] too.
     ///
-    /// A dependency this pass named but could not read keeps whatever
-    /// registration it already holds: a read that faulted before reaching a
-    /// row says nothing about whether that row's registration is still live,
-    /// and releasing a live one is the one mistake here that would leave this
-    /// row unsubscribed.
-    async fn watch_evidence(&mut self, ctx: &mut ResourceContext, rows: &[DependencyRow]) {
-        for row in rows {
-            let Some(evidence) = row.evidence.as_ref() else {
-                continue;
-            };
-            let spent = self
+    /// A release the manager did not accept leaves the registration standing
+    /// in its target, so the entry STAYS: dropping it would leak a live
+    /// registration this actor could no longer name, release, or re-arm - and
+    /// would leave the target delivering one wake-up per spent registration to
+    /// a subscriber that has forgotten it. The next pass sees the same entry
+    /// still live and asks again.
+    async fn watch_evidence(&mut self, ctx: &mut ResourceContext, keys: &[ResourceKey]) {
+        for key in keys {
+            let held: Vec<WatchId> = self
                 .watched
                 .iter()
-                .filter(|armed| armed.target == row.key)
-                .collect::<Vec<_>>();
-            if !spent.is_empty() && spent.iter().all(|armed| armed.evidence == *evidence) {
-                // The evidence stood, so the registration is still live in
-                // that row's mailbox and this pass places none.
+                .filter(|armed| &armed.target == key)
+                .map(|armed| armed.watch)
+                .collect();
+            if !held.is_empty() && held.iter().all(|watch| ctx.watch_is_live(*watch)) {
+                // Still standing in that target's mailbox: this pass places
+                // none and releases none.
                 continue;
             }
-            let spent = spent
-                .into_iter()
-                .map(|armed| armed.watch)
-                .collect::<Vec<_>>();
-            for watch in spent {
-                // A release the manager did not accept leaves the
-                // registration standing in its target's mailbox, so the entry
-                // STAYS. Dropping it would leak a live registration this actor
-                // could no longer name, release, or re-arm - and would leave
-                // the target delivering one wake-up per spent registration to
-                // a subscriber that has forgotten it. The next pass over this
-                // target sees the same entry with evidence that no longer
-                // matches and asks again.
+            for watch in held {
                 if ctx.cancel_watch(watch).await.is_ok() {
-                    self.watched.retain(|held| held.watch != watch);
+                    self.watched.retain(|entry| entry.watch != watch);
                 }
             }
-            if let Ok(watch) = ctx
-                .watch(row.key.clone(), WatchCondition::ProjectionChanged)
-                .await
-            {
-                self.watched.push(ArmedWatch {
-                    target: row.key.clone(),
-                    watch,
-                    evidence: evidence.clone(),
-                });
+            if let Ok(watch) = ctx.watch(key.clone(), WatchCondition::ProjectionChanged).await {
+                self.watched.push(ArmedWatch { target: key.clone(), watch });
             }
         }
     }
@@ -4018,18 +3959,18 @@ mod tests {
         AdoptionCandidate, AdoptionCondition, IdentityBinding, ObservedIdentity,
         ProcessIdentityDigest, ProcessPhaseClass, ProcessStatusReport, WaitReapOwner,
     };
-    use d2b_resource_runtime::guest_target::{
-        GuestAdoption, TargetInstanceState, TargetResourceInstance,
-    };
     use d2b_provider_toolkit::testing::fakes::RecordingRequeue;
     use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, ResourceContext, WatchRegistration,
+        ChildEnsure, ManagerEndpoint, ResourceContext, WatchRegistration, WatchSatisfied,
     };
     use d2b_resource_runtime::driver::{
         DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriverFactory,
     };
     use d2b_resource_runtime::error::{
         DriverFailure, DriverOp, FailureClass, FailureKinds, ResourceError,
+    };
+    use d2b_resource_runtime::guest_target::{
+        GuestAdoption, TargetInstanceState, TargetResourceInstance,
     };
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
@@ -4255,7 +4196,6 @@ mod tests {
     struct SettledOwnerManager(ResourceKey);
 
     #[async_trait::async_trait]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl ManagerEndpoint for SettledOwnerManager {
         async fn ensure_child(
             &self,
@@ -4329,41 +4269,39 @@ mod tests {
     /// Owner-scoped manager double for the finalize gate: one scripted owned
     /// row set; `delete` records the retirement nudge and removes the row.
     struct OwnershipManager {
-        owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
-        rows: parking_lot::Mutex<Vec<StoredDesiredResource>>,
-        deleted: parking_lot::Mutex<Vec<ResourceKey>>,
+        owned: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
+        rows: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
+        deleted: tokio::sync::Mutex<Vec<ResourceKey>>,
     }
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl OwnershipManager {
         /// An owner-scoped manager with no owned rows: the retention delete
         /// path's double.
         fn empty() -> Arc<Self> {
             Arc::new(Self {
-                owned: parking_lot::Mutex::new(Vec::new()),
-                rows: parking_lot::Mutex::new(Vec::new()),
-                deleted: parking_lot::Mutex::new(Vec::new()),
+                owned: tokio::sync::Mutex::new(Vec::new()),
+                rows: tokio::sync::Mutex::new(Vec::new()),
+                deleted: tokio::sync::Mutex::new(Vec::new()),
             })
         }
 
         fn with_owned(row: StoredDesiredResource) -> Arc<Self> {
             Arc::new(Self {
-                owned: parking_lot::Mutex::new(vec![row]),
-                rows: parking_lot::Mutex::new(Vec::new()),
-                deleted: parking_lot::Mutex::new(Vec::new()),
+                owned: tokio::sync::Mutex::new(vec![row]),
+                rows: tokio::sync::Mutex::new(Vec::new()),
+                deleted: tokio::sync::Mutex::new(Vec::new()),
             })
         }
 
         /// Serve one row by key (`get`), for rows the driver reads besides its
         /// own (the owning `VolumeBinding` a serving worker resolves).
-        fn with_row(self: &Arc<Self>, row: StoredDesiredResource) -> Arc<Self> {
-            self.rows.lock().push(row);
+        async fn with_row(self: &Arc<Self>, row: StoredDesiredResource) -> Arc<Self> {
+            self.rows.lock().await.push(row);
             Arc::clone(self)
         }
     }
 
     #[async_trait::async_trait]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl ManagerEndpoint for OwnershipManager {
         async fn ensure_child(
             &self,
@@ -4377,7 +4315,13 @@ mod tests {
             &self,
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            Ok(self
+                .rows
+                .lock()
+                .await
+                .iter()
+                .find(|row| row.key == *key)
+                .cloned())
         }
 
         async fn view(
@@ -4388,8 +4332,8 @@ mod tests {
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.deleted.lock().push(key.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            self.owned.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.deleted.lock().await.push(key.clone());
+            self.owned.lock().await.retain(|row| row.key != *key);
             Ok(())
         }
 
@@ -4397,7 +4341,7 @@ mod tests {
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(self.owned.lock().clone())
+            Ok(self.owned.lock().await.clone())
         }
 
         async fn list_zone_type(
@@ -4405,8 +4349,8 @@ mod tests {
             zone: &str,
             type_name: &str,
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            let owned = self.owned.lock().clone(); // async-gate-allow: fixture clones under a short guard and holds no await
-            let rows = self.rows.lock().clone(); // async-gate-allow: fixture clones under a short guard and holds no await
+            let owned = self.owned.lock().await.clone();
+            let rows = self.rows.lock().await.clone();
             Ok(owned
                 .into_iter()
                 .chain(rows)
@@ -4438,6 +4382,29 @@ mod tests {
         requeues: mpsc::UnboundedReceiver<u64>,
         requeue: RecordingRequeue,
         row: StoredDesiredResource,
+        /// What the target actors notified on, which the runtime pumps into
+        /// this row's mailbox: a test plays that step itself, because a
+        /// re-arm reads the SPEND and not the evidence.
+        notifications: mpsc::UnboundedReceiver<WatchSatisfied>,
+    }
+
+    impl Fixture {
+        /// Play the runtime's `DependencySatisfied` handling: every
+        /// notification the targets have sent is recorded as spent on the
+        /// context, which is the one step between "the target removed the
+        /// registration" and "this row knows it did".
+        ///
+        /// Returns how many registrations were spent, so a test can assert
+        /// the wake-ups a target pass actually produced rather than how many
+        /// it could have.
+        fn absorb_watch_satisfactions(&mut self) -> usize {
+            let mut spent = 0;
+            while let Ok(satisfied) = self.notifications.try_recv() {
+                self.ctx.mark_watch_spent(satisfied.watch);
+                spent += 1;
+            }
+            spent
+        }
     }
 
     fn fixture(row: StoredDesiredResource) -> Fixture {
@@ -4456,7 +4423,7 @@ mod tests {
         owner_key: Option<ResourceKey>,
     ) -> Fixture {
         let (effects_tx, effects_rx) = mpsc::unbounded_channel();
-        let (notify_tx, _notify_rx) = mpsc::unbounded_channel();
+        let (notify_tx, notifications) = mpsc::unbounded_channel();
         let (requeue, requeue_rx) = RecordingRequeue::new();
         let ctx = ResourceContext::new(
             row.clone(),
@@ -4473,6 +4440,7 @@ mod tests {
             requeues: requeue_rx,
             requeue: requeue.clone(),
             row,
+            notifications,
         }
     }
 
@@ -4484,7 +4452,7 @@ mod tests {
         target: TargetBinding,
     ) -> Fixture {
         let (effects_tx, effects_rx) = mpsc::unbounded_channel();
-        let (notify_tx, _notify_rx) = mpsc::unbounded_channel();
+        let (notify_tx, notifications) = mpsc::unbounded_channel();
         let (requeue, requeue_rx) = RecordingRequeue::new();
         let ctx = ResourceContext::new(
             row.clone(),
@@ -4501,6 +4469,7 @@ mod tests {
             requeues: requeue_rx,
             requeue: requeue.clone(),
             row,
+            notifications,
         }
     }
 
@@ -4728,7 +4697,9 @@ mod tests {
         row.key = ResourceKey::new("work", "Process", "vol-vfd-deadbeef");
         row.owner_uid = Some([0x42; 16]);
         row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"virtiofsd-worker","drainTimeout":"250ms"}"#.to_vec();
-        let manager = OwnershipManager::with_owned(row.clone()).with_row(binding_row);
+        let manager = OwnershipManager::with_owned(row.clone())
+            .with_row(binding_row)
+            .await;
         let mut f = fixture_owned_by(row, manager, Some(binding_key));
         let d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
         let identity = d
@@ -4789,8 +4760,9 @@ mod tests {
             created_at: 0,
         };
 
-        let manager =
-            OwnershipManager::empty().with_row(device_row(Some("Guest/acceptance-guest")));
+        let manager = OwnershipManager::empty()
+            .with_row(device_row(Some("Guest/acceptance-guest")))
+            .await;
         let mut f = fixture_with(test_row(), manager);
         assert_eq!(
             device_worker_vm(&mut f.ctx, &device_key).await,
@@ -4798,7 +4770,9 @@ mod tests {
             "the owning Guest is the worker's VM scope"
         );
 
-        let manager = OwnershipManager::empty().with_row(device_row(Some("Provider/device-tpm")));
+        let manager = OwnershipManager::empty()
+            .with_row(device_row(Some("Provider/device-tpm")))
+            .await;
         let mut f = fixture_with(test_row(), manager);
         assert_eq!(
             device_worker_vm(&mut f.ctx, &device_key).await,
@@ -4806,7 +4780,7 @@ mod tests {
             "a non-Guest owner names no VM"
         );
 
-        let manager = OwnershipManager::empty().with_row(device_row(None));
+        let manager = OwnershipManager::empty().with_row(device_row(None)).await;
         let mut f = fixture_with(test_row(), manager);
         assert_eq!(
             device_worker_vm(&mut f.ctx, &device_key).await,
@@ -5176,7 +5150,7 @@ mod tests {
         );
         assert_eq!(fake.launch_calls().len(), 1, "a one-shot never relaunches");
         assert!(
-            manager.deleted.lock().is_empty(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            manager.deleted.lock().await.is_empty(),
             "the retention window has not elapsed"
         );
 
@@ -5188,7 +5162,10 @@ mod tests {
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
         );
-        assert_eq!(manager.deleted.lock().clone(), vec![f.row.key.clone()]); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        assert_eq!(
+            manager.deleted.lock().await.clone(),
+            vec![f.row.key.clone()]
+        );
     }
 
     /// The bounded runtime: a one-shot that outlived `runtimeDeadline` stops
@@ -5295,7 +5272,7 @@ mod tests {
             ReconcileOutcome::Satisfied
         );
         assert!(
-            manager.deleted.lock().is_empty(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            manager.deleted.lock().await.is_empty(),
             "an incident-held failure is never auto-retired"
         );
     }
@@ -5657,7 +5634,7 @@ mod tests {
             DriverFailure::not_yet(DriverOp::Delete, FailureKinds::CHILDREN_DRAINING)
         );
         assert_eq!(
-            manager.deleted.lock().len(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            manager.deleted.lock().await.len(),
             1,
             "the owned child is nudged first"
         );
@@ -6376,37 +6353,36 @@ mod tests {
     /// Guest to apply, and the answers it scripts back.
     #[derive(Debug)]
     struct FakeGuestTarget {
-        realized: parking_lot::Mutex<Vec<RealizedFrame>>,
-        observed: parking_lot::Mutex<VecDeque<TargetObservation>>,
-        adopted: parking_lot::Mutex<VecDeque<GuestAdoption>>,
-        deleted: parking_lot::Mutex<Vec<ResourceKey>>,
+        realized: tokio::sync::Mutex<Vec<RealizedFrame>>,
+        observed: tokio::sync::Mutex<VecDeque<TargetObservation>>,
+        adopted: tokio::sync::Mutex<VecDeque<GuestAdoption>>,
+        deleted: tokio::sync::Mutex<Vec<ResourceKey>>,
     }
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl FakeGuestTarget {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                realized: parking_lot::Mutex::new(Vec::new()),
-                observed: parking_lot::Mutex::new(VecDeque::new()),
-                adopted: parking_lot::Mutex::new(VecDeque::new()),
-                deleted: parking_lot::Mutex::new(Vec::new()),
+                realized: tokio::sync::Mutex::new(Vec::new()),
+                observed: tokio::sync::Mutex::new(VecDeque::new()),
+                adopted: tokio::sync::Mutex::new(VecDeque::new()),
+                deleted: tokio::sync::Mutex::new(Vec::new()),
             })
         }
 
-        fn script_adoption(&self, adoption: GuestAdoption) {
-            self.adopted.lock().push_back(adoption); // async-gate-allow: fixture scripts an answer under a short guard and holds no await
+        async fn script_adoption(&self, adoption: GuestAdoption) {
+            self.adopted.lock().await.push_back(adoption);
         }
 
-        fn script_observation(&self, observation: TargetObservation) {
-            self.observed.lock().push_back(observation); // async-gate-allow: fixture scripts an answer under a short guard and holds no await
+        async fn script_observation(&self, observation: TargetObservation) {
+            self.observed.lock().await.push_back(observation);
         }
 
-        fn realized(&self) -> Vec<RealizedFrame> {
-            self.realized.lock().clone()
+        async fn realized(&self) -> Vec<RealizedFrame> {
+            self.realized.lock().await.clone()
         }
 
-        fn deleted(&self) -> Vec<ResourceKey> {
-            self.deleted.lock().clone()
+        async fn deleted(&self) -> Vec<ResourceKey> {
+            self.deleted.lock().await.clone()
         }
 
         /// One live target-local realization of this suite's row.
@@ -6424,7 +6400,6 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl d2b_resource_runtime::guest_target::GuestTargetControl for FakeGuestTarget {
         async fn realize(
             &self,
@@ -6433,7 +6408,7 @@ mod tests {
         {
             let digest = request.spec_digest().to_owned();
             let handle = request.local_handle().to_owned();
-            self.realized.lock().push(( // async-gate-allow: fixture records the frame under a short guard and holds no await
+            self.realized.lock().await.push((
                 request.source().clone(),
                 request.spec().to_vec(),
                 digest.clone(),
@@ -6457,7 +6432,8 @@ mod tests {
         {
             Ok(self
                 .observed
-                .lock() // async-gate-allow: fixture pops under a short guard and holds no await
+                .lock()
+                .await
                 .pop_front()
                 .unwrap_or(TargetObservation::Ready {
                     session_generation: assignment.session_generation(),
@@ -6468,7 +6444,7 @@ mod tests {
             &self,
             assignment: &d2b_resource_runtime::guest_target::TargetControlAssignment,
         ) -> Result<(), d2b_resource_runtime::guest_target::GuestTargetError> {
-            self.deleted.lock().push(assignment.source().clone()); // async-gate-allow: fixture records the delete under a short guard and holds no await
+            self.deleted.lock().await.push(assignment.source().clone());
             Ok(())
         }
 
@@ -6476,7 +6452,12 @@ mod tests {
             &self,
             _assignment: &d2b_resource_runtime::guest_target::TargetControlAssignment,
         ) -> Result<GuestAdoption, d2b_resource_runtime::guest_target::GuestTargetError> {
-            Ok(self.adopted.lock().pop_front().unwrap_or(GuestAdoption::Missing)) // async-gate-allow: fixture pops under a short guard and holds no await
+            Ok(self
+                .adopted
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or(GuestAdoption::Missing))
         }
     }
 
@@ -6530,8 +6511,8 @@ mod tests {
     #[tokio::test]
     async fn a_guest_targeted_process_launches_through_the_session_and_reports_ready() {
         let mut f = GuestFixture::new(guest_row());
-        f.target.script_adoption(GuestAdoption::Missing);
-        f.target.script_adoption(FakeGuestTarget::live(1));
+        f.target.script_adoption(GuestAdoption::Missing).await;
+        f.target.script_adoption(FakeGuestTarget::live(1)).await;
         let mut d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
 
         assert!(matches!(
@@ -6539,8 +6520,12 @@ mod tests {
             ReconcileOutcome::InProgress { .. }
         ));
         yield_until_effects_settled().await;
-        let realized = f.target.realized();
-        assert_eq!(realized.len(), 1, "exactly one realize frame reached the Guest");
+        let realized = f.target.realized().await;
+        assert_eq!(
+            realized.len(),
+            1,
+            "exactly one realize frame reached the Guest"
+        );
         assert_eq!(
             realized[0].0,
             ResourceKey::new("work", PROCESS_TYPE_NAME, "worker"),
@@ -6560,9 +6545,13 @@ mod tests {
             ReconcileOutcome::Satisfied,
             "the exact live realization is adopted, never realized a second time"
         );
-        assert_eq!(f.target.realized().len(), 1);
+        assert_eq!(f.target.realized().await.len(), 1);
 
-        f.target.script_observation(TargetObservation::Ready { session_generation: 1 });
+        f.target
+            .script_observation(TargetObservation::Ready {
+                session_generation: 1,
+            })
+            .await;
         assert_eq!(
             d.reconcile(&mut f.fixture.ctx).await.expect("third pass"),
             ReconcileOutcome::Satisfied
@@ -6580,22 +6569,28 @@ mod tests {
     #[tokio::test]
     async fn guest_delete_removes_only_the_exact_source_process_and_repeats_cleanly() {
         let mut f = GuestFixture::new(guest_row());
-        f.target.script_adoption(FakeGuestTarget::live(1));
-        f.target.script_adoption(FakeGuestTarget::live(1));
+        f.target.script_adoption(FakeGuestTarget::live(1)).await;
+        f.target.script_adoption(FakeGuestTarget::live(1)).await;
         let mut d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
 
         d.recover(&mut f.fixture.ctx).await.expect("recovery adopts the live realization");
         d.delete(&mut f.fixture.ctx).await.expect("delete");
         assert_eq!(
-            f.target.deleted(),
+            f.target.deleted().await,
             vec![ResourceKey::new("work", PROCESS_TYPE_NAME, "worker")],
             "the teardown removed exactly this row's realization"
         );
 
         f.reconnect(2);
-        f.target.script_adoption(GuestAdoption::Missing);
-        d.delete(&mut f.fixture.ctx).await.expect("a repeated delete converges");
-        assert_eq!(f.target.deleted().len(), 1, "an absent realization is not deleted twice");
+        f.target.script_adoption(GuestAdoption::Missing).await;
+        d.delete(&mut f.fixture.ctx)
+            .await
+            .expect("a repeated delete converges");
+        assert_eq!(
+            f.target.deleted().await.len(),
+            1,
+            "an absent realization is not deleted twice"
+        );
     }
 
     /// Session loss makes the target unavailable: the row stops reading ready,
@@ -6604,8 +6599,12 @@ mod tests {
     #[tokio::test]
     async fn a_lost_guest_session_quarantines_the_incarnation_until_the_reconnect_adopts() {
         let mut f = GuestFixture::new(guest_row());
-        f.target.script_adoption(FakeGuestTarget::live(1));
-        f.target.script_observation(TargetObservation::Ready { session_generation: 1 });
+        f.target.script_adoption(FakeGuestTarget::live(1)).await;
+        f.target
+            .script_observation(TargetObservation::Ready {
+                session_generation: 1,
+            })
+            .await;
         let mut d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
         d.recover(&mut f.fixture.ctx).await.expect("recovery adopts");
         d.reconcile(&mut f.fixture.ctx).await.expect("the live pass is satisfied");
@@ -6619,12 +6618,12 @@ mod tests {
         // driver that published readiness over an unreachable target would be
         // claiming an incarnation it cannot observe.
         assert!(
-            f.target.realized().is_empty(),
+            f.target.realized().await.is_empty(),
             "no realization is issued over a target that cannot answer"
         );
 
         f.reconnect(2);
-        f.target.script_adoption(FakeGuestTarget::live(2));
+        f.target.script_adoption(FakeGuestTarget::live(2)).await;
         assert_eq!(
             d.reconcile(&mut f.fixture.ctx).await.expect("the reconnected pass"),
             ReconcileOutcome::Satisfied
@@ -6647,7 +6646,7 @@ mod tests {
             BindingArbitration, BindingRealizationFacet, BindingSourceDecision,
             EndpointAttachmentKind, EndpointBindingSpec, RequestedRights,
         };
-        use d2b_resource_runtime::context::{WatchId, WatchRegistration};
+        use d2b_resource_runtime::context::{WatchId, WatchRegistration, WatchSatisfied};
         use d2b_resource_runtime::manager::ResourceView;
         use d2b_resource_runtime::resource::ResourceStatus;
 
@@ -6800,31 +6799,34 @@ mod tests {
         /// on exercised rather than assumed - a double that kept satisfied
         /// registrations would let a driver stack one per pass for free.
         struct BindingManager {
-            rows: parking_lot::Mutex<Vec<StoredDesiredResource>>,
-            views: parking_lot::Mutex<Vec<ResourceView>>,
+            rows: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
+            views: tokio::sync::Mutex<Vec<ResourceView>>,
             /// Keys this plane cannot answer for right now: it REFUSES them,
             /// which is not the same answer as holding no such row.
-            unreadable: parking_lot::Mutex<Vec<ResourceKey>>,
-            reads: parking_lot::Mutex<Vec<ResourceKey>>,
-            live: parking_lot::Mutex<Vec<LiveWatch>>,
-            armed: parking_lot::Mutex<u64>,
-            released: parking_lot::Mutex<u64>,
+            unreadable: tokio::sync::Mutex<Vec<ResourceKey>>,
+            reads: tokio::sync::Mutex<Vec<ResourceKey>>,
+            live: tokio::sync::Mutex<Vec<LiveWatch>>,
+            armed: tokio::sync::Mutex<u64>,
+            released: tokio::sync::Mutex<u64>,
             /// When set, a release is refused, leaving every registration
             /// standing in its target's mailbox.
-            refuse_cancels: parking_lot::Mutex<bool>,
+            refuse_cancels: tokio::sync::Mutex<bool>,
         }
 
         /// One live registration standing in a target's mailbox, with the
         /// exact pair that target had published when it was armed.
+        #[derive(Clone)]
         struct LiveWatch {
             id: WatchId,
             target: ResourceKey,
             status: Option<ResourceStatus>,
             projection: Option<serde_json::Value>,
+            /// The subscriber's own notify channel, which the target actor
+            /// sends the satisfaction on exactly as the runtime does.
+            notify: tokio::sync::mpsc::UnboundedSender<WatchSatisfied>,
         }
 
         #[async_trait::async_trait]
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         impl ManagerEndpoint for BindingManager {
             async fn ensure_child(
                 &self,
@@ -6840,22 +6842,19 @@ mod tests {
                 &self,
                 key: &ResourceKey,
             ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-                if self.withholds(key) {
+                if self.withholds(key).await {
                     return Err(ResourceError::ManagerUnavailable("withheld".into()));
                 }
-                let rows = self.rows.lock(); // async-gate-allow: fixture reads under a short guard and holds no await
+                let rows = self.rows.lock().await;
                 Ok(rows.iter().find(|row| row.key == *key).cloned())
             }
 
-            async fn view(
-                &self,
-                key: &ResourceKey,
-            ) -> Result<Option<ResourceView>, ResourceError> {
-                self.reads.lock().push(key.clone()); // async-gate-allow: fixture records under a short guard and holds no await
-                if self.withholds(key) {
+            async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+                self.reads.lock().await.push(key.clone());
+                if self.withholds(key).await {
                     return Err(ResourceError::ManagerUnavailable("withheld".into()));
                 }
-                let views = self.views.lock(); // async-gate-allow: fixture reads under a short guard and holds no await
+                let views = self.views.lock().await;
                 Ok(views.iter().find(|view| view.key == *key).cloned())
             }
 
@@ -6869,8 +6868,12 @@ mod tests {
                 &self,
                 owner_uid: [u8; 16],
             ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-                let rows = self.rows.lock(); // async-gate-allow: fixture reads under a short guard and holds no await
-                Ok(rows.iter().filter(|row| row.owner_uid == Some(owner_uid)).cloned().collect())
+                let rows = self.rows.lock().await;
+                Ok(rows
+                    .iter()
+                    .filter(|row| row.owner_uid == Some(owner_uid))
+                    .cloned()
+                    .collect())
             }
 
             async fn list_zone_type(
@@ -6878,7 +6881,7 @@ mod tests {
                 zone: &str,
                 type_name: &str,
             ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-                let rows = self.rows.lock(); // async-gate-allow: fixture reads under a short guard and holds no await
+                let rows = self.rows.lock().await;
                 Ok(rows
                     .iter()
                     .filter(|row| row.key.zone == zone && row.key.type_name == type_name)
@@ -6892,33 +6895,40 @@ mod tests {
                 registration: WatchRegistration,
             ) -> Result<WatchId, ResourceError> {
                 let id = WatchId({
-                    let mut armed = self.armed.lock(); // async-gate-allow: fixture counts under a short guard and holds no await
+                    let mut armed = self.armed.lock().await;
                     *armed += 1;
                     *armed
                 });
                 // The registration is armed against the pair its target has
                 // published right now, which is the only pair a target ever
                 // satisfies it by moving.
-                let view = self.views.lock().iter().find(|view| view.key == registration.target).cloned(); // async-gate-allow: fixture reads under a short guard and holds no await
-                self.live.lock().push(LiveWatch { // async-gate-allow: fixture records under a short guard and holds no await
+                let view = self
+                    .views
+                    .lock()
+                    .await
+                    .iter()
+                    .find(|view| view.key == registration.target)
+                    .cloned();
+                self.live.lock().await.push(LiveWatch {
                     id,
                     target: registration.target,
                     status: view.as_ref().and_then(|view| view.status.clone()),
                     projection: view.and_then(|view| view.status_projection.clone()),
+                    notify: registration.notify,
                 });
                 Ok(id)
             }
 
             async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError> {
-                if *self.refuse_cancels.lock() { // async-gate-allow: fixture reads under a short guard and holds no await
+                if *self.refuse_cancels.lock().await {
                     return Err(ResourceError::ManagerUnavailable("release refused".into()));
                 }
                 // A release the real manager cannot route to an entry it no
                 // longer holds still answers `Ok`: it is idempotent, so a
                 // driver releasing a registration the target already spent
                 // sees the same answer either way.
-                self.live.lock().retain(|entry| entry.id != watch); // async-gate-allow: fixture rewrites under a short guard and holds no await
-                let mut released = self.released.lock(); // async-gate-allow: fixture counts under a short guard and holds no await
+                self.live.lock().await.retain(|entry| entry.id != watch);
+                let mut released = self.released.lock().await;
                 *released += 1;
                 Ok(())
             }
@@ -6927,71 +6937,107 @@ mod tests {
         impl BindingManager {
             /// The keys whose view this manager served, in order: how a case
             /// observes that the gate read the evidence a second time.
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            fn view_reads(&self) -> Vec<ResourceKey> {
-                self.reads.lock().clone() // async-gate-allow: fixture reads under a short guard and holds no await
+            async fn view_reads(&self) -> Vec<ResourceKey> {
+                self.reads.lock().await.clone()
             }
 
             /// The registrations this manager handed out, and the ones the
             /// driver released: a runtime watch is one-shot, so a driver that
             /// never releases and re-arms one is subscribed exactly once.
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            fn watch_cycle(&self) -> (u64, u64) {
-                (*self.armed.lock(), *self.released.lock()) // async-gate-allow: fixture reads under a short guard and holds no await
+            async fn watch_cycle(&self) -> (u64, u64) {
+                (*self.armed.lock().await, *self.released.lock().await)
             }
 
             /// Whether this plane REFUSES one key: the manager declining to
             /// answer is not the same answer as holding no such row, and it is
             /// the answer a driver must never read as one.
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            fn withholds(&self, key: &ResourceKey) -> bool {
-                self.unreadable.lock().iter().any(|held| held == key) // async-gate-allow: fixture reads under a short guard and holds no await
+            async fn withholds(&self, key: &ResourceKey) -> bool {
+                self.unreadable.lock().await.iter().any(|held| held == key)
             }
 
             /// The registrations still standing in their targets' mailboxes,
             /// in the order they were handed out: what proves whether a driver
             /// re-armed, left a spent one standing, or stacked a second.
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            fn live_watches(&self) -> Vec<WatchId> {
-                self.live.lock().iter().map(|entry| entry.id).collect() // async-gate-allow: fixture reads under a short guard and holds no await
+            async fn live_watches(&self) -> Vec<WatchId> {
+                self.live
+                    .lock()
+                    .await
+                    .iter()
+                    .map(|entry| entry.id)
+                    .collect()
+            }
+
+            /// Remove the registrations `holds` selects and NOTIFY this row on
+            /// each, exactly as a target actor does when it satisfies one.
+            async fn spend_where(&self, holds: impl Fn(&LiveWatch) -> bool) {
+                let mut live = self.live.lock().await;
+                let mut spent = Vec::new();
+                live.retain(|entry| {
+                    if holds(entry) {
+                        return true;
+                    }
+                    spent.push(entry.clone());
+                    false
+                });
+                drop(live);
+                for entry in spent {
+                    let _ = entry.notify.send(WatchSatisfied {
+                        watch: entry.id,
+                        target: entry.target,
+                    });
+                }
             }
 
             /// AE2: a target that has published a pair different from the one a
-            /// registration was armed against has satisfied it and REMOVED it.
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            fn spend_satisfied(&self) {
-                let views = self.views.lock().clone(); // async-gate-allow: fixture clones under a short guard and holds no await
-                let mut live = self.live.lock(); // async-gate-allow: fixture rewrites under a short guard and holds no await
-                live.retain(|entry| match views.iter().find(|view| view.key == entry.target) {
-                    Some(view) => {
-                        view.status == entry.status && view.status_projection == entry.projection
+            /// registration was armed against has satisfied it, REMOVED it and
+            /// NOTIFIED this row.
+            ///
+            /// Sending the notification is the step that makes the spend
+            /// visible to the driver at all. A double that only removed the
+            /// registration would leave this row holding an id no target has
+            /// and - worse - reading it as live, which is precisely the gap
+            /// the runtime's own spend record exists to close.
+            async fn spend_satisfied(&self) {
+                let views = self.views.lock().await.clone();
+                self.spend_where(|entry| {
+                    match views.iter().find(|view| view.key == entry.target) {
+                        Some(view) => {
+                            view.status == entry.status
+                                && view.status_projection == entry.projection
+                        }
+                        None => true,
                     }
-                    None => true,
-                });
+                })
+                .await;
+            }
+
+            /// One pass of `target` that spends every registration this row
+            /// holds on it and then republishes the very pair it published
+            /// before: a spent registration and a standing one are
+            /// indistinguishable in the published evidence alone.
+            async fn spend_all(&self, target: &ResourceKey) {
+                self.spend_where(|entry| &entry.target != target).await;
             }
 
             /// Withdraw one committed row from the plane: what a manager
             /// answers once the row it held is gone is `Ok(None)`, and that is
             /// a stable fact rather than a row that is merely unreadable.
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            fn retire(&self, key: &ResourceKey) {
-                self.rows.lock().retain(|row| &row.key != key); // async-gate-allow: fixture rewrites under a short guard and holds no await
-                self.views.lock().retain(|view| &view.key != key); // async-gate-allow: fixture rewrites under a short guard and holds no await
-                self.spend_satisfied();
+            async fn retire(&self, key: &ResourceKey) {
+                self.rows.lock().await.retain(|row| &row.key != key);
+                self.views.lock().await.retain(|view| &view.key != key);
+                self.spend_satisfied().await;
             }
 
             /// Make this plane unable to answer for one key: the manager
             /// REFUSES, which says nothing about whether the row is there.
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            fn withhold(&self, key: &ResourceKey) {
-                self.unreadable.lock().push(key.clone()); // async-gate-allow: fixture records under a short guard and holds no await
+            async fn withhold(&self, key: &ResourceKey) {
+                self.unreadable.lock().await.push(key.clone());
             }
 
             /// Make this plane refuse to release, so a registration stays
             /// standing in its target's mailbox however hard the driver asks.
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            fn set_refusing_cancels(&self, refusing: bool) {
-                *self.refuse_cancels.lock() = refusing; // async-gate-allow: fixture writes under a short guard and holds no await
+            async fn set_refusing_cancels(&self, refusing: bool) {
+                *self.refuse_cancels.lock().await = refusing;
             }
         }
 
@@ -7004,14 +7050,14 @@ mod tests {
             row.metadata =
                 br#"{"annotations":{},"labels":{},"ownerRef":"Provider/runtime-local"}"#.to_vec();
             let manager = Arc::new(BindingManager {
-                rows: parking_lot::Mutex::new(vec![endpoint_row()]),
-                views: parking_lot::Mutex::new(vec![endpoint_view(), binding_view(true)]),
-                unreadable: parking_lot::Mutex::new(Vec::new()),
-                reads: parking_lot::Mutex::new(Vec::new()),
-                live: parking_lot::Mutex::new(Vec::new()),
-                armed: parking_lot::Mutex::new(0),
-                released: parking_lot::Mutex::new(0),
-                refuse_cancels: parking_lot::Mutex::new(false),
+                rows: tokio::sync::Mutex::new(vec![endpoint_row()]),
+                views: tokio::sync::Mutex::new(vec![endpoint_view(), binding_view(true)]),
+                unreadable: tokio::sync::Mutex::new(Vec::new()),
+                reads: tokio::sync::Mutex::new(Vec::new()),
+                live: tokio::sync::Mutex::new(Vec::new()),
+                armed: tokio::sync::Mutex::new(0),
+                released: tokio::sync::Mutex::new(0),
+                refuse_cancels: tokio::sync::Mutex::new(false),
             });
             (
                 GuestFixture::with(row, Arc::clone(&manager) as Arc<dyn ManagerEndpoint>),
@@ -7075,14 +7121,14 @@ mod tests {
             views: Vec<ResourceView>,
         ) -> Arc<BindingManager> {
             Arc::new(BindingManager {
-                rows: parking_lot::Mutex::new(rows),
-                views: parking_lot::Mutex::new(views),
-                unreadable: parking_lot::Mutex::new(Vec::new()),
-                reads: parking_lot::Mutex::new(Vec::new()),
-                live: parking_lot::Mutex::new(Vec::new()),
-                armed: parking_lot::Mutex::new(0),
-                released: parking_lot::Mutex::new(0),
-                refuse_cancels: parking_lot::Mutex::new(false),
+                rows: tokio::sync::Mutex::new(rows),
+                views: tokio::sync::Mutex::new(views),
+                unreadable: tokio::sync::Mutex::new(Vec::new()),
+                reads: tokio::sync::Mutex::new(Vec::new()),
+                live: tokio::sync::Mutex::new(Vec::new()),
+                armed: tokio::sync::Mutex::new(0),
+                released: tokio::sync::Mutex::new(0),
+                refuse_cancels: tokio::sync::Mutex::new(false),
             })
         }
 
@@ -7091,14 +7137,13 @@ mod tests {
         /// and REMOVES every registration armed against the pair it replaces
         /// (AE2), so the one-shot premise is exercised by the double rather
         /// than assumed by it.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn publish(manager: &BindingManager, view: ResourceView) {
+        async fn publish(manager: &BindingManager, view: ResourceView) {
             {
-                let mut views = manager.views.lock(); // async-gate-allow: fixture rewrites under a short guard and holds no await
+                let mut views = manager.views.lock().await;
                 views.retain(|published| published.key != view.key);
                 views.push(view);
             }
-            manager.spend_satisfied();
+            manager.spend_satisfied().await;
         }
 
         /// The delivery a live Guest Process receives is exactly the sealed
@@ -7114,7 +7159,7 @@ mod tests {
                 ReconcileOutcome::InProgress { .. }
             ));
             yield_until_effects_settled().await;
-            let realized = f.target.realized();
+            let realized = f.target.realized().await;
             assert_eq!(realized.len(), 1, "one realize frame carries the delivery");
             let realization = crate::worker_launch::GuestProcessRealization::decode(&realized[0].1)
                 .expect("the delivered realization decodes");
@@ -7201,7 +7246,7 @@ mod tests {
                 fake.launch_calls()
             );
             assert!(
-                manager.view_reads().contains(&endpoint_key()),
+                manager.view_reads().await.contains(&endpoint_key()),
                 "the pass READ that source's view rather than passing it by"
             );
             assert!(
@@ -7224,9 +7269,9 @@ mod tests {
             );
             yield_until_effects_settled().await;
             assert!(
-                guest.target.realized().is_empty(),
+                guest.target.realized().await.is_empty(),
                 "no realize frame crosses the session while the source has published nothing: {:?}",
-                guest.target.realized()
+                guest.target.realized().await
             );
         }
 
@@ -7319,19 +7364,31 @@ mod tests {
                 ReconcileOutcome::InProgress { .. }
             ));
             yield_until_effects_settled().await;
-            assert_eq!(f.target.realized().len(), 1, "the first pass delivered");
+            assert_eq!(
+                f.target.realized().await.len(),
+                1,
+                "the first pass delivered"
+            );
 
             // The endpoint withdrew the delivery: its relationship row no
             // longer publishes one at the incarnation the lease sealed, so the
             // lease revalidation immediately before the effect fails closed.
-            manager.views.lock().retain(|view| view.key != binding_key()); // async-gate-allow: fixture rewrites under a short guard and holds no await
-            manager.views.lock().push(binding_view(false)); // async-gate-allow: fixture rewrites under a short guard and holds no await
+            manager
+                .views
+                .lock()
+                .await
+                .retain(|view| view.key != binding_key());
+            manager.views.lock().await.push(binding_view(false));
             assert_eq!(
                 d.reconcile(&mut f.fixture.ctx).await.expect("the moved pass"),
                 ReconcileOutcome::RetryScheduled,
                 "a relationship that is no longer delivered defers the launch"
             );
-            assert_eq!(f.target.realized().len(), 1, "a revoked lease delivers nothing");
+            assert_eq!(
+                f.target.realized().await.len(),
+                1,
+                "a revoked lease delivers nothing"
+            );
         }
 
         /// A delivery withdrawn from a running `Process` stops the incarnation
@@ -7376,7 +7433,7 @@ mod tests {
 
             // The relationship stopped being delivered at the realization this
             // row launched over.
-            publish(&manager, binding_view(false));
+            publish(&manager, binding_view(false)).await;
             assert_eq!(
                 d.reconcile(&mut f.ctx).await.expect("the withdrawn pass"),
                 ReconcileOutcome::RetryScheduled
@@ -7440,7 +7497,7 @@ mod tests {
 
             // A delivery somebody else re-derived: the evidence names a
             // different realization than the one this row launched over.
-            publish(&manager, binding_view_over("incarnation-OTHER", true));
+            publish(&manager, binding_view_over("incarnation-OTHER", true)).await;
             d.reconcile(&mut f.ctx)
                 .await
                 .expect_err("foreign evidence refuses the pass");
@@ -7545,6 +7602,7 @@ mod tests {
             assert_eq!(
                 manager
                     .view_reads()
+                    .await
                     .iter()
                     .filter(|key| *key == &binding_key())
                     .count(),
@@ -7755,7 +7813,7 @@ mod tests {
                 fake.launch_calls()
             );
             assert!(
-                manager.view_reads().contains(&session_key()),
+                manager.view_reads().await.contains(&session_key()),
                 "the pass read the owner's own view rather than assuming its child set"
             );
             assert!(
@@ -7768,7 +7826,7 @@ mod tests {
             // Nothing else about the evidence moved, so this row's expected set
             // is now provably empty and it launches exactly as a row outside
             // any display neighbourhood always has.
-            publish(&manager, session_view(true));
+            publish(&manager, session_view(true)).await;
             assert!(
                 matches!(
                     d.reconcile(&mut f.ctx).await.expect("the settled pass"),
@@ -7810,7 +7868,7 @@ mod tests {
                 "the delivered relationship admits the launch"
             );
             yield_until_effects_settled().await;
-            let realized = f.target.realized();
+            let realized = f.target.realized().await;
             assert_eq!(realized.len(), 1, "one realize frame carries the delivery");
             let realization = crate::worker_launch::GuestProcessRealization::decode(&realized[0].1)
                 .expect("the delivered realization decodes");
@@ -7868,9 +7926,9 @@ mod tests {
             );
             yield_until_effects_settled().await;
             assert!(
-                guest.target.realized().is_empty(),
+                guest.target.realized().await.is_empty(),
                 "no realize frame crosses the session while the Zone publication is unread: {:?}",
-                guest.target.realized()
+                guest.target.realized().await
             );
         }
 
@@ -7900,27 +7958,29 @@ mod tests {
                 ReconcileOutcome::RetryScheduled
             );
             assert_eq!(
-                manager.watch_cycle(),
+                manager.watch_cycle().await,
                 (1, 0),
                 "the endpoint this pass read before it faulted is the row it subscribed to"
             );
         }
 
-        /// A runtime watch is one-shot: AE2 satisfies it and removes it. A
-        /// driver that only ever registers a target once is therefore
-        /// subscribed to it exactly once, and the SECOND projection change on
-        /// that target - the downgrade after a relaunch - is never delivered
-        /// to it. The registration this row holds is therefore released and
-        /// armed again once the target's evidence has MOVED, so the second
-        /// change still wakes this row (R21, AE18).
+        /// A runtime watch is one-shot: AE2 satisfies it, removes it, and
+        /// notifies this row. A driver that only ever registers a target once
+        /// is therefore subscribed to it exactly once, and the SECOND
+        /// projection change on that target - the downgrade after a relaunch -
+        /// is never delivered to it. The registration this row holds is
+        /// therefore released and armed again once the target SPENT it, so
+        /// the second change still wakes this row (R21, AE18).
         ///
-        /// It is moved evidence, not a pass, that spends a registration: the
-        /// evidence a registration was armed against is exactly the pair its
-        /// target compares when it publishes, so a target whose pair stands
-        /// has not satisfied it. A pass over evidence that did not move
-        /// therefore places none and releases none, which is what keeps a
-        /// converged row from spending two manager round trips per dependency
-        /// on every tick it re-reads.
+        /// What spends a registration is the runtime's own record of the
+        /// spend, not a comparison of evidence: a target pass can satisfy
+        /// every registration it holds and republish the very pair it
+        /// published before, so a fingerprint reads the same either way.
+        /// That case is `a_spend_that_republishes_the_same_evidence_still_rearms`.
+        /// A pass over registrations that are still standing therefore places
+        /// none and releases none, which is what keeps a converged row from
+        /// spending two manager round trips per dependency on every tick it
+        /// re-reads.
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         #[tokio::test]
         async fn the_evidence_subscription_rearms_when_the_evidence_moves() {
@@ -7937,12 +7997,12 @@ mod tests {
 
             expect_in_progress(d.reconcile(&mut f.ctx).await);
             assert_eq!(
-                manager.watch_cycle(),
+                manager.watch_cycle().await,
                 (2, 0),
                 "the first pass subscribes to the endpoint and the relationship"
             );
             assert_eq!(
-                manager.live_watches(),
+                manager.live_watches().await,
                 vec![WatchId(1), WatchId(2)],
                 "and the plane is holding exactly those two registrations"
             );
@@ -7953,14 +8013,14 @@ mod tests {
                 ReconcileOutcome::Satisfied
             );
             assert_eq!(
-                manager.watch_cycle(),
+                manager.watch_cycle().await,
                 (2, 0),
                 "a pass over evidence that stood releases nothing and arms nothing: both \
                  registrations are still live in their targets, so re-arming them would buy \
                  no wake-up and cost two round trips per dependency"
             );
             assert_eq!(
-                manager.live_watches(),
+                manager.live_watches().await,
                 vec![WatchId(1), WatchId(2)],
                 "and the SAME two registrations are still standing: nothing was stacked and \
                  nothing was spent by a pass that read evidence that had not moved"
@@ -7969,9 +8029,15 @@ mod tests {
             // The relationship's own evidence moves - the delivery is
             // withdrawn - so the registration standing on it is spent, and the
             // endpoint's did not move, so the one standing on it is not.
-            publish(&manager, binding_view(false));
+            publish(&manager, binding_view(false)).await;
             assert_eq!(
-                manager.live_watches(),
+                f.absorb_watch_satisfactions(),
+                1,
+                "the target notified this row on the registration it satisfied, which is what \
+                 reaches the actor as the spend"
+            );
+            assert_eq!(
+                manager.live_watches().await,
                 vec![WatchId(1)],
                 "the target REMOVED the registration it satisfied (AE2), rather than this \
                  double holding it: that one-shot removal is what makes re-arming load-bearing \
@@ -7983,17 +8049,89 @@ mod tests {
                 "a withdrawn delivery defers the launch"
             );
             assert_eq!(
-                manager.watch_cycle(),
+                manager.watch_cycle().await,
                 (3, 1),
                 "exactly the registration whose evidence moved was released and armed again, so \
                  a second change on that relationship still wakes this row, and the endpoint's \
                  untouched registration is left standing"
             );
             assert_eq!(
-                manager.live_watches(),
+                manager.live_watches().await,
                 vec![WatchId(1), WatchId(3)],
                 "so the relationship is subscribed again under a NEW registration and the \
                  endpoint's original one is untouched"
+            );
+        }
+
+        /// The evidence fingerprint is not the spend (R21, AE18).
+        ///
+        /// One target pass satisfies every registration this row holds on it
+        /// and can then republish the very pair it published before: the
+        /// entry `Reconciling` carries no projection and the exit restores
+        /// it. Read afterwards, the published pair is identical for a row
+        /// whose registrations were spent and for a row whose registrations
+        /// are still standing, so no comparison of evidence can tell the
+        /// driver which one it is. Gating the re-arm on that comparison
+        /// places nothing after the spend and leaves this row holding an id
+        /// no target has: neither relationship can wake it again.
+        ///
+        /// The runtime's own record is the answer. A registration is live
+        /// until the target notifies on it, and the notification is what this
+        /// double sends.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn a_spend_that_republishes_the_same_evidence_still_rearms() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![endpoint_view(), binding_view(true)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            expect_in_progress(d.reconcile(&mut f.ctx).await);
+            fake.push_adoption(ProviderAdoption::Adopted(adopted_report()));
+            d.reconcile(&mut f.ctx).await.expect("the observed pass");
+            assert_eq!(
+                manager.live_watches().await,
+                vec![WatchId(1), WatchId(2)],
+                "the first two passes left one live registration per dependency"
+            );
+
+            // Both targets run a pass and republish exactly what they
+            // published before.
+            manager.spend_all(&endpoint_key()).await;
+            manager.spend_all(&binding_key()).await;
+            assert_eq!(
+                manager.live_watches().await,
+                Vec::<WatchId>::new(),
+                "each target REMOVED the registration it satisfied (AE2), so nothing is standing"
+            );
+            assert_eq!(
+                f.absorb_watch_satisfactions(),
+                2,
+                "and each one notified this row, which is the only thing that tells the driver \
+                 its subscriptions are gone"
+            );
+
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the woken pass"),
+                ReconcileOutcome::Satisfied,
+                "the evidence this pass reads is the very pair it read before"
+            );
+            assert_eq!(
+                manager.watch_cycle().await,
+                (4, 2),
+                "both spent registrations were released and armed again on evidence that reads \
+                 back unchanged: the spend is what re-arms this row, not the fingerprint"
+            );
+            assert_eq!(
+                manager.live_watches().await,
+                vec![WatchId(3), WatchId(4)],
+                "so both dependencies are subscribed again, each under a fresh registration"
             );
         }
 
@@ -8048,7 +8186,7 @@ mod tests {
             // The committed relationship is gone. The endpoint still names it,
             // and the plane now answers `Ok(None)` for that key - which is a
             // fact about the committed set, not a plane that is busy.
-            manager.retire(&binding_key());
+            manager.retire(&binding_key()).await;
             assert_eq!(
                 d.reconcile(&mut f.ctx).await.expect("the absent pass"),
                 ReconcileOutcome::RetryScheduled
@@ -8103,7 +8241,7 @@ mod tests {
             );
 
             // The very same read, refused rather than answered.
-            manager.withhold(&binding_key());
+            manager.withhold(&binding_key()).await;
             assert_eq!(
                 d.reconcile(&mut f.ctx).await.expect("the unanswerable pass"),
                 ReconcileOutcome::RetryScheduled
@@ -8196,14 +8334,20 @@ mod tests {
 
             // The plane starts refusing releases just before the relationship's
             // evidence moves, so the re-arm's own release is the one refused.
-            manager.set_refusing_cancels(true);
-            publish(&manager, binding_view(false));
+            manager.set_refusing_cancels(true).await;
+            publish(&manager, binding_view(false)).await;
+            assert_eq!(
+                f.absorb_watch_satisfactions(),
+                1,
+                "the relationship's own evidence moved, so the target satisfied the \
+                 registration on it and this row learned the spend"
+            );
             assert_eq!(
                 d.reconcile(&mut f.ctx).await.expect("the withdrawn pass"),
                 ReconcileOutcome::RetryScheduled
             );
             assert_eq!(
-                manager.watch_cycle(),
+                manager.watch_cycle().await,
                 (3, 0),
                 "the refused release did not happen, and the registration it would have \
                  dropped is still standing in its target's mailbox"
@@ -8212,13 +8356,13 @@ mod tests {
             // Once the plane accepts releases again, the next pass releases
             // BOTH the registration it could not release last time and the one
             // it armed alongside it - proof the first was never dropped.
-            manager.set_refusing_cancels(false);
+            manager.set_refusing_cancels(false).await;
             assert_eq!(
                 d.reconcile(&mut f.ctx).await.expect("the recovered pass"),
                 ReconcileOutcome::RetryScheduled
             );
             assert_eq!(
-                manager.watch_cycle(),
+                manager.watch_cycle().await,
                 (4, 2),
                 "the refused registration was still NAMED, so this pass released it and the \
                  one armed beside it, then armed the target again"

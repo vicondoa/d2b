@@ -6035,7 +6035,6 @@ fn nix_module_structural_signals(
 
 /// Every structural signal under the shared-crate source roots and the shared
 /// Nix surface, sorted deterministically./
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn collect_structural_signals(repo_root: &Path) -> Result<Vec<StructuralKnowledgeSignal>, String> {
     let mut signals = Vec::new();
     for root in SHARED_CRATE_SOURCE_ROOTS {
@@ -8306,7 +8305,6 @@ fn collect_provider_module_signals(
 /// Every family-identity signal a provider crate's own sources carries,
 /// sorted deterministically. The crate's own family tokens are not signals;
 /// test-only code and generated views are skipped like the shared probes.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn collect_provider_family_signals(
     repo_root:&Path,
     provider_crates: &[&str],
@@ -8764,7 +8762,6 @@ const COMMITTED_SCOPE_ARTIFACT_ROOTS: &[&str] = &["docs/reference", "packages/po
 /// compared against the workspace rather than a diff: any crate present without
 /// a row is an edit outside the scope that happened, which is what a
 /// committed scope gate can prove without a diff..
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_committed_scope(repo_root:&Path, members: &[WorkspaceMember]) -> Result<(), String> {
     check_committed_scope_with(
         repo_root,
@@ -8777,7 +8774,6 @@ fn check_committed_scope(repo_root:&Path, members: &[WorkspaceMember]) -> Result
 /// The committed-scope gate against a caller-supplied scope: fixtures and
 /// ratchet tests exercise both directions on tiny scopes instead of the real
 /// 94-row table.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_committed_scope_with(
     repo_root:&Path,
     members: &[WorkspaceMember],
@@ -9238,7 +9234,6 @@ mod tests {
         /// Add a packaging Provider crate: one that owns a product identity,
         /// which is the whole of what makes a provider-prefixed crate a
         /// packaging Provider.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn add_provider_package(&self, name: &str, identity: &str) -> PathBuf {
             let package = write_package(&self.root, name);
             let family = name.strip_prefix(PROVIDER_PREFIX).expect("provider prefix");
@@ -9363,7 +9358,6 @@ mod tests {
     }
 
     /// Whether the check classifies one crate as a packaging Provider.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn classified_as_packaging_provider(root: &Path, name: &str) -> bool {
         let identities = ProviderIdentities::load(root).expect("the authority loads the fixture");
         is_packaging_provider(&identities, name)
@@ -10849,7 +10843,6 @@ mod tests {
     }
 
     #[test]
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_crate_outside_the_committed_scope_is_refused() {
         let fixture = Fixture::new("scope-unclassified");
         let members = manifest_workspace_members(&fixture.root).unwrap();
@@ -10860,7 +10853,6 @@ mod tests {
     }
 
     #[test]
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn a_crate_inside_the_committed_scope_passes() {
         let fixture = Fixture::new("scope-pass");
         let members = manifest_workspace_members(&fixture.root).unwrap();
@@ -10871,7 +10863,6 @@ mod tests {
         check_committed_scope_with(&fixture.root, &members, &scope, &[]).unwrap();
     }
 
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn a_stale_committed_scope_row_is_refused() {
         let fixture = Fixture::new("scope-stale");

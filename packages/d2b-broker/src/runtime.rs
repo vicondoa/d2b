@@ -13286,13 +13286,13 @@ mod tests {
     /// reach: an authority key that does not reproduce its own binding is
     /// decided from the request's committed facts, before any path is
     /// resolved.
-    #[test]
+    #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn the_dispatch_arm_audits_its_closed_class_and_still_fails_live() {
+    async fn the_dispatch_arm_audits_its_closed_class_and_still_fails_live() {
         use d2b_contracts_broker::broker_wire::{BrokerCallerRole, BrokerRequest};
 
         let root = test_audit_dir("endpoint-access-answer");
-        fs::create_dir_all(&root).expect("create test root");
+        tokio::fs::create_dir_all(&root).await.expect("create test root");
         let bundle = build_test_bundle(&root);
         let config = test_server_config(&root, &bundle.manifest_path);
         let (log, _capture) = AuditLog::open_capturing(
@@ -13311,7 +13311,7 @@ mod tests {
         let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
             .expect("audit context");
 
-        let failure = envelope_call_runtime().block_on(dispatch_request_with_backend(
+        let failure = dispatch_request_with_backend(
             request,
             1000,
             Gid::current().as_raw(),
@@ -13321,7 +13321,8 @@ mod tests {
             &log,
             Some(&bundle.resolver),
             &backend,
-        ))
+        )
+        .await
         .expect_err("a refusal that is not the absent class is still a broker failure");
 
         let mismatch = EndpointAccessError::EndpointAuthorityMismatch;
@@ -13330,7 +13331,9 @@ mod tests {
             "the arm must not widen the special case to other classes: {failure:?}"
         );
 
-        let audit = fs::read_to_string(log.current_daily_path()).expect("read the audit day");
+        let audit = tokio::fs::read_to_string(log.current_daily_path())
+            .await
+            .expect("read the audit day");
         assert!(
             audit.contains(r#""op":"EndpointRevokeAccess""#),
             "the refusal is recorded against the verb it arrived as: {audit}"
@@ -13344,7 +13347,7 @@ mod tests {
             "under the same closed class the answer carries: {audit}"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        let _ = tokio::fs::remove_dir_all(&root).await;
     }
 
     #[test]

@@ -187,20 +187,30 @@ pub enum ResourceMsg {
     TargetReconnected { session_generation: u64 },
 }
 
-/// Evaluate a watch condition against the actor's in-memory status and the
-/// pass's projection change (R12, R21).
+/// Evaluate a watch condition against one status transition (R12, R21).
+///
+/// `before` and `after` are the statuses either side of it, so a LEVEL
+/// condition ([`WatchCondition::Ready`]) answers for the state the target is
+/// in now, and an EDGE condition answers for what this transition MOVED.
+/// Passing the same status for both is how a registration that has just
+/// arrived is evaluated: no transition moves anything, so only a LEVEL
+/// condition can be satisfied there.
 ///
 /// `Custom` predicates are driver-supplied; the contract hook for named
 /// custom predicates lands with the provider conversion units (U6+). U3
 /// treats unknown custom ids as unsatisfied - registered, never silently
 /// satisfied by the wrong predicate.
-fn condition_matches(
+fn condition_fires(
     condition: &WatchCondition,
-    status: &ResourceStatus,
+    before: &ResourceStatus,
+    after: &ResourceStatus,
     projection_changed: bool,
 ) -> bool {
     match condition {
-        WatchCondition::Ready => *status == ResourceStatus::Ready,
+        WatchCondition::Ready => *after == ResourceStatus::Ready,
+        WatchCondition::ReadyChanged => {
+            (*before == ResourceStatus::Ready) != (*after == ResourceStatus::Ready)
+        }
         WatchCondition::ProjectionChanged => projection_changed,
         WatchCondition::Custom(_) => false,
     }
@@ -333,6 +343,15 @@ pub struct ResourceActorState {
     row: StoredDesiredResource,
     /// In-memory status (R11). Never persisted.
     status: ResourceStatus,
+    /// The classification this actor last CONCLUDED with, which is not
+    /// always [`Self::status`]: a pass in flight publishes the in-flight
+    /// marker over it (see [`Self::pass_started`]).
+    ///
+    /// This is the `before` an EDGE watch condition (spec section 15) is
+    /// evaluated against, because "readiness CHANGED" is a claim about two
+    /// things this row proved. Comparing against the marker instead would
+    /// make every pass of a converged row read as a change.
+    settled_status: ResourceStatus,
     /// The wire-visible `status.resource` layer this actor last published
     /// (R11: in-memory only). Compared on every transition so a
     /// [`WatchCondition::ProjectionChanged`] subscriber learns about an
@@ -376,6 +395,61 @@ impl ResourceActorState {
         self.transition_published(status, None);
     }
 
+    /// Mark a pass as STARTED: the row's observable classification becomes
+    /// `Reconciling` and NOTHING is evaluated against it.
+    ///
+    /// The in-flight marker is not an observation of what this row proved -
+    /// it says a pass is running - and every pass publishes one. Evaluating
+    /// the registered watches against it manufactures a transition on every
+    /// pass, which is only invisible while every condition is a LEVEL one:
+    /// `Ready` asks whether the target is ready now, and `Reconciling` is not
+    /// `Ready`, so a LEVEL answer happens to be false. An EDGE condition
+    /// (spec section 15) asks what a transition MOVED, and this marker moves
+    /// nothing - a row that concludes each pass by publishing `Ready` walks
+    /// `Ready -> Reconciling -> Ready`, which reads as two readiness changes.
+    /// So every subscriber of a converged row was woken by every pass of it,
+    /// and the wakes cascaded along the watch graph.
+    ///
+    /// The same marker also reset `last_projection` to `None`, so every pass
+    /// CONCLUDED with `projection_changed` true whatever the pass actually
+    /// proved, and an evidence subscription could not mean "changed".
+    ///
+    /// Both bookkeeping moves belong to the transitions a pass concludes with:
+    /// those are the ones that report what the row proved. This marker still
+    /// updates the row's observable classification, because that is what a
+    /// reader polling the manager sees while a pass runs.
+    fn pass_started(&mut self) {
+        self.status = ResourceStatus::Reconciling;
+        let _ = self.manager.send_message(ResourceManagerMsg::RuntimeChanged {
+            key: self.row.key.clone(),
+            generation: self.row.generation,
+            status: self.status.clone(),
+            projection: None,
+        });
+    }
+
+    /// Publish an evidence layer WITHOUT concluding a classification.
+    ///
+    /// A pass whose effect is still in flight has proved new evidence but no
+    /// new readiness, so its layer is a real
+    /// [`WatchCondition::ProjectionChanged`] and nothing else. Routing it
+    /// through [`Self::transition_published`] would record the in-flight
+    /// status as a concluded one, which is exactly what makes the next pass's
+    /// readiness edge compare against a marker.
+    fn publish_projection(&mut self, projection: serde_json::Value) {
+        let next = Some(projection.clone());
+        let projection_changed = next != self.last_projection;
+        self.last_projection = next;
+        let settled = self.settled_status.clone();
+        self.evaluate_watchers(&settled, projection_changed);
+        let _ = self.manager.send_message(ResourceManagerMsg::RuntimeChanged {
+            key: self.row.key.clone(),
+            generation: self.row.generation,
+            status: self.status.clone(),
+            projection: Some(projection),
+        });
+    }
+
     /// [`Self::transition`] with the pass's wire-visible `status.resource`
     /// projection attached (R11: in-memory only, dropped with the next
     /// status). The projection is `None` for transitions no driver pass
@@ -385,10 +459,14 @@ impl ResourceActorState {
         status: ResourceStatus,
         projection: Option<serde_json::Value>,
     ) {
+        // An EDGE condition is a claim about two things this row PROVED, so
+        // its `before` is the last classification this actor concluded with -
+        // never the in-flight marker a pass in flight publishes over it.
+        let before = std::mem::replace(&mut self.settled_status, status.clone());
         self.status = status;
         let projection_changed = projection != self.last_projection;
         self.last_projection = projection.clone();
-        self.evaluate_watchers(projection_changed);
+        self.evaluate_watchers(&before, projection_changed);
         let _ = self.manager.send_message(ResourceManagerMsg::RuntimeChanged {
             key: self.row.key.clone(),
             generation: self.row.generation,
@@ -397,15 +475,23 @@ impl ResourceActorState {
         });
     }
 
-    /// AE2, spec section 15: satisfy matching watchers in the transition
-    /// handler and remove them (exactly once per registration).
-    fn evaluate_watchers(&mut self, projection_changed: bool) {
+    /// AE2, spec section 15: satisfy the watchers this transition fires in
+    /// the same handler and remove them (exactly once per registration).
+    ///
+    /// `before` is the classification the row last PROVED, and `after` is the
+    /// one it has just recorded, so an EDGE condition can say what this
+    /// transition moved rather than what the target currently is. Neither is
+    /// ever the in-flight marker: a publish that concludes no classification
+    /// (see [`Self::publish_projection`]) records none, so both sides are the
+    /// same classification.
+    fn evaluate_watchers(&mut self, before: &ResourceStatus, projection_changed: bool) {
         let target = self.row.key.clone();
+        let after = self.settled_status.clone();
         let satisfied: Vec<WatchId> = self
             .watchers
             .iter()
             .filter(|(_, watcher)| {
-                condition_matches(&watcher.condition, &self.status, projection_changed)
+                condition_fires(&watcher.condition, before, &after, projection_changed)
             })
             .map(|(id, _)| *id)
             .collect();
@@ -506,7 +592,7 @@ impl ResourceActorState {
         // outcome is runtime status, never persisted.
         match self.driver.recover(&mut self.ctx).await {
             Ok(_recovered) => {
-                self.transition(ResourceStatus::Reconciling);
+                self.pass_started();
                 self.reconcile_pass(&myself).await;
             }
             Err(failure) => self.handle_driver_failure(failure, &myself),
@@ -526,7 +612,7 @@ impl ResourceActorState {
             self.reconcile_pending = true;
             return Ok(());
         }
-        self.transition(ResourceStatus::Reconciling);
+        self.pass_started();
         self.reconcile_pass(&myself).await;
         Ok(())
     }
@@ -540,7 +626,7 @@ impl ResourceActorState {
             self.reconcile_pending = true;
             return Ok(());
         }
-        self.transition(ResourceStatus::Reconciling);
+        self.pass_started();
         self.reconcile_pass(myself).await;
         Ok(())
     }
@@ -566,7 +652,7 @@ impl ResourceActorState {
             self.reconcile_pending = true;
             return Ok(());
         }
-        self.transition(ResourceStatus::Reconciling);
+        self.pass_started();
         self.reconcile_pass(myself).await;
         Ok(())
     }
@@ -626,7 +712,7 @@ impl ResourceActorState {
                 // the status it rides stays the pass's `Reconciling`. Only
                 // invalidation (a spec change or deletion) clears it.
                 if let Some(projection) = self.ctx.take_status_projection() {
-                    self.transition_published(self.status.clone(), Some(projection));
+                    self.publish_projection(projection);
                 }
                 self.pending_operation = Some(operation);
             }
@@ -789,6 +875,7 @@ impl Actor for ResourceActor {
             timers,
             deleting: row.deleting,
             status: ResourceStatus::Pending,
+            settled_status: ResourceStatus::Pending,
             last_projection: None,
             row,
             driver,
@@ -840,26 +927,49 @@ impl Actor for ResourceActor {
                 state.apply_spec_changed(generation, spec, metadata, &myself).await
             }
             ResourceMsg::Reconcile => state.reconcile_msg(myself).await,
+            // A dependency actor EXITED (R17, spec section 16): the manager
+            // respawns it with an EMPTY watcher set, so every registration
+            // this row held on it died with that actor. The record has to say
+            // so before the pass this message triggers reads it - a row that
+            // still reads its old ids live places nothing, holds
+            // registrations no target has, and is never woken by that target
+            // again. The row is woken HERE either way, so the one chance to
+            // re-arm is the pass below.
+            ResourceMsg::DependencyChanged { key } => {
+                state.ctx.mark_target_watches_lost(&key);
+                state.dependency_triggered(&myself).await
+            }
             // A satisfaction is the target speaking: the registration is
             // already gone from its mailbox (AE2), so the context records the
             // spend before the pass this row is about to run reads it. The
             // evidence the target republished may be identical to the
             // evidence the registration was armed against, so this - not a
             // comparison - is what tells the driver to re-arm.
-            ResourceMsg::DependencyChanged { .. } => state.dependency_triggered(&myself).await,
+            //
+            // The manager's routing record goes with the registration. Nothing
+            // else ever removes it - a re-arm allocates a NEW id - so leaving
+            // it is one manager entry per row+target for the row's lifetime.
             ResourceMsg::DependencySatisfied { watch, .. } => {
                 state.ctx.mark_watch_spent(watch);
+                let _ = state.ctx.cancel_watch(watch).await;
                 state.dependency_triggered(&myself).await
             }
             ResourceMsg::Watch { id, condition, subscriber } => {
                 // ATOMICITY INVARIANT (AE2, R12): evaluate and register in
-                // this one handler. Condition already true: notify now.
-                // Otherwise insert; transitions re-evaluate in their handler.
-                // Registration never counts as a projection CHANGE: a
-                // subscriber registering today is asking for the next change,
-                // and answering it with the layer already published would wake
-                // every subscriber on every registration.
-                if condition_matches(&condition, &state.status, false) {
+                // this one handler. A LEVEL condition that already holds is
+                // notified now, because it answers for the state the target is
+                // in; otherwise insert, and transitions re-evaluate in their
+                // own handler. An EDGE condition can never be answered here:
+                // registration is not a transition, and answering it with the
+                // layer already published would wake every subscriber on
+                // every registration.
+                let holds_now = condition_fires(
+                    &condition,
+                    &state.settled_status,
+                    &state.settled_status,
+                    false,
+                );
+                if holds_now {
                     let _ = subscriber.send(WatchSatisfied {
                         watch: id,
                         target: state.row.key.clone(),
@@ -1054,6 +1164,12 @@ pub(crate) mod test_support {
         /// Proves a spec change invalidates the old generation's projection
         /// instead of carrying it onto the new row.
         ProjectionOnce,
+        /// Every pass publishes a status projection carrying the pass
+        /// counter, so each one is a different layer from the one before.
+        /// Proves a subscriber's evidence subscription: every pass SATISFIES
+        /// the registrations standing on this row (AE2), the row is woken,
+        /// and it re-arms against the next one.
+        ProjectionEveryPass,
         /// First pass publishes a status projection, then fails retryably;
         /// every later pass is satisfied without a projection. Proves a
         /// failed pass drops the projection it computed - the failure is
@@ -1085,6 +1201,10 @@ pub(crate) mod test_support {
         pub(crate) validate_calls: AtomicU64,
         pub(crate) recover_calls: AtomicU64,
         pub(crate) reconcile_calls: AtomicU64,
+        /// Internal-watch registrations this driver PLACED. A placement is a
+        /// re-arm decision the driver actually took, so a test can tell a
+        /// row that re-subscribed from one that sat on a registration no
+        /// target holds.
         pub(crate) watch_calls: AtomicU64,
         pub(crate) delete_calls: AtomicU64,
         /// Driver-body finalize (drain) invocations: the erased boundary's
@@ -1105,9 +1225,13 @@ pub(crate) mod test_support {
         /// never stops it), which is what makes a stale requeue timer that
         /// survives the delete observable instead of being dropped at stop.
         pub(crate) delete_terminal_failure: AtomicBool,
-        /// When set, every reconcile registers an internal watch on this
-        /// target first (models a dependent resource).
+        /// When set, every reconcile keeps one internal watch on this target
+        /// outstanding (models a dependent resource).
         pub(crate) watch_target: Mutex<Option<ResourceKey>>,
+        /// The condition this row subscribes with. `ProjectionChanged` is the
+        /// evidence seam every driver that re-arms uses; `Ready` is the level
+        /// seam, whose answer on arrival is a case of its own.
+        pub(crate) watch_condition: Mutex<WatchCondition>,
         /// Keys every reconcile reads live through its context
         /// (`ResourceContext::get_view`), in order (models a parent proving a
         /// child, or a dependent proving a dependency).
@@ -1116,7 +1240,8 @@ pub(crate) mod test_support {
         pub(crate) view_reads: Mutex<Vec<FakeViewRead>>,
         /// Generations observed by `reconcile` (spec change delivery).
         pub(crate) generations_seen: Mutex<Vec<u64>>,
-        /// Internal-watch registrations this driver placed, in order.
+        /// Every internal-watch registration this driver placed, in order,
+        /// spent and released ones included.
         pub(crate) registered_watches: Mutex<Vec<WatchId>>,
         /// What each pass read for the registration it remembered: `true` is
         /// still standing in the target's mailbox, `false` is spent. This is
@@ -1143,6 +1268,7 @@ pub(crate) mod test_support {
                 delete_blocked: AtomicBool::new(false),
                 delete_terminal_failure: AtomicBool::new(false),
                 watch_target: Mutex::new(None),
+                watch_condition: Mutex::new(WatchCondition::ProjectionChanged),
                 view_targets: Mutex::new(Vec::new()),
                 view_reads: Mutex::new(Vec::new()),
                 generations_seen: Mutex::new(Vec::new()),
@@ -1221,21 +1347,39 @@ pub(crate) mod test_support {
         ) -> Result<ReconcileOutcome, Self::Error> {
             self.shared.reconcile_calls.fetch_add(1, Ordering::SeqCst);
             self.shared.generations_seen.lock().await.push(ctx.generation());
-            // A dependent registers its internal watch in every reconcile
-            // (spec sections 15-16): exactly-once delivery is the target
-            // actor's contract, re-registration is the dependent's. Each pass
-            // first asks whether the registration it remembers is still
-            // standing, which is what tells a re-arm apart from a stack.
-            let watch_target = self.shared.watch_target.lock().await.clone();
-            if let Some(target) = watch_target {
-                self.shared.watch_calls.fetch_add(1, Ordering::SeqCst);
+            // A dependent keeps ONE internal watch outstanding on its target
+            // (spec sections 15-16): the target actor satisfies a
+            // registration exactly once and removes it (AE2), so the
+            // dependent re-registers. The re-arm reads the SPEND - whether
+            // the registration it remembers is still standing in the
+            // target's mailbox - which is the only thing that tells a re-arm
+            // apart from a stack.
+            //
+            // The condition is the EVIDENCE, not `Ready`: a registration
+            // whose condition already holds is answered on arrival, so
+            // `Ready` against a ready target would spin this row on answers
+            // instead of exercising the one-shot spend at all.
+            if let Some(target) = self.shared.watch_target.lock().await.clone() {
                 let remembered = self.shared.registered_watches.lock().await.last().copied();
-                if let Some(remembered) = remembered {
-                    let live = ctx.watch_is_live(remembered);
-                    self.shared.watch_liveness.lock().await.push(live);
-                }
-                if let Ok(watch) = ctx.watch(target, WatchCondition::Ready).await {
-                    self.shared.registered_watches.lock().await.push(watch);
+                let spent = match remembered {
+                    Some(remembered) => {
+                        let live = ctx.watch_is_live(remembered);
+                        self.shared.watch_liveness.lock().await.push(live);
+                        !live
+                    }
+                    None => true,
+                };
+                if spent {
+                    // The spent registration is NOT released here. The target
+                    // already removed it (AE2), so re-arming is all a driver
+                    // owes - and the routing record the manager still holds
+                    // for it is the runtime's to retire, which is what this
+                    // double must not paper over.
+                    let condition = self.shared.watch_condition.lock().await.clone();
+                    if let Ok(watch) = ctx.watch(target, condition).await {
+                        self.shared.watch_calls.fetch_add(1, Ordering::SeqCst);
+                        self.shared.registered_watches.lock().await.push(watch);
+                    }
                 }
             }
             // Live state of other resources (KTD3): each reconcile reads the
@@ -1255,6 +1399,14 @@ pub(crate) mod test_support {
                             "evidence": "generation-one",
                         }));
                     }
+                    Ok(ReconcileOutcome::Satisfied)
+                }
+                ReconcileMode::ProjectionEveryPass => {
+                    let pass = self.shared.reconcile_calls.load(Ordering::SeqCst);
+                    ctx.set_status_projection(serde_json::json!({
+                        "phase": "Ready",
+                        "evidence": format!("pass-{pass}"),
+                    }));
                     Ok(ReconcileOutcome::Satisfied)
                 }
                 ReconcileMode::PanicOnce => {

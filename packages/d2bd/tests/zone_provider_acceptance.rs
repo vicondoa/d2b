@@ -689,14 +689,14 @@ fn network_zone_waits_for_children_refuses_unauthorized_policy_and_finalizes_ord
 
 struct FilesystemTpm {
     root: PathBuf,
-    process: Mutex<Option<Child>>,
+    process: tokio::sync::Mutex<Option<Child>>,
 }
 
 impl FilesystemTpm {
     fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
-            process: Mutex::new(None),
+            process: tokio::sync::Mutex::new(None),
         }
     }
 }
@@ -743,8 +743,8 @@ impl TpmResourceEffectPort for FilesystemTpm {
     ) -> Result<ResourceRef, TpmResourceEffectError> {
         if let Some(process) = self
             .process
-            .lock() // async-gate-allow: test-support recorder lock
-            .map_err(|_| TpmResourceEffectError::Transient)?
+            .lock()
+            .await
             .as_mut()
             && process
                 .try_wait()
@@ -767,8 +767,8 @@ impl TpmResourceEffectPort for FilesystemTpm {
             .map_err(|_| TpmResourceEffectError::Transient)?;
         *self
             .process
-            .lock() // async-gate-allow: test-support recorder lock
-            .map_err(|_| TpmResourceEffectError::Transient)? = Some(child);
+            .lock()
+            .await = Some(child);
         Ok(ResourceRef::parse("Process/device-swtpm").unwrap())
     }
 
@@ -790,8 +790,8 @@ impl TpmResourceEffectPort for FilesystemTpm {
     async fn stop_swtpm_process(&self, _: &ResourceRef) -> Result<(), TpmResourceEffectError> {
         let Some(mut child) = self
             .process
-            .lock() // async-gate-allow: test-support recorder lock
-            .map_err(|_| TpmResourceEffectError::Transient)?
+            .lock()
+            .await
             .take()
         else {
             return Ok(());
@@ -818,8 +818,8 @@ impl TpmResourceEffectPort for FilesystemTpm {
     ) -> Result<ResourceRef, TpmResourceEffectError> {
         let mut process = self
             .process
-            .lock() // async-gate-allow: test-support recorder lock
-            .map_err(|_| TpmResourceEffectError::Transient)?;
+            .lock()
+            .await;
         if process
             .as_mut()
             .and_then(|child| child.try_wait().ok())
@@ -835,7 +835,7 @@ impl TpmResourceEffectPort for FilesystemTpm {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 impl Drop for FilesystemTpm {
     fn drop(&mut self) {
-        if let Ok(mut process) = self.process.lock()
+        if let Ok(mut process) = self.process.try_lock()
             && let Some(mut child) = process.take()
         {
             let _ = child.kill();

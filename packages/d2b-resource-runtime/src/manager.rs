@@ -604,6 +604,14 @@ pub enum ResourceManagerMsg {
         watch: WatchId,
         reply: oneshot::Sender<Result<(), ResourceError>>,
     },
+    /// Test-only probe: how many internal-watch registrations this manager is
+    /// routing right now. The routing record answers to no caller - that is
+    /// what makes it the thing a spend and a crash can leak - so the test
+    /// that counts it asks.
+    #[cfg(test)]
+    RoutedWatchCount {
+        reply: oneshot::Sender<Result<usize, ResourceError>>,
+    },
     /// Declarative owned-child reconciliation (R9, spec section 21): diff
     /// currently owned children against desired children.
     ReconcileChildren {
@@ -848,15 +856,34 @@ impl ResourceManagerState {
             .collect();
         for id in stale {
             if let Some(entry) = self.watch_registry.remove(&id) {
-                if let Some(dependents) = self.dependents.get_mut(&entry.target) {
-                    dependents.remove(&entry.subscriber);
-                }
+                self.drop_dependent_edge(&entry.target, &entry.subscriber);
                 if let Some(target) = self.actors.get(&entry.target) {
                     let _ = target.send_message(ResourceMsg::Unwatch { id });
                 }
             }
         }
         self.dependents.remove(key);
+    }
+
+    /// Drop `subscriber`'s edge on `target` unless another registration of
+    /// its still routes through that edge.
+    ///
+    /// The edge and the registrations are one thing: it exists to wake this
+    /// subscriber when the target actor dies, so removing it while a
+    /// registration of the same subscriber on the same target is still
+    /// standing is exactly the silent loss a second registration must never
+    /// cause. A re-arm puts the edge straight back.
+    fn drop_dependent_edge(&mut self, target: &ResourceKey, subscriber: &ResourceKey) {
+        let still_routed = self
+            .watch_registry
+            .values()
+            .any(|entry| &entry.target == target && &entry.subscriber == subscriber);
+        if still_routed {
+            return;
+        }
+        if let Some(dependents) = self.dependents.get_mut(target) {
+            dependents.remove(subscriber);
+        }
     }
 
     /// Whether a cleanup-completed row still has owned children retiring.
@@ -986,14 +1013,25 @@ impl ResourceManagerState {
         }
     }
 
-
-    async fn notify_dependents(&mut self, key: &ResourceKey) {
-        let Some(dependents) = self.dependents.get(key).cloned() else {
-            return;
-        };
-        for dependent in dependents {
-            if let Some(actor) = self.actors.get(&dependent) {
-                let _ = actor.send_message(ResourceMsg::DependencyChanged { key: key.clone() });
+    /// Drop every registration routed to `target`, because its actor is gone
+    /// and took them out of its mailbox with it.
+    ///
+    /// The routing records would otherwise outlive what they route: a
+    /// respawned target starts with an empty watcher set, and each
+    /// subscriber's re-arm allocates a NEW id, so a target that crashes
+    /// repeatedly accrues one dead entry per subscriber per crash for the
+    /// lifetime of the row. The dependent edges go with them, and a re-arm
+    /// puts both straight back.
+    fn forget_watches_to(&mut self, target: &ResourceKey) {
+        let routed: Vec<WatchId> = self
+            .watch_registry
+            .iter()
+            .filter(|(_, entry)| &entry.target == target)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in routed {
+            if let Some(entry) = self.watch_registry.remove(&id) {
+                self.drop_dependent_edge(target, &entry.subscriber);
             }
         }
     }
@@ -1738,16 +1776,22 @@ impl Actor for ResourceManager {
                 let result = register_watch(state, registration, subscriber);
                 reply.send(result).ok();
             }
+            // Releasing is idempotent: a registration the target already
+            // satisfied is no longer standing, which is exactly what the
+            // release asks for, so it answers `Ok` like one that was
+            // standing. The only failure is a manager that cannot answer.
             ResourceManagerMsg::CancelWatch { watch, reply } => {
                 if let Some(entry) = state.watch_registry.remove(&watch) {
-                    if let Some(dependents) = state.dependents.get_mut(&entry.target) {
-                        dependents.remove(&entry.subscriber);
-                    }
+                    state.drop_dependent_edge(&entry.target, &entry.subscriber);
                     if let Some(target) = state.actors.get(&entry.target) {
                         let _ = target.send_message(ResourceMsg::Unwatch { id: watch });
                     }
                 }
                 reply.send(Ok(())).ok();
+            }
+            #[cfg(test)]
+            ResourceManagerMsg::RoutedWatchCount { reply } => {
+                reply.send(Ok(state.watch_registry.len())).ok();
             }
             ResourceManagerMsg::ReconcileChildren { owner, desired, reply } => {
                 let result = reconcile_children(state, myself, &owner, desired).await;
@@ -1826,6 +1870,12 @@ impl Actor for ResourceManager {
 /// Supervision (R17): a crashed (or unexpectedly stopped) resource actor is
 /// respawned from its durable row with recover/adopt; if the row is gone
 /// (deletion completed), just clean up.
+///
+/// The dependents are read BEFORE the registrations are dropped, because the
+/// death is what tells them: each is woken with `DependencyChanged`, which is
+/// this runtime's statement that the registrations it held on this actor died
+/// with it, and the pass that follows re-arms. The manager's own records for
+/// them go at the same moment - there is nothing left to route to.
 async fn supervise_exit(
     state: &mut ResourceManagerState,
     who: ActorCell,
@@ -1835,10 +1885,16 @@ async fn supervise_exit(
         return;
     };
     state.actors.remove(&key);
+    let dependents = state.dependents.get(&key).cloned().unwrap_or_default();
+    state.forget_watches_to(&key);
     if let Some(row) = state.rows.get(&key).cloned() {
         let _ = state.spawn_resource_actor(manager, row).await;
     }
-    state.notify_dependents(&key).await;
+    for dependent in dependents {
+        if let Some(actor) = state.actors.get(&dependent) {
+            let _ = actor.send_message(ResourceMsg::DependencyChanged { key: key.clone() });
+        }
+    }
 }
 
 /// Build the durable row for a top-level ensure (R7). The uid derives
@@ -2387,6 +2443,15 @@ impl ResourceManagerClient {
         self.rpc(|reply| ResourceManagerMsg::CancelWatch { watch, reply }).await
     }
 
+    /// How many internal-watch registrations this manager is routing right
+    /// now: what a spend and a crash each leave behind.
+    #[cfg(test)]
+    pub(crate) async fn routed_watch_count(&self) -> usize {
+        self.rpc(|reply| ResourceManagerMsg::RoutedWatchCount { reply })
+            .await
+            .expect("the manager answers its own routing probe")
+    }
+
     /// Declarative owned-child reconciliation: missing children are ensured,
     /// obsolete children are removed, and children already deleting are
     /// reported as obsolete.
@@ -2624,7 +2689,8 @@ mod tests {
         let dkey = key("test", "Dep", "d");
         let tshare = h.factory.shared(&tkey).await;
         let dshare = h.factory.shared(&dkey).await;
-        // The dependent registers a watch on the target in every reconcile.
+        // The dependent keeps one watch on the target outstanding in every
+        // reconcile.
         *dshare.watch_target.lock().await = Some(tkey.clone());
 
         let target =
@@ -2640,10 +2706,78 @@ mod tests {
         target.actor.send_message(ResourceMsg::Reconcile).expect("cast reconcile");
         until(|| tshare.recover_calls.load(AtomicOrdering::SeqCst) == 2).await;
 
-        // The dependent was notified: it reconciled again and re-registered
-        // its watch on the respawned target.
+        // The dependent was notified, and its pass placed a FRESH
+        // registration rather than keeping the id it held.
         until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) > watch_calls_before).await;
         wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
+    }
+
+    /// R17/spec section 16 at the SUBSCRIPTION: a crashed target is respawned
+    /// with an EMPTY watcher set, so every registration this row held on it
+    /// died with that actor.
+    ///
+    /// `DependencyChanged` is the runtime's statement that the actor is gone,
+    /// so it has to invalidate the liveness record too. A row that still
+    /// reads its old ids live places nothing, holds registrations no target
+    /// has, and is never woken by that target again - the subscription is
+    /// lost for the row's lifetime, and nothing about the published evidence
+    /// can reveal it, because a respawned target republishes exactly what the
+    /// crashed one published.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_crashed_target_invalidates_the_registrations_this_row_held_on_it() {
+        let h = harness(&["Target", "Dep"]).await;
+        let tkey = key("test", "Target", "t");
+        let dkey = key("test", "Dep", "d");
+        let tshare = h.factory.shared(&tkey).await;
+        let dshare = h.factory.shared(&dkey).await;
+        *dshare.watch_target.lock().await = Some(tkey.clone());
+
+        let target =
+            h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
+        let dependent =
+            h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dependent");
+        wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
+        until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        // A second pass over a target that published nothing: the driver asks
+        // about the registration it placed and finds it standing.
+        dependent.actor.send_message(ResourceMsg::Reconcile).expect("cast reconcile");
+        until(|| {
+            dshare.watch_liveness.try_lock().is_ok_and(|probes| probes.last().copied() == Some(true))
+        })
+        .await;
+        // The plane is at rest, so the next probe is the one the crash
+        // triggers.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let probes_before = dshare.watch_liveness.lock().await.len();
+
+        *tshare.reconcile_mode.lock().await = ReconcileMode::PanicOnce;
+        target.actor.send_message(ResourceMsg::Reconcile).expect("cast reconcile");
+        until(|| tshare.recover_calls.load(AtomicOrdering::SeqCst) == 2).await;
+        wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
+        until(|| {
+            dshare.watch_liveness.try_lock().is_ok_and(|probes| probes.len() > probes_before)
+        })
+        .await;
+
+        assert!(
+            !dshare.watch_liveness.lock().await[probes_before],
+            "the respawned target holds no registration at all, so the one this row \
+             remembered died with the crashed actor and must not read live"
+        );
+        assert_eq!(
+            dshare.watch_liveness.lock().await.len(),
+            probes_before + 1,
+            "and the pass placed a fresh one instead of stacking on the dead id: the \
+             subscription is live again, not merely remembered"
+        );
+        assert_eq!(
+            h.client.routed_watch_count().await,
+            1,
+            "and the manager routes ONE registration, not two: the routing record for \
+             the registration that died with the crashed actor went with it, so a row \
+             that crashes repeatedly does not leave one dead entry behind per crash"
+        );
     }
 
     /// R9/spec section 21: declarative owned-child diff creates missing
@@ -3675,6 +3809,10 @@ mod tests {
         // it is not Ready while the dependent registers its watch.
         *tshare.reconcile_mode.lock().await = ReconcileMode::GatedEffectOnce;
         *dshare.watch_target.lock().await = Some(target.clone());
+        // The READINESS seam is its own case: a level condition is answered
+        // on arrival whenever the target already reports ready, so the
+        // registration has to be placed while it does not.
+        *dshare.watch_condition.lock().await = WatchCondition::Ready;
         *dshare.view_targets.lock().await = vec![target.clone()];
 
         h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
@@ -4311,36 +4449,163 @@ mod tests {
     /// `DependencySatisfied`, and the actor records the spend on the context
     /// before running the pass it triggers.
     ///
-    /// This is the signal a re-arm reads. The target republished the same
-    /// status it published before, so no comparison of evidence could tell the
-    /// driver that its registration was consumed - and a driver that believed
-    /// it was still standing would never re-arm, leaving a `Ready` row
-    /// subscribed to nothing.
+    /// This is the signal a re-arm reads, and the only one available: the
+    /// target republished the same status it published before, so no
+    /// comparison of evidence could tell the driver that its registration was
+    /// consumed - and a driver that believed it was still standing would
+    /// never re-arm, leaving a `Ready` row subscribed to nothing.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_satisfied_registration_reads_spent_to_the_dependent() {
         let h = harness(&["Target", "Dep"]).await;
         let tkey = key("test", "Target", "t");
         let dkey = key("test", "Dep", "d");
+        let tshare = h.factory.shared(&tkey).await;
         let dshare = h.factory.shared(&dkey).await;
         *dshare.watch_target.lock().await = Some(tkey.clone());
-        h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
+        // The target publishes a DIFFERENT layer on every pass, which is
+        // what satisfies the evidence registration standing on it.
+        *tshare.reconcile_mode.lock().await = ReconcileMode::ProjectionEveryPass;
+
+        let target =
+            h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
         h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dependent");
         wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
         until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) >= 1).await;
-        // The probe is recorded from the second pass on: the first had no
-        // registration to remember.
-        until(|| dshare.reconcile_calls.load(AtomicOrdering::SeqCst) >= 2).await;
+
+        // One more target pass publishes the next layer, and that is what
+        // satisfies the registration.
+        target.actor.send_message(ResourceMsg::Reconcile).expect("cast reconcile");
+        until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) >= 2).await;
 
         assert!(
             !dshare.watch_liveness.lock().await.last().copied().expect("one probe"),
             "the target satisfied the registration and republished the same status, so only \
              the recorded spend tells the dependent it is no longer subscribed"
         );
-        assert!(
-            dshare.registered_watches.lock().await.len() >= 2,
+        assert_eq!(
+            dshare.registered_watches.lock().await.len(),
+            2,
             "the dependent re-armed after the spend rather than stacking nothing and \
              re-subscribing to nothing"
+        );
+    }
+
+    /// §36 internal watches (`an in-flight pass is not a change the row's
+    /// subscribers see`): a pass publishes the in-flight marker on its way
+    /// IN and the classification it concluded with on its way out, so a
+    /// converged row's actor publishes `Reconciling` between two `Ready`s.
+    ///
+    /// The marker says a pass is running. It is not something the row proved,
+    /// so it is not a transition to evaluate an EDGE condition against:
+    /// `ReadyChanged` on that pair reads as leaving `Ready` and entering it
+    /// again, and a subscriber that holds the registration - which is what
+    /// makes it a standing one rather than a spent id - is woken by every pass
+    /// of a row that has already converged. Woken, it re-arms and runs a pass
+    /// whose own publication wakes whatever it watches, so the cost is a
+    /// cascade that scales with the graph rather than with the work.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn an_in_flight_pass_is_not_a_change_the_rows_subscribers_see() {
+        let h = harness(&["Target", "Dep"]).await;
+        let tkey = key("test", "Target", "t");
+        let dkey = key("test", "Dep", "d");
+        let tshare = h.factory.shared(&tkey).await;
+        let dshare = h.factory.shared(&dkey).await;
+        *dshare.watch_target.lock().await = Some(tkey.clone());
+        // The readiness EDGE, which no arrival can satisfy, so the dependent's
+        // registration stands against a target that already reports `Ready`.
+        *dshare.watch_condition.lock().await = WatchCondition::ReadyChanged;
+
+        let target =
+            h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
+        h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dependent");
+        wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
+        until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        // The dependent placed a readiness EDGE against a target that already
+        // reports `Ready`, and no arrival satisfies it, so that registration
+        // is STANDING - the manager still routes exactly it.
+        assert_eq!(
+            h.client.routed_watch_count().await,
+            1,
+            "the dependent holds one live registration on the target"
+        );
+        // The plane is at rest, so the next pass is the one this test causes.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let passes_before = tshare.reconcile_calls.load(AtomicOrdering::SeqCst);
+        let dependent_passes_before = dshare.reconcile_calls.load(AtomicOrdering::SeqCst);
+
+        // A pass over a target that republishes exactly what it published
+        // before: the same classification and the same (absent) layer.
+        target.actor.send_message(ResourceMsg::Reconcile).expect("cast reconcile");
+        until(|| tshare.reconcile_calls.load(AtomicOrdering::SeqCst) > passes_before).await;
+        // The target's pass concludes after its counter moves, so give the
+        // wake this pass would cause the time to land before reading.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        assert_eq!(
+            h.client.routed_watch_count().await,
+            1,
+            "the registration still stands: a pass that republished the same pair satisfied nothing, \
+             so the dependent never re-armed on top of it"
+        );
+        assert_eq!(
+            dshare.reconcile_calls.load(AtomicOrdering::SeqCst),
+            dependent_passes_before,
+            "and the dependent stayed asleep: an in-flight marker is not a readiness change, so a \
+             converged target's pass does not wake the rows subscribed to it"
+        );
+    }
+
+    /// §36 internal watches (`a satisfied registration leaves no routing
+    /// record`): the manager allocates an id per registration, and only a
+    /// release or the row's own retirement ever removed it. A re-arm allocates
+    /// a NEW id, so a row that keeps one target subscribed across its spends
+    /// grew one manager entry per spend for the row's lifetime - routing
+    /// records for registrations that stopped existing, one per row+target.
+    ///
+    /// The satisfaction is what ends a registration (AE2), and the subscriber
+    /// is already handling that notification when it arrives, so that is where
+    /// the routing record goes with it.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_satisfied_registration_leaves_no_routing_record_behind() {
+        let h = harness(&["Target", "Dep"]).await;
+        let tkey = key("test", "Target", "t");
+        let dkey = key("test", "Dep", "d");
+        let tshare = h.factory.shared(&tkey).await;
+        let dshare = h.factory.shared(&dkey).await;
+        *dshare.watch_target.lock().await = Some(tkey.clone());
+        *tshare.reconcile_mode.lock().await = ReconcileMode::ProjectionEveryPass;
+
+        let target =
+            h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
+        h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dependent");
+        wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
+        until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        assert_eq!(
+            h.client.routed_watch_count().await,
+            1,
+            "one registration standing, and exactly one record routing it"
+        );
+
+        for round in 1..=3 {
+            target.actor.send_message(ResourceMsg::Reconcile).expect("cast reconcile");
+            until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) > round).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        assert_eq!(
+            dshare.registered_watches.lock().await.len(),
+            4,
+            "the row really did re-arm after each of the three spends: the count below \
+             did not stop moving"
+        );
+        assert_eq!(
+            h.client.routed_watch_count().await,
+            1,
+            "and the manager routes ONE registration after four placements, not four: \
+             a spend ends a registration, and its routing record ends with it"
         );
     }
 
@@ -4357,20 +4622,24 @@ mod tests {
         let tshare = h.factory.shared(&tkey).await;
         let dshare = h.factory.shared(&dkey).await;
         *dshare.watch_target.lock().await = Some(tkey.clone());
+        // The READINESS seam: a level condition is answered on arrival
+        // whenever the target already reports ready, so the registration has
+        // to be placed while it does not - and every notification after that
+        // has to come from a real transition of the target.
+        *dshare.watch_condition.lock().await = WatchCondition::Ready;
+        // Gate the target's start pass from the very first pass, so it is not
+        // Ready while the dependent registers.
+        *tshare.reconcile_mode.lock().await = ReconcileMode::GatedEffectOnce;
         h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
         h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dependent");
-        wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
         wait_status(&h.client, &dkey, ResourceStatus::Ready).await;
         until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) >= 1).await;
-        // Both actor trees are quiescent now: the pre-restart edge is live and
-        // idle, so every later counter movement belongs to the restart.
+        // Both actor trees are quiescent now: the pre-restart registration is
+        // live and idle, so every later counter movement belongs to the
+        // restart.
         let watches_before = dshare.watch_calls.load(AtomicOrdering::SeqCst);
         let reconciles_before = dshare.reconcile_calls.load(AtomicOrdering::SeqCst);
 
-        // Gate the restarted target's start pass so the dependent's
-        // re-registered watch lands while the target is not Ready yet: the
-        // notification then has to come from the target's own transition.
-        *tshare.reconcile_mode.lock().await = ReconcileMode::GatedEffectOnce;
         let restarted =
             harness_over_with_factory(h.store.clone(), "test", h.factory.clone(), Duration::from_millis(200))
                 .await;

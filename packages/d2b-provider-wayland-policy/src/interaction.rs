@@ -24,7 +24,6 @@ use async_trait::async_trait;
 use d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildIntent;
 use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
 use d2b_core_controller::{OwnedChildIntent, materialize_child_create_payload};
-use d2b_resource_runtime::ResourceStatus;
 use d2b_resource_runtime::context::{
     ChildEnsure, ResourceContext, SpecDecoder, WatchCondition, WatchId, typed_spec_decoder,
 };
@@ -498,10 +497,6 @@ enum Arm {
     /// This row holds `id`: still standing in the target's mailbox, or placed
     /// by this pass.
     Held { id: WatchId, placed: bool },
-    /// Nothing to hold and none wanted: the condition is not one this row
-    /// subscribes to, or the registration this row remembered is already spent
-    /// and none was placed.
-    Vacant,
     /// The manager would not route a registration for this target.
     Refused,
 }
@@ -516,7 +511,7 @@ impl Arm {
     fn held(self) -> Option<WatchId> {
         match self {
             Arm::Held { id, .. } => Some(id),
-            Arm::Vacant | Arm::Refused => None,
+            Arm::Refused => None,
         }
     }
 }
@@ -525,48 +520,57 @@ impl Arm {
 /// on it, one per condition.
 ///
 /// The ids ARE the record, and no fingerprint of the target's evidence can
-/// stand in for them: a target pass satisfies every registration this row
-/// holds on it - the entry `Reconciling` publishes no projection, and the exit
-/// satisfies `Ready` - and then republishes the very pair it published before,
-/// so a spent registration and a standing one read identically.
+/// stand in for them: a target pass that CHANGES its readiness or its layer
+/// satisfies every registration this row holds on it, and then republishes the
+/// very pair it published before, so a spent registration and a standing one
+/// read identically. (A pass that changes neither satisfies nothing - the
+/// in-flight marker is not a change - so the common case never disturbs a
+/// standing registration at all.)
 struct ArmedWatch {
     target: ResourceKey,
-    ready: Option<WatchId>,
-    changed: Option<WatchId>,
+    readiness: Option<WatchId>,
+    evidence: Option<WatchId>,
 }
 
 /// Keep one registration for `condition` on `target` outstanding.
 ///
 /// `held` is the registration this row remembers, if any. One the target has
 /// not notified on is still standing and is kept without a round trip; one it
-/// notified on is spent and is replaced. `want` is the driver's standing
-/// decision to subscribe at all, and a registration to be dropped is released
-/// rather than forgotten: a registration nobody remembers is one this row
-/// stacks a second of on the next pass.
+/// notified on is spent, and the re-arm is a fresh registration under a new
+/// id. That is the whole rule: the record of the spend is the runtime's, and
+/// it is complete - see [`ResourceContext::watch_is_live`].
 async fn arm_condition(
     ctx: &mut ResourceContext,
     target: &ResourceKey,
     condition: WatchCondition,
     held: Option<WatchId>,
-    want: bool,
 ) -> Arm {
     if let Some(id) = held.filter(|id| ctx.watch_is_live(*id)) {
-        if want {
-            return Arm::Held { id, placed: false };
-        }
-        return match ctx.cancel_watch(id).await {
-            Ok(()) => Arm::Vacant,
-            // A release that did not take is a release this row still owes: the
-            // registration stands in the target, so it stays recorded.
-            Err(_) => Arm::Held { id, placed: false },
-        };
-    }
-    if !want {
-        return Arm::Vacant;
+        return Arm::Held { id, placed: false };
     }
     match ctx.watch(target.clone(), condition).await {
         Ok(id) => Arm::Held { id, placed: true },
         Err(_) => Arm::Refused,
+    }
+}
+
+/// Hand back what this pass placed when the pair could not be completed, and
+/// report the registration this row still has to remember for the condition.
+///
+/// A placement is the one thing this row cannot remember: a manager refusal
+/// says nothing about what it will do next pass, and a placement this row
+/// forgets is a live registration it stacks a second of on the target. A
+/// registration this row ALREADY held is not handed back and not forgotten:
+/// it stands in the target whatever this pair did, and keeping it recorded is
+/// what lets a later pass release it.
+async fn rollback(ctx: &mut ResourceContext, arm: Arm) -> Option<WatchId> {
+    match arm {
+        Arm::Held { id, placed: true } => {
+            let _ = ctx.cancel_watch(id).await;
+            None
+        }
+        Arm::Held { id, placed: false } => Some(id),
+        Arm::Refused => None,
     }
 }
 
@@ -631,36 +635,42 @@ impl<T: InteractionType> InteractionDriver<T> {
 
     /// Arm this row's internal watches on one dependency or child target.
     ///
-    /// Two conditions, never one. A readiness phase cannot express a delivery
-    /// downgrade: the row that publishes `Undelivered` over a withdrawn
-    /// authorization keeps reporting `Ready`, so a `Ready` subscription alone
-    /// never wakes this row for the evidence change it has to re-read (R21,
-    /// AE18, KTD7).
+    /// Two conditions, never one, and BOTH held unconditionally. A readiness
+    /// phase cannot express a delivery downgrade: the row that publishes
+    /// `Undelivered` over a withdrawn authorization keeps reporting `Ready`,
+    /// so an evidence-only subscription never wakes this row for a change it
+    /// has to re-read (R21, AE18, KTD7). And the evidence cannot express the
+    /// other half either: a target that STOPS being ready and publishes no
+    /// projection beside it - `AudioService`, `Process` and `ShellPool` all
+    /// publish `Ready` with none - moves no evidence at all, so an
+    /// evidence-only subscription is silent over exactly the case the second
+    /// condition exists for.
     ///
     /// The arming is per registration, and it reads the SPEND - not the
     /// evidence, and not "I armed this before". An internal registration is
-    /// satisfied exactly once and then removed by the target actor, and every
-    /// pass a target runs consumes all of them: its entry `Reconciling`
-    /// publishes no projection and fires the evidence condition, and its exit
-    /// satisfies `Ready`. A target that then republishes the pair it published
-    /// before reads identically whether it spent this row's registrations or
-    /// not, so a latch - over the `(status, projection)` pair or over anything
-    /// else - places none after the first spend and leaves this row subscribed
-    /// to nothing. A pass that published `Ready` without mutating anything
-    /// requeues nothing to correct that. The runtime's own answer is the
-    /// record instead: an id this row still holds is standing, and an id the
-    /// target notified on is spent and is replaced.
+    /// satisfied exactly once and then removed by the target actor, and a
+    /// target pass that CHANGES its readiness or its layer consumes every
+    /// registration this row holds on it. A target that then republishes the
+    /// pair it published before reads identically whether it spent this row's
+    /// registrations or not, so a latch - over the `(status, projection)`
+    /// pair or over anything else - places none after the first spend and
+    /// leaves this row subscribed to nothing. A pass that published `Ready`
+    /// without mutating anything requeues nothing to correct that. The
+    /// runtime's own answer is the record instead: an id this row still holds
+    /// is standing, and an id the target notified on is spent and is replaced.
     ///
-    /// Readiness is the one condition this row does not hold unconditionally,
-    /// because a registration whose condition already holds is answered on
-    /// arrival (AE2). Against a target that already reports `Ready` that
-    /// answer is spent before it can stand, and re-arming it on every spend
-    /// would wake this row for the answer alone, without end. The readiness
-    /// arm is therefore held exactly while the target has not reported
-    /// `Ready` - the readiness this row has not read yet, which is what
-    /// [`ResourceContext::get_view`] documents the arm for - and the evidence
-    /// arm, which no arrival can satisfy, carries every later change under a
-    /// phase that never moves.
+    /// Nothing is decided here from what the target currently reports, and
+    /// that is the point. The record of the spend is the runtime's and it is
+    /// COMPLETE - a spend is the only thing that ends a registration besides
+    /// its target's actor going away, and the runtime invalidates the record
+    /// then too (see [`ResourceContext::watch_is_live`]) - so both arms can
+    /// stand without a condition this driver would have to guess. Neither can
+    /// be answered on arrival either: [`WatchCondition::Ready`] is spent the
+    /// moment it lands on a target that already reports ready (AE2), which is
+    /// why the readiness arm is [`WatchCondition::ReadyChanged`], an edge no
+    /// arrival moves. The read that PROVES readiness is
+    /// [`ResourceContext::get_view`], in the pass; the arms only say when to
+    /// make it again.
     ///
     /// Best-effort by design: a dependency that is not a manager actor yet
     /// cannot be watched, and the resync schedule re-evaluates it.
@@ -668,49 +678,29 @@ impl<T: InteractionType> InteractionDriver<T> {
         if target == *ctx.key() {
             return;
         }
-        let (held_ready, held_changed) =
+        let (held_readiness, held_evidence) =
             match self.watched.iter().find(|armed| armed.target == target) {
-                Some(armed) => (armed.ready, armed.changed),
+                Some(armed) => (armed.readiness, armed.evidence),
                 None => (None, None),
             };
-        // What the target last published. A target with no published status and
-        // a read the plane could not answer are both "not ready", which is the
-        // readiness this row subscribes for. The evidence arm is placed either
-        // way: no arrival can satisfy it, so it costs one round trip and misses
-        // nothing.
-        let target_ready = matches!(
-            ctx.get_view(&target).await,
-            Ok(Some(view)) if view.status == Some(ResourceStatus::Ready)
-        );
-        let ready =
-            arm_condition(ctx, &target, WatchCondition::Ready, held_ready, !target_ready).await;
-        let changed = arm_condition(
-            ctx,
-            &target,
-            WatchCondition::ProjectionChanged,
-            held_changed,
-            true,
-        )
-        .await;
+        let readiness =
+            arm_condition(ctx, &target, WatchCondition::ReadyChanged, held_readiness).await;
+        let evidence =
+            arm_condition(ctx, &target, WatchCondition::ProjectionChanged, held_evidence).await;
 
         // Both or neither: a half-placed pair would leave one condition
         // unsubscribed until the target moved again, which is exactly the gap
-        // this method exists to close. What THIS pass placed is handed back
-        // with it; what this row already held stands either way, because a
-        // registration standing in the target is not this pair's to drop.
-        let mut armed = ArmedWatch { target: target.clone(), ready: None, changed: None };
-        if ready.refused() || changed.refused() {
-            for arm in [ready, changed] {
-                if let Arm::Held { id, placed: true } = arm {
-                    let _ = ctx.cancel_watch(id).await;
-                }
-            }
+        // this method exists to close. A refusal hands back what THIS pass
+        // placed, and keeps naming what the row already held - a registration
+        // standing in the target is not this pair's to drop, and forgetting
+        // it here is the leak the hand-back exists to avoid.
+        let (readiness, evidence) = if readiness.refused() || evidence.refused() {
+            (rollback(ctx, readiness).await, rollback(ctx, evidence).await)
         } else {
-            armed.ready = ready.held();
-            armed.changed = changed.held();
-        }
+            (readiness.held(), evidence.held())
+        };
         self.watched.retain(|held| held.target != target);
-        self.watched.push(armed);
+        self.watched.push(ArmedWatch { target, readiness, evidence });
     }
 
     /// Release every arming this pass no longer watches, so a retired child
@@ -728,7 +718,7 @@ impl<T: InteractionType> InteractionDriver<T> {
                 continue;
             }
             let mut released = true;
-            for watch in [armed.ready, armed.changed].into_iter().flatten() {
+            for watch in [armed.readiness, armed.evidence].into_iter().flatten() {
                 if ctx.watch_is_live(watch) && ctx.cancel_watch(watch).await.is_err() {
                     released = false;
                 }
@@ -1583,7 +1573,7 @@ mod tests {
                 1,
                 ResourceStatus::Ready,
                 b"{}".to_vec(),
-                None,
+                Some(json!({"scripted": {"incarnation": FIXTURE_INCARNATION}})),
             ));
         }
         for intent in committed_intents() {
@@ -1594,6 +1584,16 @@ mod tests {
             // one token for the delivered graph and a different one for a
             // replaced realization, which is the downgrade the gate reads.
             let endpoint = target.resource_type().as_str() == "Endpoint";
+            // Every row publishes a `status.resource` layer, as every real row
+            // of this family does. A row that published NONE could never be
+            // heard from through the evidence condition - which is a fact
+            // about the runtime, and one the fixture must not paper over by
+            // handing out rows no Provider would publish.
+            let layer = if endpoint {
+                json!({"endpoint": {"incarnation": FIXTURE_INCARNATION}})
+            } else {
+                json!({"scripted": {"incarnation": FIXTURE_INCARNATION}})
+            };
             rows.push(plane_view(
                 key_of(target),
                 SESSION_GENERATION,
@@ -1603,7 +1603,7 @@ mod tests {
                     ResourceStatus::Pending
                 },
                 intent_spec_bytes(&intent),
-                endpoint.then(|| json!({"endpoint": {"incarnation": FIXTURE_INCARNATION}})),
+                Some(layer),
             ));
             if !endpoint {
                 continue;
@@ -1720,20 +1720,39 @@ mod tests {
             targets
         }
 
-        /// One pass of `target`, as the runtime plays it: every registration
-        /// this row holds on that target is satisfied once and REMOVED (AE2),
-        /// and the target actor notifies this row over the channel the
-        /// registration carried.
+        /// One published transition of `target`, as the runtime plays it: the
+        /// registrations whose condition FIRES across it are satisfied once
+        /// and REMOVED (AE2), and the target actor notifies this row over the
+        /// channel the registration carried.
         ///
-        /// The plane is untouched, so the target's `(status, projection)` pair
-        /// reads back exactly as it did before - which is the case a
-        /// fingerprint cannot tell from "nothing was spent".
-        async fn target_pass(&self, target: &ResourceKey) -> Vec<WatchId> {
+        /// `before` is what the target had published until now - the plane is
+        /// the record of that, which is why the two are read together. A
+        /// double that satisfied EVERY registration would be more generous
+        /// than the runtime and would hide the exact gap this fixture exists
+        /// to show: a readiness phase that moves while the evidence layer
+        /// does not move at all.
+        async fn target_transition(
+            &self,
+            target: &ResourceKey,
+            status: ResourceStatus,
+            projection: Option<Value>,
+        ) -> Vec<WatchId> {
+            let published = self.plane.get(target).await.expect("a scripted row");
+            let before = published.as_ref().and_then(|view| view.status.clone());
+            let before_projection = published.as_ref().and_then(|view| view.status_projection.clone());
+            let ready = status == ResourceStatus::Ready;
+            let was_ready = before == Some(ResourceStatus::Ready);
             let mut spent = Vec::new();
             let mut live = self.watches.lock().await;
             let mut index = 0;
             while index < live.len() {
-                if &live[index].target == target {
+                let fires = match &live[index].condition {
+                    WatchCondition::Ready => ready,
+                    WatchCondition::ReadyChanged => was_ready != ready,
+                    WatchCondition::ProjectionChanged => projection != before_projection,
+                    WatchCondition::Custom(_) => false,
+                };
+                if &live[index].target == target && fires {
                     let satisfied = live.remove(index);
                     let _ = satisfied.notify.send(WatchSatisfied {
                         watch: satisfied.id,
@@ -1743,6 +1762,25 @@ mod tests {
                     continue;
                 }
                 index += 1;
+            }
+            spent
+        }
+
+        /// One pass of `target`, as the runtime plays it: the pass publishes
+        /// `Reconciling` with no projection and then the status it settles on,
+        /// and each of those transitions satisfies the registrations whose
+        /// condition fires across it.
+        ///
+        /// The plane is untouched, so the target's `(status, projection)` pair
+        /// reads back exactly as it did before - which is the case a
+        /// fingerprint cannot tell from "nothing was spent".
+        async fn target_pass(&self, target: &ResourceKey) -> Vec<WatchId> {
+            let settled = self.plane.get(target).await.expect("a scripted row");
+            let status = settled.as_ref().and_then(|view| view.status.clone());
+            let projection = settled.as_ref().and_then(|view| view.status_projection.clone());
+            let mut spent = self.target_transition(target, ResourceStatus::Reconciling, None).await;
+            if let Some(status) = status {
+                spent.extend(self.target_transition(target, status, projection).await);
             }
             spent
         }
@@ -1965,6 +2003,93 @@ mod tests {
         );
     }
 
+    /// A target that STOPS being ready and publishes no projection beside it
+    /// still wakes the row that watches it (R21, AE18, KTD7).
+    ///
+    /// `AudioService` publishes `Ready` with NO projection, and so do
+    /// `Process` and `ShellPool`. A row holding only the evidence arm then has
+    /// nothing to wake it: leaving `Ready` publishes the identical pair, the
+    /// evidence condition does not fire, and a converged row schedules no
+    /// requeue of its own (`mutated || !ready`). So it goes on publishing
+    /// `Ready` over a dependency that is gone - an `AudioBinding` that gates
+    /// its own readiness on that service row keeps publishing `Ready` over a
+    /// dead one, for as long as the row lives.
+    ///
+    /// The readiness arm therefore has to be held for a target that IS ready,
+    /// and a [`WatchCondition::Ready`] registration cannot do that: a
+    /// registration whose condition already holds is answered on arrival
+    /// (AE2), so it is spent before it can stand. The edge-triggered
+    /// readiness condition can, because no arrival satisfies it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_target_that_leaves_ready_without_touching_its_projection_wakes_this_row() {
+        let worker = key_of(
+            committed_intents()
+                .iter()
+                .map(|intent| intent.target())
+                .find(|target| target.resource_type().as_str() == "Process")
+                .expect("a derived worker process"),
+        );
+        let mut rows = plane(true, true);
+        rows.iter_mut()
+            .find(|view| view.key == worker)
+            .expect("the worker row")
+            .status_projection = None;
+        let (mut fixture, mut driver) = fixture(rows);
+        assert_eq!(
+            fixture.ctx.get_view(&worker).await.expect("the scripted plane answers")
+                .and_then(|view| view.status_projection),
+            None,
+            "this row publishes `Ready` with no projection at all, exactly as `AudioService`, \
+             `Process` and `ShellPool` do"
+        );
+
+        assert_eq!(
+            driver.reconcile(&mut fixture.ctx).await.expect("the converged pass"),
+            ReconcileOutcome::Satisfied,
+            "the aggregate holds"
+        );
+        assert_eq!(
+            fixture.armed(&worker, &WatchCondition::ReadyChanged).await,
+            1,
+            "so the readiness arm is held for a target that ALREADY reports ready - a `Ready` \
+             registration would be answered on arrival and stand for nothing"
+        );
+
+        // The target stops being ready and publishes no projection beside it.
+        let spent = fixture.target_transition(&worker, ResourceStatus::Pending, None).await;
+        assert_eq!(
+            spent.len(),
+            1,
+            "exactly one registration fires, and it is the readiness edge: the evidence layer \
+             did not move, so nothing else could have"
+        );
+        assert_eq!(
+            fixture.delivered().await,
+            vec![(worker.clone(), spent[0])],
+            "and it wakes this row - the one wake-up a converged row with no requeue of its \
+             own has"
+        );
+        // The runtime turns that notification into `DependencySatisfied`, which
+        // records the spend on the context before the pass it triggers.
+        for watch in &spent {
+            fixture.ctx.mark_watch_spent(*watch);
+        }
+        fixture.plane.publish(plane(false, false)).await;
+
+        assert_eq!(
+            driver.reconcile(&mut fixture.ctx).await.expect("the woken pass"),
+            ReconcileOutcome::RetryScheduled,
+            "which re-reads the aggregate over a withdrawn worker and publishes `Pending` \
+             rather than `Ready` over a dead target"
+        );
+        assert_eq!(
+            fixture.armed(&worker, &WatchCondition::ReadyChanged).await,
+            1,
+            "and re-arms, so a second withdrawal is observed too"
+        );
+    }
+
     /// The subscription is the only thing that makes a post-ready downgrade
     /// observable (R21, AE18, KTD7).
     ///
@@ -1974,14 +2099,11 @@ mod tests {
     /// and never again is unsubscribed at exactly the moment it needs to be
     /// woken, and keeps publishing `Ready` over a child that withdrew.
     ///
-    /// A readiness registration is a subscription to BECOMING ready: the
-    /// target actor answers one on arrival whenever the target already reports
-    /// `Ready` (AE2), so over a converged aggregate the evidence arm is the
-    /// only one that can stand. The evidence arm is also the one a target's
-    /// own pass consumes - that pass publishes `Reconciling` with no
-    /// projection and then satisfies `Ready` - so this drives one driver
-    /// across three passes and spends every target's registrations the way the
-    /// runtime does.
+    /// Both arms are held for every target, and both are spent when a target
+    /// pass CHANGES something: a target that leaves `Ready` fires the
+    /// readiness edge, and a target that publishes a different layer fires the
+    /// evidence edge. So this drives one driver across three passes and spends
+    /// every target's registrations the way the runtime does.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_downgraded_child_is_re_armed_and_leaves_the_session_pending() {
@@ -2015,10 +2137,11 @@ mod tests {
                  change under a phase that never moves still wakes this row"
             );
             assert_eq!(
-                fixture.armed(target, &WatchCondition::Ready).await,
-                0,
-                "{target:?} already reports ready, and a readiness registration is answered \
-                 on arrival - holding one there subscribes to nothing"
+                fixture.armed(target, &WatchCondition::ReadyChanged).await,
+                1,
+                "{target:?} already reports ready, and the readiness arm is held anyway: it \
+                 is the only wake-up for a target that later stops being ready without \
+                 publishing anything new"
             );
         }
 
@@ -2083,10 +2206,10 @@ mod tests {
                  so a second downgrade is observed too"
             );
             assert_eq!(
-                fixture.armed(target, &WatchCondition::Ready).await,
+                fixture.armed(target, &WatchCondition::ReadyChanged).await,
                 1,
-                "{target:?} no longer reports ready, so the readiness arm this row needs to be \
-                 woken by is armed"
+                "{target:?} no longer reports ready, so the readiness arm this row needs to \
+                 be woken by is armed - and it was armed for it before the withdrawal too"
             );
         }
         for target in expected.iter().filter(|target| !children.contains(target)) {
@@ -2096,10 +2219,10 @@ mod tests {
                 "a dependency whose registration was satisfied is armed again on {target:?}"
             );
             assert_eq!(
-                fixture.armed(target, &WatchCondition::Ready).await,
-                0,
-                "a dependency that still reports ready is not subscribed for a readiness it \
-                 already has"
+                fixture.armed(target, &WatchCondition::ReadyChanged).await,
+                1,
+                "a dependency that still reports ready is subscribed for the moment it stops: \
+                 holding nothing there is what left this row silent over the downgrade"
             );
         }
         assert_eq!(
@@ -2118,10 +2241,9 @@ mod tests {
 
     /// The re-arm reads the SPEND, not the evidence (R21, AE18, KTD7).
     ///
-    /// A target pass consumes every registration this row holds on it: the
-    /// entry `Reconciling` publishes no projection and fires the evidence
-    /// condition, and the exit satisfies `Ready`. A pass that lands on the very
-    /// pair those registrations were armed against therefore cannot tell
+    /// A target pass that changes its readiness or its layer consumes every
+    /// registration this row holds on it, and then lands on the very pair
+    /// those registrations were armed against. It therefore cannot tell
     /// "spent" from "standing" by comparing evidence - and placing nothing
     /// leaves a `Ready` row subscribed to nothing. It is never woken again, and
     /// `mutated || !ready` schedules no requeue for it either, so it keeps
@@ -2168,16 +2290,17 @@ mod tests {
         // And it is a standing subscription: the target's next pass satisfies
         // exactly that registration and notifies this row again.
         let armed = fixture.armed_ids(&target).await;
-        assert_eq!(armed.len(), 1, "one live registration on {target:?}");
+        assert_eq!(armed.len(), 2, "one live registration per condition on {target:?}");
         assert_eq!(
             fixture.target_pass(&target).await,
             armed,
-            "the target's next pass satisfies the registration this row placed"
+            "the target's next pass satisfies exactly the registrations this row placed"
         );
         assert_eq!(
             fixture.delivered().await,
-            vec![(target.clone(), armed[0])],
-            "a later evidence change under a phase that never moves still wakes this row"
+            armed.iter().map(|watch| (target.clone(), *watch)).collect::<Vec<_>>(),
+            "so a later change under a phase that never moves still wakes this row, and so \
+             does the target leaving `Ready` with no projection beside it"
         );
     }
 
@@ -2199,10 +2322,10 @@ mod tests {
                 "round {round}: one live registration on {target:?}, never a stack"
             );
             assert_eq!(
-                fixture.armed(&target, &WatchCondition::Ready).await,
-                0,
-                "round {round}: {target:?} already reports ready, so no readiness registration \
-                 is held"
+                fixture.armed(&target, &WatchCondition::ReadyChanged).await,
+                1,
+                "round {round}: one readiness registration on {target:?} however ready it \
+                 already is"
             );
             let armed = fixture.armed_ids(&target).await;
             if let Some(previous) = standing.clone() {
@@ -2245,27 +2368,71 @@ mod tests {
 
         driver.reconcile(&mut fixture.ctx).await.expect("the first pass");
         assert_eq!(
-            fixture.armed(&child, &WatchCondition::Ready).await,
+            fixture.armed(&child, &WatchCondition::ReadyChanged).await,
             0,
             "the readiness arm that did place was handed back with the pair it could not \
              complete, so nothing stands unremembered"
         );
         assert_eq!(
             fixture.released.lock().await.len(),
-            fixture.placements(&child, &WatchCondition::Ready).await,
+            fixture.placements(&child, &WatchCondition::ReadyChanged).await,
             "every arm this pass placed was released, not dropped"
         );
 
         driver.reconcile(&mut fixture.ctx).await.expect("the second pass");
         assert_eq!(
-            fixture.armed(&child, &WatchCondition::Ready).await,
+            fixture.armed(&child, &WatchCondition::ReadyChanged).await,
             0,
             "a still-refused pair leaves nothing standing, so no pass can stack an arm"
         );
         assert_eq!(
-            fixture.placements(&child, &WatchCondition::Ready).await,
+            fixture.placements(&child, &WatchCondition::ReadyChanged).await,
             2,
             "each pass re-attempts the pair, and releases what it placed"
+        );
+    }
+
+    /// A refused pair must not FORGET a registration the row already held.
+    ///
+    /// The evidence arm is refused on the second pass, so the pair is rolled
+    /// back and this pass placed nothing to remember. The readiness arm was
+    /// placed by the FIRST pass and still stands in the target: an entry
+    /// emptied here is a live registration this row can no longer name,
+    /// release, or re-arm, and the next pass stacks a second one beside it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_refused_pair_keeps_naming_the_registration_it_already_held() {
+        let (mut fixture, mut driver) = fixture(plane(true, true));
+        let child = key_of(committed_intents().first().expect("a derived child").target());
+        driver.reconcile(&mut fixture.ctx).await.expect("the first pass");
+        let held = fixture.armed_ids(&child).await;
+        assert_eq!(held.len(), 2, "one registration per condition on {child:?}");
+
+        fixture
+            .refused
+            .lock()
+            .await
+            .push((child.clone(), WatchCondition::ProjectionChanged));
+        driver.reconcile(&mut fixture.ctx).await.expect("the refused pass");
+        assert_eq!(
+            fixture.armed_ids(&child).await,
+            held,
+            "the readiness arm this row already held is still named and still standing: the \
+             rollback hands back what THIS pass placed, and nothing else"
+        );
+
+        fixture.refused.lock().await.retain(|(key, _)| key != &child);
+        driver.reconcile(&mut fixture.ctx).await.expect("the accepted pass");
+        assert_eq!(
+            fixture.placements(&child, &WatchCondition::ReadyChanged).await,
+            1,
+            "so the accepted pair reuses the registration that was still standing instead of \
+             placing a second one beside it"
+        );
+        assert_eq!(
+            fixture.armed(&child, &WatchCondition::ProjectionChanged).await,
+            1,
+            "and the row is subscribed to the evidence condition again"
         );
     }
 }

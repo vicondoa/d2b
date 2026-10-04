@@ -33,7 +33,7 @@ use std::fmt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use d2b_contracts_broker::broker_wire::{
@@ -492,8 +492,7 @@ pub struct PlaneResourceRegistry {
     /// Immutable-after-open controller identity bindings. Keep these outside
     /// the mutable row cache so unrelated registry work cannot appear as a
     /// missing Provider identity during synchronous Process effects.
-    committed_provider_identities:
-        RwLock<BTreeMap<String, (ResourceUid, ResourceGeneration)>>,
+    committed_provider_identities: OnceLock<BTreeMap<String, (ResourceUid, ResourceGeneration)>>,
     /// The durable authority this registry caches rows from; attached by
     /// the plane once its spec store is open.
     store: OnceLock<Arc<SpecStore>>,
@@ -693,20 +692,25 @@ impl PlaneResourceRegistry {
         Ok(())
     }
 
-    /// Publish one committed `Provider` row's identity (KTD7): the production
-    /// Process effects bind it to controller rows that Provider owns. Fed by
-    /// the plane's construction path from
-    /// [`ConstructionInputs::committed_provider_identities`].
-    pub(crate) fn register_committed_provider_identity(
+    /// Publish the committed `Provider` row identities (KTD7): the production
+    /// Process effects bind them to controller rows that Provider owns. Fed
+    /// by the plane's construction path from
+    /// [`ConstructionInputs::committed_provider_identities`], and published
+    /// once - the map this registry answers from never changes after.
+    ///
+    /// A second publication is refused rather than merged: every caller
+    /// derives the whole map from the same corrected pass, so a second one
+    /// could only be a caller that lost track of that.
+    pub(crate) fn publish_committed_provider_identities(
         &self,
-        provider_ref: &ResourceRef,
-        uid: ResourceUid,
-        generation: ResourceGeneration,
+        identities: BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>,
     ) {
-        self.committed_provider_identities
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(provider_ref.to_canonical_string(), (uid, generation));
+        let _ = self.committed_provider_identities.set(
+            identities
+                .into_iter()
+                .map(|(provider_ref, identity)| (provider_ref.to_canonical_string(), identity))
+                .collect(),
+        );
     }
 
     /// The committed-`Provider` identity view the production Process effects
@@ -716,8 +720,7 @@ impl PlaneResourceRegistry {
         provider_ref: &ResourceRef,
     ) -> Option<(ResourceUid, ResourceGeneration)> {
         self.committed_provider_identities
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get()?
             .get(&provider_ref.to_canonical_string())
             .cloned()
     }
@@ -3757,11 +3760,9 @@ impl ResourcePlaneV3 {
             &inputs.committed_provider_identities,
         )
        .await;
-        for (provider_ref, (uid, generation)) in &committed_provider_identities {
-            inputs
-               .registry
-               .register_committed_provider_identity(provider_ref, uid.clone(), *generation);
-        }
+        inputs
+            .registry
+            .publish_committed_provider_identities(committed_provider_identities);
         // F5: the display Provider's committed-shape vocabulary is rebuilt
         // from the same durable rows, here, before the manager spawns any
         // actor. The live path commits a session's shapes when that session's
@@ -6469,12 +6470,10 @@ HOST_EFFECTS_SERVICE.id,
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174010").unwrap();
         let provider_generation =
             d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap();
-        registry
-            .register_committed_provider_identity(
-                &provider_ref,
-                provider_uid.clone(),
-                provider_generation,
-            );
+        registry.publish_committed_provider_identities(BTreeMap::from([(
+            provider_ref.clone(),
+            (provider_uid.clone(), provider_generation),
+        )]));
 
         let _unrelated_registry_write = registry.inner.lock().await;
         assert_eq!(
@@ -9853,7 +9852,6 @@ HOST_EFFECTS_SERVICE.id,
     /// effects validate before any Provider work runs; the interaction family
     /// is given the REAL manager-plane reads and this Zone's committed
     /// identity.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn display_composition() -> DisplayComposition {
         // The Process family's own effects double, scripted the way the
         // plane's other worker-row tests script it: no retained identity
@@ -9891,7 +9889,6 @@ HOST_EFFECTS_SERVICE.id,
     /// the Process family's own scripted provider runtime moves, so a test can
     /// ask what the graph does while the provider admits no standing worker
     /// without standing up a different plane to ask it.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn display_composition_with_processes(
         processes: Arc<d2b_provider_process::test_support::FakeFacets>,
     ) -> DisplayComposition {
@@ -10112,7 +10109,6 @@ HOST_EFFECTS_SERVICE.id,
     /// runtime serves, one bound session generation, the Guest's own local
     /// effect behind it, and the plane's own target directory told to notify
     /// the affected actors.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn bind_display_guest_target(plane: &ResourcePlaneV3) -> GuestRealizations {
         let guest = TargetRef::guest(DISPLAY_GUEST_NAME).expect("the Guest target reference");
         let runtime = Arc::new(
@@ -10144,7 +10140,6 @@ HOST_EFFECTS_SERVICE.id,
     /// selector - because the session's admission refuses a dependency whose
     /// row the dependency's own driver refuses, and a hand-written stand-in
     /// would prove nothing about the graph production admits.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn display_scene_bundle(with_session: bool, reconnect_generation: u64) -> ResourceBundle {
         let mut spec = display_session_spec();
         if reconnect_generation > 0 {
@@ -10199,7 +10194,6 @@ HOST_EFFECTS_SERVICE.id,
     }
 
     /// One admitted display scene over the composition that converges.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn display_scene() -> DisplayScene {
         display_scene_with_processes(adopting_process_facets()).await
     }
@@ -10212,7 +10206,6 @@ HOST_EFFECTS_SERVICE.id,
     /// provider runtime moves, which is what lets a test ask what the graph
     /// does while no worker is standing - the one state in which a dependent
     /// has to wait for its source to prove a realization.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn display_scene_with_processes(
         processes: Arc<d2b_provider_process::test_support::FakeFacets>,
     ) -> DisplayScene {
@@ -10250,7 +10243,6 @@ HOST_EFFECTS_SERVICE.id,
     }
 
     /// The manager's view of one row, or a panic naming the row.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn view_of(plane: &ResourcePlaneV3, key: &ResourceKey) -> ResourceView {
         plane
             .client()
@@ -10261,7 +10253,6 @@ HOST_EFFECTS_SERVICE.id,
     }
 
     /// Every row of one ResourceType this Zone's manager holds, by name.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn rows_of_type(plane: &ResourcePlaneV3, type_name: &str) -> BTreeMap<String, ResourceView> {
         plane
             .client()
@@ -10377,7 +10368,6 @@ HOST_EFFECTS_SERVICE.id,
     /// `Reconciling` are what an actor publishes while its pass is still
     /// running, so a test that stopped there has observed nothing about the
     /// convergence it is about to assert.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn settled(
         plane: &ResourcePlaneV3,
         key: &ResourceKey,
@@ -10416,7 +10406,6 @@ HOST_EFFECTS_SERVICE.id,
     /// Guest has applied the frame its launch wrote - so this is the closest
     /// observable evidence to the convergence a session row's aggregate gate
     /// then reports, and the one wait that does not sit on a tick chain.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn frames_until(
         realized: &GuestRealizations,
         process_ref: &str,
@@ -10450,7 +10439,6 @@ HOST_EFFECTS_SERVICE.id,
     /// deferred and retried on the Process family's own resync cadence, so a
     /// window spanning more than one of those cadences is what covers the
     /// retries a fence has to hold across.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn frames_over(
         realized: &GuestRealizations,
         process_ref: &str,
@@ -10484,7 +10472,6 @@ HOST_EFFECTS_SERVICE.id,
     /// window is what still has to follow that publication: the claim is that
     /// the answer STAYS replaced, which is only observable across a further
     /// pass.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn status_trail(
         plane: &ResourcePlaneV3,
         key: &ResourceKey,
@@ -10524,7 +10511,6 @@ HOST_EFFECTS_SERVICE.id,
     /// The manager holds a row through its own teardown - the durable deleting
     /// mark stays observable until the cleanup completes - so a teardown test
     /// has to wait for RETIREMENT, not for the delete request.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn drained(
         plane: &ResourcePlaneV3,
         type_name: &str,
@@ -10564,7 +10550,6 @@ HOST_EFFECTS_SERVICE.id,
     /// rather than anything this graph did. The wait ends on the first
     /// projection the actor publishes; a projection that carries no layer
     /// under test is still that actor's own answer, and is returned as it is.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn published_projection(
         plane: &ResourcePlaneV3,
         key: &ResourceKey,
@@ -10586,7 +10571,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// The realization token one committed endpoint row published, or an
     /// empty string where it published none.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn endpoint_token(
         plane: &ResourcePlaneV3,
         key: &ResourceKey,
@@ -10623,7 +10607,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// The realization token one delivered relationship published, or an
     /// empty string where it published none.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn relationship_token(
         plane: &ResourcePlaneV3,
         key: &ResourceKey,
@@ -10655,7 +10638,6 @@ HOST_EFFECTS_SERVICE.id,
     /// only what this end ANSWERED: a scene that holds one row still records
     /// that row's grants, and a reader that counted them would be satisfied by
     /// the refusal it is waiting for the absence of.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn granted_endpoints(
         broker: &EndpointAccessBroker,
         endpoints: &[ResourceKey],
@@ -10685,7 +10667,6 @@ HOST_EFFECTS_SERVICE.id,
     /// `ProducerRow` shape is the unrealized class its own actor publishes
     /// before it can prove a realization. A reader that wants the standing
     /// answer has to keep reading until one is published.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn standing_endpoint_token(
         plane: &ResourcePlaneV3,
         key: &ResourceKey,
@@ -12054,13 +12035,12 @@ HOST_EFFECTS_SERVICE.id,
                 "the last thing this broker hears about {endpoint} is its release"
             );
         }
-        let first_revoke = scene
-            .broker
-            .calls()
+        let calls = scene.broker.calls();
+        let first_revoke = calls
             .iter()
             .position(|call| call.verb == EndpointAccessVerb::Revoke)
             .expect("a revoke crossed the wire");
-        let after_revoke = &scene.broker.calls()[first_revoke..];
+        let after_revoke = &calls[first_revoke..];
         assert!(
             !after_revoke
                 .iter()

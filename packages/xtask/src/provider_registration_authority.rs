@@ -70,7 +70,6 @@ struct RegistrationDeclaration {
 
 /// Run the authority's gates: parity, drift, and regeneration idempotence,
 /// over the generated registration table.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn check(repo_root: &Path) -> Result<(), String> {
     let errors = parity_errors(repo_root)?;
     if !errors.is_empty() {
@@ -350,14 +349,12 @@ fn load_declarations(repo_root: &Path) -> Result<BTreeMap<String, RegistrationDe
 /// installs. It reads no crate source, so the parity gate stays a separate
 /// cross-check the new-graph closure runs over the composition rather than a
 /// condition of rendering it.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, String> {
     render(repo_root)
 }
 
 /// Render the generated registration table from the declarations joined
 /// against the identity authority, in crate-name order.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn render(repo_root: &Path) -> Result<String, String> {
     let declarations = load_declarations(repo_root)?;
     let identities = ProviderIdentities::load(repo_root)?;
@@ -462,7 +459,6 @@ mod tests {
         /// A registration file for one fixture crate with the given
         /// services. The Provider identity the row registers under is the
         /// crate's runtime identity, stated in its `provider-identity.json`.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_declaration(&self, crate_name: &str, services: &[&str]) {
             let services = services
                 .iter()
@@ -479,7 +475,6 @@ mod tests {
         /// `runtime` on the runtime surface and nothing on the other two.
         /// The evidence anchor names the crate's own driver source, which
         /// every fixture crate carries.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_runtime_identity(&self, crate_name: &str, runtime: &str) {
             // The evidence anchor has to name the identity, not merely some
             // symbol in a file the crate happens to hold, so the crate's own
@@ -498,7 +493,6 @@ mod tests {
 
         /// The fixture crate's sources spelling one `ServiceDecl` const per
         /// service and registering it in a descriptor's `services` list.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_sources(&self, crate_name: &str, services: &[&str]) {
             let consts = services
                 .iter()

@@ -634,8 +634,10 @@ impl EndpointPurposeVocabulary for DisplayEndpointVocabulary {
 /// The registry is written on the session admission path and read on the
 /// Endpoint driver's synchronous admission path, so it is guarded by a
 /// read-write lock. Both sides are short critical sections over an in-memory
-/// map, and neither holds the guard across a suspension point - there is no
-/// await inside either - so no executor worker is parked on it.
+/// map, and neither holds its guard across a suspension point - there is no
+/// await inside either - so no task is ever parked holding one. The only wait
+/// either side can meet is the other side's whole section, over a map holding
+/// one entry per admitted session.
 ///
 /// # Retention
 ///
@@ -684,8 +686,9 @@ impl SharedDisplayEndpointVocabulary {
 impl EndpointPurposeVocabulary for SharedDisplayEndpointVocabulary {
     /// The one exact shape any admitted session committed for `spec`.
     ///
-    /// The guard is held across the map walk and released before this returns;
-    /// there is no await in this path, so nothing parks on the lock.
+    /// The guard is held across the map walk and released before this returns,
+    /// and no await sits between acquiring and releasing it, so no task can be
+    /// parked holding one.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn committed_endpoint_shape(&self, spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
         let sessions = self

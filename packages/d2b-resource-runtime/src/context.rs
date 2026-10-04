@@ -4,7 +4,7 @@
 pub const MODULE_NAME: &str = "context";
 use std::any::Any;
 use std::cell::OnceCell;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -55,6 +55,19 @@ pub struct EffectCompleted {
 
 /// Minimal internal watch condition, evaluated by the target actor against
 /// its in-memory status (never the store, R12).
+///
+/// A condition is either LEVEL or EDGE, and the target actor answers the two
+/// differently:
+///
+/// - LEVEL ([`Self::Ready`]) answers whether the target is ready NOW. It is
+///   the only shape that may be satisfied on arrival, and so it is the only
+///   shape a registration cannot hold unconditionally: a target that already
+///   reports ready spends the registration the moment it lands.
+/// - EDGE ([`Self::ReadyChanged`], [`Self::ProjectionChanged`]) answers
+///   whether THIS transition moved the thing the condition names. No
+///   transition moves it, no arrival satisfies it, so a subscriber can hold
+///   one unconditionally and learns about every later change under a phase
+///   that never moves - including a readiness phase STOPPING.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WatchCondition {
     /// Satisfied when the watched resource's status reports ready.
@@ -65,6 +78,17 @@ pub enum WatchCondition {
     /// [`ResourceContext::get_view`] (the watch is the wake-up, the read is
     /// the proof). This is the seam readiness checks use.
     Ready,
+    /// Satisfied when the watched resource ENTERS or LEAVES `Ready`.
+    ///
+    /// [`Self::Ready`] cannot express the second half of that: a target that
+    /// already reports ready has the arrival answer spent before the
+    /// registration can stand, so a subscriber watching a ready target holds
+    /// nothing and is never told when the target stops being ready - a
+    /// degraded row that publishes no new projection (a lost target, a
+    /// refused operation) keeps reporting `Ready` and stays silent. This
+    /// condition is the other half, and it is never answered on arrival, so
+    /// the same subscriber can hold it for a ready target as well.
+    ReadyChanged,
     /// Named custom predicate; the target actor's driver supplies the
     /// predicate implementation by id.
     ///
@@ -106,9 +130,15 @@ pub struct WatchSatisfied {
 /// and register the watch in ONE mailbox handler:
 ///
 /// ```text
-/// if status matches condition { notify(subscriber, Satisfied) }
-/// else { watchers.insert(watch_id, ...) }
+/// if condition_is_level && condition_holds_now(status) {
+///     notify(subscriber, Satisfied)
+/// } else {
+///     watchers.insert(watch_id, ...)
+/// }
 /// ```
+///
+/// An EDGE condition is never satisfied there, because no transition is
+/// being evaluated: it holds from the first transition that moves it.
 ///
 /// Status transitions evaluate registered watches in the same handler. U3
 /// enforces this by construction inside `ResourceActor`; the shapes here
@@ -420,14 +450,20 @@ pub struct ResourceContext {
     /// reaches the authenticated target session through the binding instead
     /// of through a coarse handle that said nothing about authority.
     target: Option<crate::target::TargetBinding>,
-    /// The internal-watch registrations this row holds that the target has
-    /// not notified on yet (AE2: a registration is satisfied exactly once
-    /// and then removed from the target's mailbox). This is what tells a
-    /// driver "the target spoke" apart from "the evidence stands still" -
-    /// a fingerprint comparison cannot, because a target pass satisfies
-    /// both registrations and republishes the very pair it published
-    /// before.
-    live_watches: HashSet<WatchId>,
+    /// The internal-watch registrations this row holds that are still
+    /// standing in their target actor's mailbox, each mapped to the target
+    /// that holds it.
+    ///
+    /// This is the runtime's own record of what this row is subscribed to,
+    /// and it is COMPLETE: a registration leaves it in exactly two cases,
+    /// both of which this row is told about - the target notified on it
+    /// ([`Self::mark_watch_spent`], AE2) or the target's actor went away
+    /// ([`Self::mark_target_watches_lost`], spec section 16). Nothing else
+    /// ends a registration's life, so a driver never has to guess from
+    /// evidence whether it is still subscribed: a target pass can satisfy
+    /// every registration it holds and republish the very pair it published
+    /// before, which is exactly the case no comparison of evidence can read.
+    live_watches: HashMap<WatchId, ResourceKey>,
 }
 
 impl ResourceContext {
@@ -454,7 +490,7 @@ impl ResourceContext {
             status_projection: None,
             owner_key: None,
             target: None,
-            live_watches: HashSet::new(),
+            live_watches: HashMap::new(),
         }
     }
 
@@ -465,13 +501,13 @@ impl ResourceContext {
     /// context, so a rebuild that forgot them would make every id this row
     /// remembers read as spent and re-arm duplicates on top of registrations
     /// that are still standing.
-    pub(crate) fn take_live_watches(&mut self) -> HashSet<WatchId> {
+    pub(crate) fn take_live_watches(&mut self) -> HashMap<WatchId, ResourceKey> {
         std::mem::take(&mut self.live_watches)
     }
 
     /// Adopt the registrations carried onto a rebuilt context (the actor's
     /// spec-change path).
-    pub(crate) fn with_live_watches(mut self, live: HashSet<WatchId>) -> Self {
+    pub(crate) fn with_live_watches(mut self, live: HashMap<WatchId, ResourceKey>) -> Self {
         self.live_watches = live;
         self
     }
@@ -780,16 +816,16 @@ impl ResourceContext {
             .register_watch(
                 &self.row.key,
                 WatchRegistration {
-                    target,
+                    target: target.clone(),
                     condition,
                     notify: self.watch_notify.clone(),
                 },
             )
             .await?;
         // The registration exists in the target actor's mailbox from here on,
-        // so this row records it as live until the target notifies on it (or
-        // this row releases it). See [`Self::watch_is_live`].
-        self.live_watches.insert(watch);
+        // so this row records it - against that target - until the target
+        // notifies on it or this row releases it. See [`Self::watch_is_live`].
+        self.live_watches.insert(watch, target);
         Ok(watch)
     }
 
@@ -799,7 +835,15 @@ impl ResourceContext {
     /// a driver that keeps one target subscribed across passes has to release
     /// the registration it is replacing. Without this the target's watcher set
     /// grows by one registration per pass and every later change on that
-    /// target is delivered once per spent registration.
+    /// target is delivered once per spent registration. The manager's routing
+    /// record for the registration goes with it, so a release is also what
+    /// keeps one manager entry per row+target from outliving the row.
+    ///
+    /// Releasing is idempotent and answers `Ok` for an id that is already
+    /// gone: the target removed it (AE2), or this row released it before, and
+    /// in both cases the registration is not standing, which is what the
+    /// caller asked for. The only `Err` is a release the manager could not
+    /// be asked for at all.
     pub async fn cancel_watch(&mut self, watch: WatchId) -> Result<(), ResourceError> {
         self.manager.cancel_watch(watch).await?;
         // Only a release that took is a release: the registration is gone from
@@ -811,16 +855,21 @@ impl ResourceContext {
 
     /// Whether `watch` is still standing in the target actor's mailbox.
     ///
-    /// A registration is one-shot (AE2): the target actor satisfies it exactly
-    /// once, removes it, and notifies this row, which reaches the actor as
-    /// [`crate::ResourceMsg::DependencySatisfied`] and is recorded here by
-    /// [`Self::mark_watch_spent`]. So this answers "has the target notified
-    /// this row since the registration went out", which is the question a
-    /// re-arm has to ask: evidence that reads back unchanged cannot tell a
-    /// spent registration from a live one, because a target pass satisfies the
-    /// registration and republishes the very projection it published before.
+    /// The answer is the runtime's own record, and it is complete: a
+    /// registration stops being live in exactly two cases, both of which this
+    /// row is told about. The target actor satisfied it (AE2) - the target
+    /// actor notifies this row, which reaches the actor as
+    /// [`crate::ResourceMsg::DependencySatisfied`] and is recorded by
+    /// [`Self::mark_watch_spent`] - or the target's actor went away and took
+    /// the registration with it, recorded by [`Self::mark_target_watches_lost`].
+    ///
+    /// So this answers exactly what a re-arm has to ask, and nothing else can:
+    /// evidence that reads back unchanged cannot tell a spent registration
+    /// from a standing one, because a target pass can satisfy every
+    /// registration it holds and republish the very projection it published
+    /// before.
     pub fn watch_is_live(&self, watch: WatchId) -> bool {
-        self.live_watches.contains(&watch)
+        self.live_watches.contains_key(&watch)
     }
 
     /// Record that the target satisfied one of this row's registrations.
@@ -832,6 +881,23 @@ impl ResourceContext {
     /// sees a spent registration and re-arms it (see [`Self::watch_is_live`]).
     pub fn mark_watch_spent(&mut self, watch: WatchId) {
         self.live_watches.remove(&watch);
+    }
+
+    /// Record that `target`'s actor is gone, so every registration this row
+    /// held on it died with that actor.
+    ///
+    /// Called by the actor as it handles
+    /// [`crate::ResourceMsg::DependencyChanged`], which the manager sends a
+    /// dependent when the target actor exits (R17, spec section 16). The
+    /// respawned actor starts with an EMPTY watcher set, so a row that still
+    /// read its old ids live would place nothing, hold registrations no target
+    /// has, and never be woken by that target again: the pass this message
+    /// triggers is the one chance to re-arm, and it must not read them live.
+    ///
+    /// Registrations on every OTHER target are untouched: their actors did not
+    /// go anywhere, and their records never had a reason to move.
+    pub fn mark_target_watches_lost(&mut self, target: &ResourceKey) {
+        self.live_watches.retain(|_, held| held != target);
     }
 
     /// Schedule exactly one reconcile after `after` (R13; spec section 32).
