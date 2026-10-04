@@ -382,7 +382,12 @@ async fn reconcile_ensures_children_then_runs_the_effect_and_requeues() {
     let outcome = ResourceDriver::reconcile(&mut driver, &mut fixture.ctx)
         .await
         .expect("reconcile");
-    assert_eq!(outcome, ReconcileOutcome::Satisfied);
+    // The scripted effect answers the not-ready phase, so the pass is the
+    // runtime's own "not realized, no effect in flight, requeue scheduled"
+    // verdict. `Satisfied` here would be the fail-open this test's own
+    // `status.ready` assertion below contradicts: it publishes `Ready` on the
+    // row over a realization nothing stands behind.
+    assert_eq!(outcome, ReconcileOutcome::RetryScheduled);
 
     // Every child rides the manager child API before the typed effect, and the
     // not-ready phase requeues on the type's preserved cadence.

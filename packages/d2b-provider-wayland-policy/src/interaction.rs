@@ -847,14 +847,35 @@ impl<T: InteractionType> ResourceDriver for InteractionDriver<T> {
             .await
             .map_err(|error| self.effect_error(error, op))?;
 
-        ctx.set_status(InteractionDriverStatus {
-            ready: outcome.phase == InteractionEffectPhase::Ready,
-            resource: outcome.resource,
-        });
-        if mutated || outcome.phase != InteractionEffectPhase::Ready {
+        let InteractionEffectOutcome { phase, resource } = outcome;
+        let ready = phase == InteractionEffectPhase::Ready;
+        // The Provider's own projection is this row's wire layer as well as
+        // its typed status: holding it only in the in-memory slot published an
+        // empty `status.resource` on every row, so no reader could see what
+        // the pass proved. The projection belongs to this pass - the actor
+        // takes it after the pass that set it - so it is published as the
+        // effect produced it, never a later or synthesized one.
+        if let Some(projection) = resource.clone() {
+            ctx.set_status_projection(projection);
+        }
+        ctx.set_status(InteractionDriverStatus { ready, resource });
+        if mutated || !ready {
             ctx.requeue_after(self.behavior.resync());
         }
-        Ok(ReconcileOutcome::Satisfied)
+        // `Satisfied` is the runtime's "the desired state is realized, the
+        // actor may publish `Ready`" verdict; `RetryScheduled` is its "not
+        // realized, no effect in flight, publish `Pending`". An interaction
+        // row owns its whole realization - the children it committed and the
+        // relationships those children publish - so the Provider's phase IS
+        // the row's readiness. Answering `Satisfied` over a `Pending` phase
+        // published `Ready` over children that had not converged, waking
+        // every watcher on a claim nothing backed. The requeue above is this
+        // pass's own, which is exactly what `RetryScheduled` reports.
+        Ok(if ready {
+            ReconcileOutcome::Satisfied
+        } else {
+            ReconcileOutcome::RetryScheduled
+        })
     }
 
     /// Drain step: every owned child finalizes before this resource's own
@@ -987,4 +1008,551 @@ pub fn binding_child_ensure(
         metadata: serde_json::to_vec(&metadata)
             .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Tests: the readiness verdict a session publishes, over the real effects
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
+    use d2b_core_controller::OwnedChildIntent;
+    use d2b_provider_display_wayland::{
+        DisplayIdentity, EndpointSpec, WaylandSessionSpec, session_children,
+    };
+    use d2b_resource_runtime::ResourceStatus;
+    use d2b_resource_runtime::context::{
+        ChildEnsure, EffectCompleted, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext,
+        WatchId, WatchRegistration, WatchSatisfied,
+    };
+    use d2b_resource_runtime::driver::{ReconcileOutcome, ResourceDriver};
+    use d2b_resource_runtime::error::ResourceError;
+    use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
+    use d2b_resource_runtime::manager::ResourceView;
+    use d2b_resource_runtime::spec_store::EnsureOutcome;
+    use serde_json::{Value, json};
+    use tokio::sync::Mutex;
+
+    use super::{
+        InteractionChildContext, InteractionDriver, InteractionDriverArgs, InteractionDriverStatus,
+        InteractionEffectError, InteractionKind, InteractionSpecEnvelope, InteractionType, key_ref,
+        owned_child_ensure, resource_uid, spec_decoder,
+    };
+    use crate::effects_service::InteractionEffectsService;
+    use crate::test_support::{scripted_facets_with_rows, scripted_identity};
+
+    /// The Zone every fixture row lives in.
+    fn zone() -> ZoneId {
+        ZoneId::parse("work").expect("fixture Zone")
+    }
+
+    /// The canonical `WaylandSession` ResourceType name.
+    const SESSION_TYPE: &str = "display-wayland.d2bus.org.WaylandSession";
+
+    /// The session row's durable uid, the exact bytes of the scripted
+    /// admission fence's `33333333-3333-4333-8333-333333333333`. The fixture
+    /// asserts the two agree, so a drifting script fails here rather than
+    /// quietly reading a different identity than production would.
+    const SESSION_UID: [u8; 16] = [
+        0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x43, 0x33, 0x83, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
+    ];
+
+    /// The row generation the fixture drives every pass at.
+    const SESSION_GENERATION: u64 = 4;
+
+    fn session_uid() -> ResourceUid {
+        assert_eq!(
+            resource_uid(&SESSION_UID),
+            Some(scripted_identity().wayland_session_uid),
+            "the fixture row uid is the one the scripted admission fence answers"
+        );
+        resource_uid(&SESSION_UID).expect("the fixture row uid is a closed resource uid")
+    }
+
+    fn session_ref() -> ResourceRef {
+        ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
+            .expect("the session row reference")
+    }
+
+    /// The stored session spec document, naming the exact cross-domain rows the
+    /// scripted admission fence answers for.
+    fn session_spec() -> WaylandSessionSpec {
+        WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").expect("guest"),
+            ResourceRef::parse("Host/host-system").expect("host"),
+            ResourceRef::parse("User/alice").expect("user"),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/policy").expect("policy"),
+            DisplayIdentity::new("display", "#112233", "#223344", "#334455").expect("identity"),
+            true,
+        )
+        .expect("the session spec")
+    }
+
+    fn key_of(reference: &ResourceRef) -> ResourceKey {
+        ResourceKey::new(
+            zone().as_str(),
+            reference.resource_type().as_str(),
+            reference.name().as_str(),
+        )
+    }
+
+    fn committed_intents() -> Vec<OwnedChildIntent> {
+        session_children::display_owned_child_intents(
+            &zone(),
+            &session_ref(),
+            &session_uid(),
+            &session_spec(),
+            SESSION_GENERATION,
+        )
+        .expect("the production child derivation")
+    }
+
+    // -- the declaration the driver is served over ---------------------------
+
+    /// The display session's row vocabulary, over the production child
+    /// derivation. Nothing here decides readiness: that is the effects
+    /// service's aggregate and the engine's verdict, both under test.
+    #[derive(Clone)]
+    struct DisplaySession;
+
+    impl InteractionType for DisplaySession {
+        const KIND: InteractionKind = InteractionKind::DisplayWaylandSession;
+        const RESOURCE_TYPE: &'static str = SESSION_TYPE;
+        const PROVIDER_REF: &'static str = d2b_provider_display_wayland::PROVIDER_REF;
+        const SPEC_PROVIDER_SELECTOR: bool = false;
+
+        fn resync(&self) -> Duration {
+            Duration::from_millis(300)
+        }
+
+        fn validate(
+            &self,
+            envelope: &InteractionSpecEnvelope,
+        ) -> Result<(), InteractionEffectError> {
+            envelope.base_spec::<WaylandSessionSpec>().map(|_| ())
+        }
+
+        fn dependencies(
+            &self,
+            envelope: &InteractionSpecEnvelope,
+        ) -> Result<Vec<ResourceRef>, InteractionEffectError> {
+            let spec = envelope.base_spec::<WaylandSessionSpec>()?;
+            Ok(vec![
+                spec.guest_ref().clone(),
+                spec.host_ref().clone(),
+                spec.user_ref().clone(),
+                spec.policy_ref().clone(),
+            ])
+        }
+
+        fn desired_children(
+            &self,
+            children: &InteractionChildContext<'_>,
+            envelope: &InteractionSpecEnvelope,
+        ) -> Result<Vec<ChildEnsure>, InteractionEffectError> {
+            let spec = envelope.base_spec::<WaylandSessionSpec>()?;
+            let session_ref = key_ref(children.key).map_err(|_| InteractionEffectError::InvalidResource)?;
+            let session_uid =
+                resource_uid(children.uid).ok_or(InteractionEffectError::InvalidResource)?;
+            let intents = session_children::display_owned_child_intents(
+                children.zone,
+                &session_ref,
+                &session_uid,
+                &spec,
+                children.generation,
+            )
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
+            intents.iter().map(owned_child_ensure).collect()
+        }
+    }
+
+    // -- the manager boundary -----------------------------------------------
+
+    /// The manager boundary, recording every committed owned child. This is
+    /// the one surface the driver reaches the plane through; it commits what
+    /// the child derivation asked for and reads it back as owned rows.
+    struct ChildManager {
+        rows: Arc<Mutex<Vec<StoredDesiredResource>>>,
+        parent_uid: [u8; 16],
+    }
+
+    #[async_trait]
+    impl ManagerEndpoint for ChildManager {
+        async fn ensure_child(
+            &self,
+            _parent: &ResourceKey,
+            child: ChildEnsure,
+        ) -> Result<EnsureOutcome, ResourceError> {
+            let key = ResourceKey::new(zone().as_str(), child.type_name.as_str(), child.name.clone());
+            let mut rows = self.rows.lock().await;
+            match rows.iter_mut().find(|row| row.key == key) {
+                Some(row) => {
+                    row.spec = child.spec;
+                    row.metadata = child.metadata;
+                    Ok(EnsureOutcome::Updated(row.clone()))
+                }
+                None => {
+                    rows.push(StoredDesiredResource {
+                        key,
+                        uid: [0x77; 16],
+                        generation: SESSION_GENERATION,
+                        owner_uid: Some(self.parent_uid),
+                        provenance: ResourceProvenance::Resource,
+                        deleting: false,
+                        spec: child.spec,
+                        metadata: child.metadata,
+                        created_at: 0,
+                    });
+                    Ok(EnsureOutcome::Created(rows.last().expect("pushed").clone()))
+                }
+            }
+        }
+
+        async fn get(
+            &self,
+            key: &ResourceKey,
+        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
+            Ok(self.rows.lock().await.iter().find(|row| row.key == *key).cloned())
+        }
+
+        async fn view(&self, _key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+            // The runtime plane the effects read is the scripted facet set;
+            // this boundary answers durable rows only.
+            Ok(None)
+        }
+
+        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
+            if let Some(row) = self.rows.lock().await.iter_mut().find(|row| row.key == *key) {
+                row.deleting = true;
+            }
+            Ok(())
+        }
+
+        async fn list_owned(
+            &self,
+            owner_uid: [u8; 16],
+        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            Ok(self
+                .rows
+                .lock()
+                .await
+                .iter()
+                .filter(|row| row.owner_uid == Some(owner_uid))
+                .cloned()
+                .collect())
+        }
+
+        async fn register_watch(
+            &self,
+            _subscriber: &ResourceKey,
+            _registration: WatchRegistration,
+        ) -> Result<WatchId, ResourceError> {
+            Ok(WatchId(0))
+        }
+
+        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
+            Ok(())
+        }
+    }
+
+    /// The requeue sink, counting the schedules a not-converged pass issues.
+    struct CountingRequeue {
+        schedules: AtomicUsize,
+    }
+
+    impl RequeueScheduler for CountingRequeue {
+        fn schedule(&self, _key: ResourceKey, _after: Duration) -> RequeueId {
+            RequeueId(self.schedules.fetch_add(1, Ordering::SeqCst) as u64)
+        }
+
+        fn cancel(&self, _id: RequeueId) {}
+    }
+
+    // -- the zone plane the effects read -------------------------------------
+
+    fn plane_view(
+        key: ResourceKey,
+        generation: u64,
+        status: ResourceStatus,
+        spec: Vec<u8>,
+        projection: Option<Value>,
+    ) -> ResourceView {
+        ResourceView {
+            key,
+            uid: [0x99; 16],
+            generation,
+            deleting: false,
+            provenance: ResourceProvenance::Resource,
+            spec,
+            metadata: Vec::new(),
+            owner_key: None,
+            status: Some(status),
+            status_generation: Some(generation),
+            status_projection: projection,
+        }
+    }
+
+    /// One committed child row's stored spec column: the `spec` member of the
+    /// envelope the intent body carries, which is exactly what the manager
+    /// commits for the row and what the delivery gate reads back.
+    fn intent_spec_bytes(intent: &OwnedChildIntent) -> Vec<u8> {
+        let envelope: Value =
+            serde_json::from_slice(intent.canonical_resource()).expect("the committed envelope");
+        serde_json::to_vec(envelope.get("spec").expect("the envelope spec")).expect("spec bytes")
+    }
+
+    /// The zone plane one session pass reads: the four rows the session reads,
+    /// its own committed children, and the canonical relationship rows its
+    /// `Endpoint` children publish. Every name is derived by the production
+    /// derivations, so the fixture cannot drift from the vocabulary the gate
+    /// reads.
+    fn plane(children_ready: bool, delivered: bool) -> Vec<ResourceView> {
+        let spec = session_spec();
+        let mut rows = Vec::new();
+        for reference in [
+            spec.guest_ref().clone(),
+            spec.host_ref().clone(),
+            spec.user_ref().clone(),
+            spec.policy_ref().clone(),
+        ] {
+            rows.push(plane_view(
+                key_of(&reference),
+                1,
+                ResourceStatus::Ready,
+                b"{}".to_vec(),
+                None,
+            ));
+        }
+        for intent in committed_intents() {
+            let target = intent.target();
+            rows.push(plane_view(
+                key_of(target),
+                SESSION_GENERATION,
+                if children_ready {
+                    ResourceStatus::Ready
+                } else {
+                    ResourceStatus::Pending
+                },
+                intent_spec_bytes(&intent),
+                None,
+            ));
+            if target.resource_type().as_str() != "Endpoint" {
+                continue;
+            }
+            let endpoint_spec: EndpointSpec =
+                serde_json::from_slice(&intent_spec_bytes(&intent)).expect("endpoint spec");
+            for relationship in session_children::display_canonical_bindings(
+                &zone(),
+                target,
+                &endpoint_spec,
+            )
+            .expect("the canonical binding rows") {
+                let generation = 1;
+                let layer = if delivered {
+                    json!({
+                        "binding": {
+                            "state": "delivered",
+                            "generation": generation,
+                            "incarnation": "fixture-realization",
+                        }
+                    })
+                } else {
+                    json!({
+                        "binding": {
+                            "state": "undelivered",
+                            "reason": "endpoint-access-dispatch-unavailable",
+                        }
+                    })
+                };
+                rows.push(plane_view(
+                    key_of(&relationship),
+                    generation,
+                    ResourceStatus::Ready,
+                    b"{}".to_vec(),
+                    Some(layer),
+                ));
+            }
+        }
+        rows
+    }
+
+    // -- the fixture ---------------------------------------------------------
+
+    struct Fixture {
+        ctx: ResourceContext,
+        requeue: Arc<CountingRequeue>,
+    }
+
+    /// The real interaction driver over the real effects service, reading the
+    /// scripted zone plane: the production path end to end, short only of the
+    /// manager actor that would publish the verdict onto the row.
+    fn fixture(rows: Vec<ResourceView>) -> (Fixture, InteractionDriver<DisplaySession>) {
+        let spec = session_spec();
+        let row = StoredDesiredResource {
+            key: key_of(&session_ref()),
+            uid: SESSION_UID,
+            generation: SESSION_GENERATION,
+            owner_uid: None,
+            provenance: ResourceProvenance::Nix,
+            deleting: false,
+            spec: serde_json::to_vec(&spec).expect("session spec bytes"),
+            metadata: b"{}".to_vec(),
+            created_at: 0,
+        };
+        let manager = Arc::new(ChildManager {
+            rows: Arc::new(Mutex::new(Vec::new())),
+            parent_uid: row.uid,
+        });
+        let requeue = Arc::new(CountingRequeue {
+            schedules: AtomicUsize::new(0),
+        });
+        let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel::<EffectCompleted>();
+        let (watch_tx, _watch_rx) = tokio::sync::mpsc::unbounded_channel::<WatchSatisfied>();
+        let ctx = ResourceContext::new(
+            row,
+            spec_decoder(),
+            manager,
+            Arc::clone(&requeue) as Arc<dyn RequeueScheduler>,
+            effects_tx,
+            watch_tx,
+        );
+        let effects = InteractionEffectsService::new(scripted_facets_with_rows(zone(), rows));
+        let driver = InteractionDriver::new(InteractionDriverArgs {
+            zone: zone(),
+            controller_generation: ControllerGeneration::new(3).expect("controller generation"),
+            effects: Arc::new(effects),
+            behavior: DisplaySession,
+        });
+        (Fixture { ctx, requeue }, driver)
+    }
+
+    // -- reconcile -----------------------------------------------------------
+
+    /// A session whose children have not converged must not claim readiness.
+    /// `Satisfied` is the runtime's "publish `Ready`" verdict and
+    /// `RetryScheduled` its "publish `Pending`" verdict, so answering
+    /// `Satisfied` over pending children woke every watcher on a session
+    /// nothing stood behind.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_session_with_pending_children_does_not_publish_ready() {
+        let (mut fixture, mut driver) = fixture(plane(false, true));
+        let outcome = driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
+
+        assert_eq!(
+            outcome,
+            ReconcileOutcome::RetryScheduled,
+            "a session whose children are not Ready publishes `Pending`, never `Ready`"
+        );
+        let status = fixture
+            .ctx
+            .status::<InteractionDriverStatus>()
+            .expect("the typed status is published");
+        assert!(!status.ready, "the typed status agrees with the verdict");
+        assert_eq!(
+            fixture.ctx.take_status_projection(),
+            None,
+            "a pending aggregate publishes no projection: nothing is realized to name"
+        );
+        assert_eq!(
+            fixture.requeue.schedules.load(Ordering::SeqCst),
+            1,
+            "the pass requeues on the type's cadence, so the row is re-driven"
+        );
+    }
+
+    /// The second half of the aggregate: children that are all Ready but a
+    /// relationship that has not been delivered is not a realized session
+    /// either - the workers exist, but no admitted carriage stands behind them.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_session_with_an_undelivered_binding_does_not_publish_ready() {
+        let (mut fixture, mut driver) = fixture(plane(true, false));
+        let outcome = driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
+
+        assert_eq!(
+            outcome,
+            ReconcileOutcome::RetryScheduled,
+            "an undelivered canonical binding holds the session at `Pending`"
+        );
+        let status = fixture
+            .ctx
+            .status::<InteractionDriverStatus>()
+            .expect("the typed status is published");
+        assert!(!status.ready);
+        assert_eq!(fixture.ctx.take_status_projection(), None);
+    }
+
+    /// Readiness is published exactly when the aggregate holds, and the row's
+    /// `status.resource` carries the typed projection the pass proved rather
+    /// than the empty layer a driver that only held it in memory publishes.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_session_publishes_ready_and_its_projection_once_the_aggregate_holds() {
+        let (mut fixture, mut driver) = fixture(plane(true, true));
+        let outcome = driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
+
+        assert_eq!(
+            outcome,
+            ReconcileOutcome::Satisfied,
+            "every child Ready and every canonical binding delivered is the whole aggregate"
+        );
+        let status = fixture
+            .ctx
+            .status::<InteractionDriverStatus>()
+            .expect("the typed status is published")
+            .clone();
+        assert!(status.ready);
+        let projection = fixture
+            .ctx
+            .take_status_projection()
+            .expect("the row's `status.resource` carries the Provider projection, not `{}`");
+        assert_eq!(
+            &projection,
+            status.resource.as_ref().expect("the typed status carries it too"),
+            "the wire layer and the typed status are one projection"
+        );
+
+        let intents = committed_intents();
+        let processes = intents
+            .iter()
+            .filter(|intent| intent.target().resource_type().as_str() == "Process")
+            .map(|intent| intent.target().to_canonical_string())
+            .collect::<Vec<_>>();
+        let endpoint = intents
+            .iter()
+            .find(|intent| intent.target().resource_type().as_str() == "Endpoint")
+            .expect("the session owns an Endpoint row");
+        let endpoint_ref = endpoint.target().to_canonical_string();
+        assert_eq!(
+            projection.pointer("/proxyProcessRef").and_then(Value::as_str),
+            processes.first().map(String::as_str),
+            "the projection names the host proxy worker"
+        );
+        assert_eq!(
+            projection
+                .pointer("/guestFrontendProcessRef")
+                .and_then(Value::as_str),
+            processes.get(1).map(String::as_str),
+            "the projection names the guest frontend worker"
+        );
+        assert_eq!(
+            projection.pointer("/waylandEndpointRef").and_then(Value::as_str),
+            Some(endpoint_ref.as_str()),
+            "the projection names the session's Endpoint row"
+        );
+        assert_eq!(
+            projection
+                .pointer("/waylandEndpointGeneration")
+                .and_then(Value::as_u64),
+            Some(SESSION_GENERATION),
+            "at the Endpoint row's own committed generation"
+        );
+    }
 }

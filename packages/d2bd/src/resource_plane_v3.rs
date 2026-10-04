@@ -4533,12 +4533,16 @@ impl ResourcePlaneV3 {
 mod tests {
     use super::*;
 use d2b_provider_system_core::MinijailPlatformGate;
-    use d2b_contracts_resource::v3::ResourceName;
+    use d2b_contracts_resource::{resource_proto as wire, v3::ResourceName};
     use d2b_contracts_zone_session::v3::resource_bundle::BundleResourceMetadata;
     use d2b_process_conformance::ProcessIdentityDigest;
     use d2b_provider_system_core::UserIdentityDigest;
     use d2b_resource_runtime::revision::ManualClock;
     use d2b_resource_runtime::watch::{ChangeKind, ChangeNotice, WatchHubConfig};
+    use d2b_contracts_broker::broker_wire::{
+        BrokerErrorResponse, BrokerRequestEnvelope, EndpointAccessResponse, EndpointAccessVerb,
+    };
+    use std::os::fd::AsRawFd;
 
     use d2b_core::resource_authority::{AcceptedGraph, ProjectionRow, TransportIdentity};
 
@@ -9467,13 +9471,293 @@ HOST_EFFECTS_SERVICE.id,
         }
     }
 
-    /// The display scene's construction, with the two doubles the tests script
-    /// held so a test can move the delivery evidence without rebuilding the
-    /// composition.
+    /// One exact-endpoint request this scene's broker end received.
+    ///
+    /// The call log is the only thing this scene keeps about its own wire.
+    /// It exists because a delivery a test cannot see is a delivery it cannot
+    /// order: the revoke-before-retire claim is about frames on this socket,
+    /// so the frames have to be readable.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct BrokerEndpointCall {
+        verb: EndpointAccessVerb,
+        endpoint: String,
+        consumer: String,
+        /// Whether this end ANSWERED the request rather than refusing it.
+        ///
+        /// A refused request is still a request that crossed the wire, and the
+        /// two are not the same fact: a scene that holds one endpoint row has
+        /// to be able to tell "this relationship was delivered" from "this
+        /// relationship asked and was refused", or a reader waiting for the
+        /// delivery would be satisfied by the refusal.
+        answered: bool,
+        at: std::time::Instant,
+    }
+
+    /// The scene's broker end of the Endpoint family's privileged dispatch.
+    ///
+    /// The delivery the display graph publishes rides the daemon's REAL
+    /// dispatch: [`crate::DaemonEndpointAccessDispatch`] over
+    /// [`crate::ServerState`], a `SOCK_SEQPACKET` connection, a length-prefixed
+    /// [`BrokerRequestEnvelope`], and the one [`BrokerResponse::EndpointAccess`]
+    /// the Endpoint family reads. This object is the far end of that socket
+    /// and nothing more - it does not stub the dispatch, does not name a
+    /// relationship's verdict, and holds no plane state. What it does own is
+    /// the ONE thing a broker owns that a fixture may script: whether a named
+    /// endpoint's requests are answered or refused, and the record of what
+    /// arrived.
+    struct EndpointAccessBroker {
+        socket_path: PathBuf,
+        /// Endpoints whose requests are refused rather than answered. A held
+        /// endpoint answers with the broker's own closed refusal frame, which
+        /// is what a real broker does for an admission it will not perform.
+        held: std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+        calls: std::sync::Arc<std::sync::Mutex<Vec<BrokerEndpointCall>>>,
+    }
+
+    impl EndpointAccessBroker {
+        /// Refuse every request naming this endpoint row from now on.
+        fn hold(&self, endpoint: &ResourceKey) {
+            self.held
+                .lock()
+                .expect("the held-endpoint set is not poisoned")
+                .insert(endpoint.name.clone());
+        }
+
+        /// Answer every request naming this endpoint row again.
+        fn release(&self, endpoint: &ResourceKey) {
+            self.held
+                .lock()
+                .expect("the held-endpoint set is not poisoned")
+                .remove(&endpoint.name);
+        }
+
+        /// Every request this broker end received, in arrival order.
+        fn calls(&self) -> Vec<BrokerEndpointCall> {
+            self.calls
+                .lock()
+                .expect("the call log is not poisoned")
+                .clone()
+        }
+
+        /// Every request naming `endpoint` this end ADMITTED, in arrival
+        /// order: the non-observe requests it answered rather than refused.
+        ///
+        /// A refusal is a fact about the broker's own posture and not about
+        /// what the graph published, so every reader that is asking whether an
+        /// access was delivered reads this rather than the whole log.
+        fn admissions(&self, endpoint: &ResourceKey) -> Vec<BrokerEndpointCall> {
+            self.calls()
+                .into_iter()
+                .filter(|call| {
+                    call.endpoint == *endpoint.name
+                        && call.verb != EndpointAccessVerb::Observe
+                        && call.answered
+                })
+                .collect()
+        }
+
+        /// The arrival record of the LAST request this end admitted for
+        /// `endpoint`.
+        fn last_call(&self, endpoint: &ResourceKey) -> Option<BrokerEndpointCall> {
+            self.admissions(endpoint).into_iter().next_back()
+        }
+    }
+
+    /// Bind the scene's broker socket and answer every exact-endpoint request
+    /// that arrives on it.
+    ///
+    /// The frame is the production frame: the daemon connects a `SOCK_SEQPACKET`
+    /// socket to this path, writes the length-prefixed
+    /// [`BrokerRequestEnvelope`] through [`crate::write_json_frame`], and reads
+    /// the answer with [`crate::read_frame`]. This end serves them in that same
+    /// order and shape, on its own thread, because the socket it accepts on is
+    /// a blocking descriptor and the plane's actors must not park on it.
+    ///
+    /// The answer carries the request's own endpoint, consumer, socket name,
+    /// and admitted rights back: this broker grants exactly what was asked
+    /// for and never hands back the directory authority R23 removed. The
+    /// pinned `(device, inode)` is a fixed synthetic pair - a fixture never
+    /// reads a host device number, and the value only has to be stable so a
+    /// grant that is already standing reads back as the same standing one.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn start_endpoint_access_broker(dir: &Path) -> EndpointAccessBroker {
+        use nix::sys::socket::{
+            UnixAddr, accept4, bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType,
+        };
+
+        let socket_path = dir.join("broker.sock");
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("create the broker listener");
+        let address = UnixAddr::new(&socket_path).expect("the broker socket address");
+        bind(listener.as_raw_fd(), &address).expect("bind the broker listener");
+        listen(&listener, Backlog::new(16).expect("the broker backlog")).expect("listen");
+
+        let held: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let calls: Arc<std::sync::Mutex<Vec<BrokerEndpointCall>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let answers = Arc::clone(&held);
+        let log = Arc::clone(&calls);
+        std::thread::spawn(move || {
+            while let Ok(peer) = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC) {
+                let Ok(frame) = crate::read_frame(&peer) else {
+                    continue;
+                };
+                let Ok(envelope) = serde_json::from_slice::<BrokerRequestEnvelope>(&frame) else {
+                    continue;
+                };
+                let (verb, request) = match &envelope.request {
+                    BrokerRequest::EndpointObserve(request) => (EndpointAccessVerb::Observe, request),
+                    BrokerRequest::EndpointGrantAccess(request) => (EndpointAccessVerb::Grant, request),
+                    BrokerRequest::EndpointRevokeAccess(request) => (EndpointAccessVerb::Revoke, request),
+                    _ => {
+                        let _ = crate::write_json_frame(
+                            &peer,
+                            &BrokerResponse::Error(BrokerErrorResponse {
+                                kind: "broker-unsupported-request".to_owned(),
+                                operation: "EndpointAccess".to_owned(),
+                                target_wave: None,
+                                message: "this broker end serves exact-endpoint requests only"
+                                    .to_owned(),
+                                action: "none".to_owned(),
+                            }),
+                        );
+                        continue;
+                    }
+                };
+                let endpoint_name = request.endpoint_ref.name().as_str().to_owned();
+                let held_now = answers
+                    .lock()
+                    .expect("the held-endpoint set is not poisoned")
+                    .contains(&endpoint_name);
+                log.lock()
+                    .expect("the call log is not poisoned")
+                    .push(BrokerEndpointCall {
+                        verb,
+                        endpoint: endpoint_name.clone(),
+                        consumer: request.consumer_ref.to_canonical_string(),
+                        answered: !held_now,
+                        at: std::time::Instant::now(),
+                    });
+                let response = if held_now {
+                    BrokerResponse::Error(BrokerErrorResponse {
+                        kind: "endpoint-access-refused".to_owned(),
+                        operation: verb.as_str().to_owned(),
+                        target_wave: None,
+                        message: "this broker end does not perform this admission".to_owned(),
+                        action: "none".to_owned(),
+                    })
+                } else {
+                    BrokerResponse::EndpointAccess(EndpointAccessResponse {
+                        endpoint_ref: request.endpoint_ref.clone(),
+                        consumer_ref: request.consumer_ref.clone(),
+                        socket: request.socket.clone(),
+                        socket_device: FIXTURE_ENDPOINT_DEVICE,
+                        socket_inode: FIXTURE_ENDPOINT_INODE,
+                        socket_effective_rights: u32::from(request.socket_rights),
+                        ancestors_traversable: true,
+                        parent_listable: false,
+                        consumer_uid: request
+                            .claimed_principal
+                            .map_or(0, |claim| claim.uid),
+                        consumer_gid: request
+                            .claimed_principal
+                            .map_or(0, |claim| claim.gid),
+                    })
+                };
+                let _ = crate::write_json_frame(&peer, &response);
+            }
+        });
+        EndpointAccessBroker {
+            socket_path,
+            held,
+            calls,
+        }
+    }
+
+    /// The synthetic `(device, inode)` pair every answer in this scene pins.
+    ///
+    /// It is not read from the host and never reaches a published projection -
+    /// the Endpoint family redacts it - so a fixed pair is the honest fixture
+    /// value: it says "this broker pins one endpoint socket", which is all the
+    /// delivery verdict reads.
+    const FIXTURE_ENDPOINT_DEVICE: u64 = 0x00d2;
+    const FIXTURE_ENDPOINT_INODE: u64 = 0x0b00_0002;
+
+    /// The daemon state the Endpoint family's privileged dispatch is built
+    /// from when a plane carries one.
+    ///
+    /// This is the crate's own daemon state, field for field, with only the
+    /// broker socket pointed at this scene's broker end: the production
+    /// composition supplies exactly this object to the same construction site,
+    /// and a plane built without one gets the family's own unwired dispatch
+    /// that refuses every verb by name - which is a delivery that never
+    /// exists, not a delivery this scene is choosing to fake.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn test_server_state(broker_socket_path: PathBuf, dir: &Path) -> Arc<crate::ServerState> {
+        let daemon_state_dir = dir.join("daemon-state");
+        std::fs::create_dir_all(&daemon_state_dir).expect("create the daemon state dir");
+        let broker_reap_log = crate::BrokerReapLog::new();
+        Arc::new(crate::ServerState {
+            config: crate::DaemonConfig {
+                broker_socket_path,
+                ..crate::DaemonConfig::default()
+            },
+            daemon_uid: 0,
+            daemon_audit: Arc::new(d2bd_runtime::daemon_audit::DaemonAuditLog::no_op()),
+            daemon_state_dir: daemon_state_dir.clone(),
+            pidfd_table: Arc::new(
+                crate::PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(d2bd_runtime::metrics::Registry::new()),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
+            )),
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
+            conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
+            op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(
+                d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
+            ),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
+            typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
+            zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
+                d2b_provider_device_security_key::SkSessionTable::default(),
+            )),
+            unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
+                0,
+                [],
+            )),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            runtime_handle: crate::test_runtime_handle(),
+        })
+    }
+
+    /// The display scene's construction, with the doubles the tests script and
+    /// the broker end the production dispatch delivers over, so a test can
+    /// move the delivery evidence without rebuilding the composition.
     struct DisplayComposition {
         dir: tempfile::TempDir,
         inputs: ConstructionInputs,
         client: Arc<std::sync::OnceLock<ResourceManagerClient>>,
+        broker: EndpointAccessBroker,
+        processes: Arc<d2b_provider_process::test_support::FakeFacets>,
     }
 
     /// The composition the display graph reconciles over, rooted at the
@@ -9489,6 +9773,46 @@ HOST_EFFECTS_SERVICE.id,
     /// identity.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn display_composition() -> DisplayComposition {
+        // The Process family's own effects double, scripted the way the
+        // plane's other worker-row tests script it: no retained identity
+        // before the first launch, then the retained identity a real Provider
+        // records once the launch it issued is serving. Without the second
+        // answer the host proxy's actor adopts nothing on every pass and
+        // relaunches for ever, which is a state the production provider this
+        // double stands for is never in.
+        let processes = adopting_process_facets();
+        display_composition_with_processes(processes).await
+    }
+
+    /// The one Process double this scene admits a graph to converge over: a
+    /// launch that finds no retained identity, then the retained identity the
+    /// same Provider records once that launch is serving.
+    fn adopting_process_facets() -> Arc<d2b_provider_process::test_support::FakeFacets> {
+        let processes =
+            Arc::new(d2b_provider_process::test_support::FakeFacets::new(
+                Default::default(),
+            ));
+        processes.set_active(false);
+        processes.push_adoption(d2b_provider_process::ProviderAdoption::Absent);
+        processes.push_adoption(d2b_provider_process::ProviderAdoption::Adopted(
+            adopted_report(),
+        ));
+        processes
+    }
+
+    /// The composition over a caller-chosen Process double.
+    ///
+    /// Every other seam is the same real one: the same scripted Guest
+    /// controller session, the same scripted private host observation, the
+    /// same REAL broker socket the production dispatch delivers over, and the
+    /// same real manager-plane reads the interaction family answers from. Only
+    /// the Process family's own scripted provider runtime moves, so a test can
+    /// ask what the graph does while the provider admits no standing worker
+    /// without standing up a different plane to ask it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn display_composition_with_processes(
+        processes: Arc<d2b_provider_process::test_support::FakeFacets>,
+    ) -> DisplayComposition {
         let client = Arc::new(std::sync::OnceLock::new());
         let runtime_provider = runtime_provider_ref(GuestKind::CloudHypervisor);
         let provider_name = runtime_provider
@@ -9609,7 +9933,22 @@ HOST_EFFECTS_SERVICE.id,
                     as Arc<dyn CommittedEndpointShapeSource>,
             )
             .with_host_socket_observation(Arc::new(host_sockets) as Arc<dyn HostSocketEvidenceSource>);
-        DisplayComposition { dir, inputs, client }
+        // The Endpoint family's privileged delivery reaches the exact-endpoint
+        // ACL helpers over a broker socket only the daemon holds, so this scene
+        // carries the daemon's own state pointed at this scene's broker end.
+        // The EndpointBinding driver is then built with the PRODUCTION
+        // dispatch rather than the family's unwired double, and every delivery
+        // verdict a test below reads is one this wire answered.
+        let broker = start_endpoint_access_broker(dir.path());
+        inputs.server_state = Some(test_server_state(broker.socket_path.clone(), dir.path()));
+        inputs.process_facets = processes.facet_set();
+        DisplayComposition {
+            dir,
+            inputs,
+            client,
+            broker,
+            processes,
+        }
     }
 
     /// The durable directory the plane's own fixture created is the one this
@@ -9627,21 +9966,145 @@ HOST_EFFECTS_SERVICE.id,
         spec
     }
 
+    /// The scene's Guest side of the cross-domain session.
+    ///
+    /// The scene binds the crate's own [`GuestTargetRuntime`] - the runtime
+    /// the daemon binds when a Guest session connects - and adds the one
+    /// thing the daemon never adds: the GUEST-LOCAL effect a production
+    /// Guest runs. A realization the Host asked for is not serving the
+    /// moment it is recorded; the Guest's own local effect reports it with
+    /// [`GuestTargetRuntime::mark_ready`] when it is. Without that report the
+    /// guest frontend's row would report a realization that never stops
+    /// converging, which is a state no production Guest is ever in and no
+    /// assertion about this graph could be made over.
+    #[derive(Debug)]
+    struct GuestLocalEffect {
+        control: Arc<dyn GuestTargetControl>,
+        runtime: Arc<d2b_resource_runtime::guest_target::GuestTargetRuntime>,
+        realized: GuestRealizations,
+    }
+
+    /// The realize frames this scene's Guest applied, in arrival order.
+    ///
+    /// The Guest runs the runtime's own target control behind
+    /// [`GuestLocalEffect`], so this is a RECORD of the frames the production
+    /// Process family wrote, read back through the family's own decoder. It
+    /// observes; it decides nothing, and no actor reads it.
+    #[derive(Clone, Debug, Default)]
+    struct GuestRealizations(
+        Arc<tokio::sync::Mutex<Vec<d2b_provider_process::worker_launch::GuestProcessRealization>>>,
+    );
+
+    impl GuestRealizations {
+        /// Every frame this Guest applied, in arrival order.
+        async fn frames(
+            &self,
+        ) -> Vec<d2b_provider_process::worker_launch::GuestProcessRealization> {
+            self.0.lock().await.clone()
+        }
+
+        /// Every frame this Guest applied for one worker row, in arrival order.
+        async fn frames_for(
+            &self,
+            process_ref: &str,
+        ) -> Vec<d2b_provider_process::worker_launch::GuestProcessRealization> {
+            self.frames()
+                .await
+                .into_iter()
+                .filter(|frame| frame.process_ref() == process_ref)
+                .collect()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl GuestTargetControl for GuestLocalEffect {
+        async fn realize(
+            &self,
+            request: d2b_resource_runtime::guest_target::GuestRealizeRequest,
+        ) -> Result<
+            d2b_resource_runtime::guest_target::TargetResourceInstance,
+            d2b_resource_runtime::guest_target::GuestTargetError,
+        > {
+            // The exact realization the Process family wrote, taken from the
+            // frame itself. A frame this Guest cannot decode is not one the
+            // production Guest would apply either, so the decoder's refusal
+            // is the fixture's own failure, not a recorded verdict.
+            self.realized
+                .0
+                .lock()
+                .await
+                .push(d2b_provider_process::worker_launch::GuestProcessRealization::decode(
+                    request.spec(),
+                )
+                .expect("the Process family writes a decodable realization"));
+            let admitted = self.control.realize(request).await?;
+            self.runtime.mark_ready(admitted.source());
+            // The answer a Guest gives is the instance it HOLDS once its own
+            // local effect has run, not the one the request was admitted
+            // into: the production `GuestTargetService::realize` re-reads it
+            // for exactly this reason, and falls back to the admitted one only
+            // when that read collided. Answering with the admitted instance
+            // instead reported `Realizing` over a realization this Guest had
+            // already served, so every guest launch in this scene was refused
+            // as "the target-local effect has not converged" and the worker
+            // row spent a further `PROCESS_RESYNC` pass discovering what the
+            // pass that realized it had already done.
+            Ok(self
+                .runtime
+                .instance(admitted.source())
+                .unwrap_or(admitted))
+        }
+
+        async fn observe(
+            &self,
+            assignment: &d2b_resource_runtime::guest_target::TargetControlAssignment,
+        ) -> Result<
+            d2b_resource_runtime::target::TargetObservation,
+            d2b_resource_runtime::guest_target::GuestTargetError,
+        > {
+            self.control.observe(assignment).await
+        }
+
+        async fn delete(
+            &self,
+            assignment: &d2b_resource_runtime::guest_target::TargetControlAssignment,
+        ) -> Result<(), d2b_resource_runtime::guest_target::GuestTargetError> {
+            self.control.delete(assignment).await
+        }
+
+        async fn adopt(
+            &self,
+            assignment: &d2b_resource_runtime::guest_target::TargetControlAssignment,
+        ) -> Result<
+            d2b_resource_runtime::guest_target::GuestAdoption,
+            d2b_resource_runtime::guest_target::GuestTargetError,
+        > {
+            self.control.adopt(assignment).await
+        }
+    }
+
     /// Bind the scene's Guest target-control runtime to this plane, exactly as
     /// the daemon binds it when the Guest session connects: the runtime the
-    /// runtime serves, one bound session generation, and the plane's own
-    /// target directory told to notify the affected actors.
+    /// runtime serves, one bound session generation, the Guest's own local
+    /// effect behind it, and the plane's own target directory told to notify
+    /// the affected actors.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn bind_display_guest_target(plane: &ResourcePlaneV3) {
+    async fn bind_display_guest_target(plane: &ResourcePlaneV3) -> GuestRealizations {
         let guest = TargetRef::guest(DISPLAY_GUEST_NAME).expect("the Guest target reference");
         let runtime = Arc::new(
             d2b_resource_runtime::guest_target::GuestTargetRuntime::new(guest.clone()),
         );
         runtime.bind_session(1).expect("the guest session binds");
-        let control = runtime.control(1).expect("the guest target control");
+        let realized = GuestRealizations::default();
+        let control: Arc<dyn GuestTargetControl> = Arc::new(GuestLocalEffect {
+            control: runtime.control(1).expect("the guest target control"),
+            runtime: Arc::clone(&runtime),
+            realized: realized.clone(),
+        });
         plane
             .bind_guest_target(&guest, 1, control)
             .expect("the plane binds the guest target");
+        realized
     }
 
     /// One spec rendered as the canonical JSON a durable row carries.
@@ -9704,12 +10167,33 @@ HOST_EFFECTS_SERVICE.id,
         vocabulary: Arc<SharedDisplayEndpointVocabulary>,
         session_key: ResourceKey,
         session_uid: ResourceUid,
+        broker: EndpointAccessBroker,
+        processes: Arc<d2b_provider_process::test_support::FakeFacets>,
+        /// The realize frames the Guest applied, read back out of the bytes
+        /// the production Process family wrote to it.
+        realized: GuestRealizations,
     }
 
-    /// Open the composition and admit the scene.
+    /// One admitted display scene over the composition that converges.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn display_scene() -> DisplayScene {
-        let DisplayComposition { dir, inputs, client, .. } = display_composition().await;
+        display_scene_with_processes(adopting_process_facets()).await
+    }
+
+    /// One admitted display scene over a caller-chosen Process double.
+    ///
+    /// Everything else is the same real scene: the same manager, the same
+    /// provider set, the same driver factories, the same REAL broker socket,
+    /// and the same bound Guest target. Only the Process family's own scripted
+    /// provider runtime moves, which is what lets a test ask what the graph
+    /// does while no worker is standing - the one state in which a dependent
+    /// has to wait for its source to prove a realization.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn display_scene_with_processes(
+        processes: Arc<d2b_provider_process::test_support::FakeFacets>,
+    ) -> DisplayScene {
+        let DisplayComposition { dir, inputs, client, broker, processes } =
+            display_composition_with_processes(processes).await;
         let vocabulary = Arc::clone(&inputs.display_endpoint_vocabulary);
         let plane = Arc::new(
             ResourcePlaneV3::open(inputs)
@@ -9719,19 +10203,26 @@ HOST_EFFECTS_SERVICE.id,
         client
             .set(plane.client().clone())
             .expect("the plane's client is bound once");
-        bind_display_guest_target(&plane).await;
-        plane
-            .ingest_nix_bundle(&display_scene_bundle(true, 0))
-            .await
-            .expect("the scene's rows commit");
+        let realized = bind_display_guest_target(&plane).await;
         let (session_key, session_uid) = display_session_row("test", DISPLAY_SESSION_NAME);
-        DisplayScene {
+        let scene = DisplayScene {
             _dir: dir,
             plane,
             vocabulary,
             session_key,
             session_uid,
-        }
+            broker,
+            processes,
+            realized,
+        };
+        // The first Nix apply: the rows commit, and the actors reconcile over
+        // them from here.
+        scene
+            .plane
+            .ingest_nix_bundle(&display_scene_bundle(true, 0))
+            .await
+            .expect("the scene's rows commit");
+        scene
     }
 
     /// The manager's view of one row, or a panic naming the row.
@@ -9762,7 +10253,98 @@ HOST_EFFECTS_SERVICE.id,
             .collect()
     }
 
+    /// One tick of the fastest reconcile cadence in this graph, in seconds:
+    /// the self-requeue a `Process` row defers on (`PROCESS_RESYNC`), an
+    /// unrealized `Endpoint` row on (`ENDPOINT_REALIZE_RESYNC`), and an
+    /// undelivered `EndpointBinding` row on (`ENDPOINT_BINDING_RESYNC`). All
+    /// three live in the driver crates and are private to them, so the number
+    /// is restated here with the three it stands for named above.
+    const DISPLAY_LINK_RESYNC_SECS: u64 = 5;
 
+    /// One tick of the session row's own cadence, in seconds:
+    /// `WAYLAND_SESSION_RESYNC`, the preserved display repair interval. An
+    /// unconverged session row re-enters its pass on this one, so it is the
+    /// slowest clock in this graph and the fallback for the aggregate read
+    /// that ends every chain.
+    const WAYLAND_SESSION_RESYNC_SECS: u64 = 30;
+
+    /// How much wall clock one of those ticks costs on a machine that is not
+    /// idle, as a multiple of its nominal length.
+    ///
+    /// Measured on this twelve-core host rather than chosen. Idle, the restart
+    /// test's own convergence - the last evidence to the session row's own
+    /// answer - takes 20-27s of the 60s its chain nominal, because a child
+    /// publication wakes its watchers ahead of the next tick. Under load the
+    /// same measurement was taken with the twelve cores oversubscribed by
+    /// spinners: 60s with twelve, and 25s, 35s, 45s, 25s and 45s with
+    /// twenty-four and forty-eight. Every one of those runs converged; none of
+    /// them stalled. Three is the tail's measured stretch, and four is the
+    /// whole first-boot chain's (25s idle against 136s under twelve spinners).
+    /// Five carries the aggregate gate, which runs every suite in this
+    /// workspace at once, with the tick of slack a saturated machine adds to
+    /// any single pass.
+    const DISPLAY_LOAD_FACTOR: u64 = 5;
+
+    /// One tick of the fastest reconcile cadence in this graph.
+    const DISPLAY_LINK_RESYNC: Duration = Duration::from_secs(DISPLAY_LINK_RESYNC_SECS);
+
+    /// One tick of the session row's own cadence.
+    const WAYLAND_SESSION_RESYNC: Duration =
+        Duration::from_secs(WAYLAND_SESSION_RESYNC_SECS);
+
+    /// The nominal cost of one display chain end to end, in seconds.
+    ///
+    /// Six `DISPLAY_LINK_RESYNC` links - each `Endpoint` realizing, each
+    /// `EndpointBinding` delivering, and each consumer `Process` launching, in
+    /// the order the graph derives them - and one `WAYLAND_SESSION_RESYNC` for
+    /// the session row's aggregate read that the chain ends in.
+    const DISPLAY_CHAIN_SECS: u64 = DISPLAY_LINK_RESYNC_SECS * 6 + WAYLAND_SESSION_RESYNC_SECS;
+
+    /// The budget one EVIDENCE wait gets.
+    ///
+    /// An evidence wait ends when the graph has actually done the thing the
+    /// assertions read, so it returns as soon as that happened and only spends
+    /// this bound when the graph did not do it at all. That is the whole
+    /// difference from a window: the bound stops deciding whether the test
+    /// passes and goes back to deciding only how long a real failure takes to
+    /// be reported.
+    const DISPLAY_EVIDENCE_BUDGET: Duration =
+        Duration::from_secs(DISPLAY_CHAIN_SECS * DISPLAY_LOAD_FACTOR);
+
+    /// The budget one status read gets AFTER the evidence it is derived from
+    /// has already landed.
+    ///
+    /// Nothing is left to chain: the actor whose effect completed publishes
+    /// its own status in that same pass, and the row that aggregates it is
+    /// woken by the watch on that publication. What remains is one pass plus
+    /// one hop, with `WAYLAND_SESSION_RESYNC` as the fallback clock for the
+    /// hop if the watch is missed, at the same load factor as the chain.
+    const DISPLAY_AGGREGATE_BUDGET: Duration = Duration::from_secs(
+        (DISPLAY_LINK_RESYNC_SECS + WAYLAND_SESSION_RESYNC_SECS) * DISPLAY_LOAD_FACTOR,
+    );
+
+    /// The window a NEGATIVE observation holds open: one deferral cycle of
+    /// the actor whose pass is being fenced, at the load factor.
+    ///
+    /// A negative window has to span at least one retry to mean anything, and
+    /// it is strictly stricter the longer it runs, so it is sized by the
+    /// cadence rather than by how long this machine happens to take to fire
+    /// one tick.
+    const DISPLAY_RETRY_WINDOW: Duration =
+        Duration::from_secs(DISPLAY_LINK_RESYNC_SECS * DISPLAY_LOAD_FACTOR);
+
+    /// The window a RESTART's negative status trail holds open.
+    ///
+    /// The claim it has to support is that a restarted actor's answer STAYS
+    /// replaced rather than drifting back to the previous boot's cached one,
+    /// and the only way to observe that is across a further pass. An
+    /// unconverged session row re-enters its pass on `WAYLAND_SESSION_RESYNC`,
+    /// so a whole resync plus half of one covers the pass and a margin; the
+    /// window opens when the row first speaks, so what it costs is the
+    /// observation and not the wait for the restarted actor to be scheduled.
+    const DISPLAY_RESTART_WINDOW: Duration = Duration::from_secs(
+        WAYLAND_SESSION_RESYNC_SECS + WAYLAND_SESSION_RESYNC_SECS / 2,
+    );
 
     /// Wait until one row publishes `wanted`, and answer what it published.
     ///
@@ -9797,6 +10379,323 @@ HOST_EFFECTS_SERVICE.id,
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
+    }
+
+    /// Every frame this scene's Guest applied for one worker row, waiting
+    /// until it applied at least one.
+    ///
+    /// The counterpart to [`frames_over`]: where that one holds a window open
+    /// because the claim is that NO frame was written, this one ends the moment
+    /// the Guest has applied one. A realization frame is the LAST effect in
+    /// this graph - the worker row publishes its own readiness only once the
+    /// Guest has applied the frame its launch wrote - so this is the closest
+    /// observable evidence to the convergence a session row's aggregate gate
+    /// then reports, and the one wait that does not sit on a tick chain.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn frames_until(
+        realized: &GuestRealizations,
+        process_ref: &str,
+        budget: Duration,
+    ) -> Vec<d2b_provider_process::worker_launch::GuestProcessRealization> {
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            let frames = realized.frames_for(process_ref).await;
+            if !frames.is_empty() || tokio::time::Instant::now() >= deadline {
+                return frames;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// Every frame this scene's Guest applied for one worker row over a fixed
+    /// window, in arrival order.
+    ///
+    /// This is the NEGATIVE observation a fence needs, and it cannot be made
+    /// by a single read: one read cannot tell "no frame was ever written"
+    /// from "the read landed before the write". The row's own status is no
+    /// help either - a worker row publishes its own classification while its
+    /// launch is still being prepared, so a reader that stopped at `Pending`
+    /// would be reading a status that says nothing about what reached the
+    /// Guest. Every frame this Guest has ever applied is recorded from the
+    /// moment the scene bound it, so a window opened after the fact still
+    /// answers for the passes that ran before it; what the window adds is the
+    /// retries that run during it.
+    ///
+    /// The window is the test's own. A launch a source has not proven is
+    /// deferred and retried on the Process family's own resync cadence, so a
+    /// window spanning more than one of those cadences is what covers the
+    /// retries a fence has to hold across.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn frames_over(
+        realized: &GuestRealizations,
+        process_ref: &str,
+        window: Duration,
+    ) -> Vec<d2b_provider_process::worker_launch::GuestProcessRealization> {
+        let deadline = tokio::time::Instant::now() + window;
+        loop {
+            let frames = realized.frames_for(process_ref).await;
+            if tokio::time::Instant::now() >= deadline {
+                return frames;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// Every distinct status one row publishes, from the moment it publishes
+    /// its first one and over a further window, in the order each was first
+    /// observed.
+    ///
+    /// Unlike [`observed_statuses`] this reads PAST the first converged status.
+    /// A restart leaves the previous boot's `Ready` on the durable row, so what
+    /// has to be shown about a restarted actor is that it REPLACES that answer
+    /// - and a reader that stopped at the stale first read would show nothing.
+    ///
+    /// The window opens on the row's FIRST publication rather than at the
+    /// call. A restarted plane spawns its actors on open, and a spawn that has
+    /// not been scheduled yet publishes nothing at all, so a window that began
+    /// before this row had ever spoken could expire over a row that had never
+    /// acted - and a reader that stopped there would report "it never left
+    /// `Ready`" about a row that had not yet been given the chance. The
+    /// window is what still has to follow that publication: the claim is that
+    /// the answer STAYS replaced, which is only observable across a further
+    /// pass.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn status_trail(
+        plane: &ResourcePlaneV3,
+        key: &ResourceKey,
+        window: Duration,
+    ) -> Vec<ResourceStatus> {
+        // The call is bounded twice over: once for the window that opens when
+        // the row first speaks, and once for the wait that precedes it, so a
+        // row that never speaks ends the call instead of hanging the suite.
+        let opened_at = tokio::time::Instant::now();
+        let hard = opened_at + window + window;
+        let mut opened: Option<tokio::time::Instant> = None;
+        let mut seen: Vec<ResourceStatus> = Vec::new();
+        loop {
+            if let Some(view) = plane
+                .client()
+                .get(key.clone())
+                .await
+                .expect("the manager serves the row")
+                && let Some(status) = view.observed_status()
+            {
+                if !seen.contains(&status) {
+                    seen.push(status);
+                }
+                opened.get_or_insert_with(tokio::time::Instant::now);
+            }
+            let now = tokio::time::Instant::now();
+            if now >= hard || opened.is_some_and(|at| now >= at + window) {
+                return seen;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Every row of one ResourceType this Zone still holds once the budget
+    /// elapses; empty when the type drained inside it.
+    ///
+    /// The manager holds a row through its own teardown - the durable deleting
+    /// mark stays observable until the cleanup completes - so a teardown test
+    /// has to wait for RETIREMENT, not for the delete request.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn drained(
+        plane: &ResourcePlaneV3,
+        type_name: &str,
+        budget: Duration,
+    ) -> BTreeMap<String, ResourceView> {
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            let held = rows_of_type(plane, type_name).await;
+            if held.is_empty() || tokio::time::Instant::now() >= deadline {
+                return held;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// The two worker rows of one scene's derivation, in the family's own
+    /// preserved order: the host proxy, then the guest frontend.
+    fn display_worker_rows(processes: &[ResourceKey]) -> (ResourceKey, ResourceKey) {
+        let proxy = processes
+            .iter()
+            .find(|key| key.name.starts_with("display-host-proxy-"))
+            .expect("the host proxy row");
+        let frontend = processes
+            .iter()
+            .find(|key| key.name.starts_with("display-guest-frontend-"))
+            .expect("the guest frontend row");
+        (proxy.clone(), frontend.clone())
+    }
+
+    /// The published status projection of one committed row, read once its
+    /// owning actor has published one.
+    ///
+    /// An owning actor republishes its status on every pass, and the window
+    /// between a pass's own status and its own projection is one in which the
+    /// row publishes nothing at all. A reader that sampled that window would
+    /// report a row that said nothing, which is a moment in one actor's cadence
+    /// rather than anything this graph did. The wait ends on the first
+    /// projection the actor publishes; a projection that carries no layer
+    /// under test is still that actor's own answer, and is returned as it is.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn published_projection(
+        plane: &ResourcePlaneV3,
+        key: &ResourceKey,
+        budget: Duration,
+    ) -> serde_json::Value {
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            let projection = view_of(plane, key)
+                .await
+                .observed_status_projection()
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            if !projection.is_null() || tokio::time::Instant::now() >= deadline {
+                return projection;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// The realization token one committed endpoint row published, or an
+    /// empty string where it published none.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn endpoint_token(
+        plane: &ResourcePlaneV3,
+        key: &ResourceKey,
+        budget: Duration,
+    ) -> String {
+        published_projection(plane, key, budget)
+            .await
+            .pointer("/endpoint/incarnation")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// The one canonical relationship row one committed endpoint row
+    /// publishes, named by the Endpoint family's own derivation - the same
+    /// derivation the `Endpoint` actor commits the row from.
+    fn published_relationship(
+        endpoint: &ResourceKey,
+        spec: &d2b_provider_display_wayland::EndpointSpec,
+    ) -> ResourceKey {
+        let rows = d2b_provider_display_wayland::display_canonical_bindings(
+            &ZoneId::parse("test").expect("zone"),
+            &ResourceRef::parse(&format!("Endpoint/{}", endpoint.name)).expect("endpoint ref"),
+            spec,
+        )
+        .expect("the Endpoint family derives this row's published relationships");
+        assert_eq!(
+            rows.len(),
+            1,
+            "a row that publishes a relationship publishes exactly one: {endpoint}"
+        );
+        ResourceKey::new("test", "EndpointBinding", rows[0].name().as_str())
+    }
+
+    /// The realization token one delivered relationship published, or an
+    /// empty string where it published none.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn relationship_token(
+        plane: &ResourcePlaneV3,
+        key: &ResourceKey,
+        budget: Duration,
+    ) -> String {
+        published_projection(plane, key, budget)
+            .await
+            .pointer("/binding")
+            .and_then(|layer| layer.pointer("/incarnation"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_default()
+    }
+
+    /// Every grant this scene's broker end was asked to admit, waiting until
+    /// each named endpoint row has had its own grant cross the wire.
+    ///
+    /// A grant is the deepest evidence a relationship publishes: the
+    /// `EndpointBinding` actor behind it has read the endpoint's own
+    /// realization, asked the production dispatch for exactly that consumer's
+    /// access, and been answered over the real socket. How long the LAST of
+    /// those takes is a property of the graph and not of the test - each link
+    /// is one `ENDPOINT_BINDING_RESYNC`, and each link only starts once the
+    /// source above it has published - so a wait that ends on the evidence
+    /// covers the whole chain however slowly this machine runs it, where a
+    /// window covers whatever fraction of it the machine happened to finish.
+    ///
+    /// The wait names the endpoints rather than counting calls, and counts
+    /// only what this end ANSWERED: a scene that holds one row still records
+    /// that row's grants, and a reader that counted them would be satisfied by
+    /// the refusal it is waiting for the absence of.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn granted_endpoints(
+        broker: &EndpointAccessBroker,
+        endpoints: &[ResourceKey],
+        budget: Duration,
+    ) -> Vec<BrokerEndpointCall> {
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            let grants: Vec<BrokerEndpointCall> = broker
+                .calls()
+                .into_iter()
+                .filter(|call| call.verb == EndpointAccessVerb::Grant && call.answered)
+                .collect();
+            let delivered = endpoints
+                .iter()
+                .all(|key| grants.iter().any(|call| call.endpoint == key.name));
+            if delivered || tokio::time::Instant::now() >= deadline {
+                return grants;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// The realization token one committed endpoint row published, waiting
+    /// until it published a STANDING one rather than any publication at all.
+    ///
+    /// [`endpoint_token`] answers at the row's first projection, which for a
+    /// `ProducerRow` shape is the unrealized class its own actor publishes
+    /// before it can prove a realization. A reader that wants the standing
+    /// answer has to keep reading until one is published.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn standing_endpoint_token(
+        plane: &ResourcePlaneV3,
+        key: &ResourceKey,
+        budget: Duration,
+    ) -> String {
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            let token = published_projection(
+                plane,
+                key,
+                deadline.saturating_duration_since(tokio::time::Instant::now()),
+            )
+            .await
+            .pointer("/endpoint/incarnation")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+            if !token.is_empty() || tokio::time::Instant::now() >= deadline {
+                return token;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// Every revoke this broker end ADMITTED for one endpoint row, in arrival
+    /// order.
+    fn revokes_for(
+        broker: &EndpointAccessBroker,
+        endpoint: &ResourceKey,
+    ) -> Vec<BrokerEndpointCall> {
+        broker
+            .admissions(endpoint)
+            .into_iter()
+            .filter(|call| call.verb == EndpointAccessVerb::Revoke)
+            .collect()
     }
 
     /// The scene's display graph, exactly as the display Provider's own
@@ -9846,12 +10745,27 @@ HOST_EFFECTS_SERVICE.id,
     #[tokio::test(flavor = "multi_thread")]
     async fn an_admitted_display_session_realizes_its_whole_actor_graph() {
         let scene = display_scene().await;
-
+        let (endpoints, processes) = derived_display_rows(&scene.session_uid);
+        // The evidence this graph has to produce before its session row can
+        // answer: both of the relationships the display Provider's own
+        // derivation publishes, granted over this scene's real broker socket.
+        // A grant is the deepest thing a relationship publishes, so waiting
+        // for both of them covers the whole chain - each `Endpoint` realizing,
+        // each `EndpointBinding` delivering, each consumer `Process` launching
+        // and the Guest applying its frame - however many of this machine's
+        // resync ticks that takes, and only the session row's own aggregate
+        // answer is left on a budget.
+        granted_endpoints(
+            &scene.broker,
+            &[endpoints[0].0.clone(), endpoints[1].0.clone()],
+            DISPLAY_EVIDENCE_BUDGET,
+        )
+        .await;
         let session = settled(
             &scene.plane,
             &scene.session_key,
             ResourceStatus::Ready,
-            Duration::from_secs(120),
+            DISPLAY_AGGREGATE_BUDGET,
         )
         .await;
         assert_eq!(
@@ -9865,7 +10779,6 @@ HOST_EFFECTS_SERVICE.id,
         // every committed endpoint row. A fixture that handed the Endpoint
         // family its own always-empty registry would have refused all three
         // for `ShapeUnsupported`, which no d2bd test could see why.
-        let (endpoints, processes) = derived_display_rows(&scene.session_uid);
         for (key, spec) in &endpoints {
             assert!(
                 d2b_provider_endpoint::endpoint_realization(spec, &*scene.vocabulary).is_some(),
@@ -9929,6 +10842,1198 @@ HOST_EFFECTS_SERVICE.id,
             held, derived,
             "the committed binding rows are exactly what the endpoint rows' own publication intent \
              derives"
+        );
+        // The delivery those two rows report is the one this scene's broker
+        // wire produced: the PRODUCTION `DaemonEndpointAccessDispatch`
+        // answered both grants over the daemon's own broker socket, and both
+        // relationships publish a delivery at their own current row
+        // generation. Nothing here scripts a verdict - the verdict is read
+        // back through the display Provider's own published-layer parser.
+        for (name, view) in &held_bindings {
+            let layer = view.observed_status_projection().and_then(|p| p.pointer("/binding").cloned());
+            assert!(
+                d2b_provider_display_wayland::session_children::display_binding_delivered(
+                    layer.as_ref(),
+                    view.generation,
+                ),
+                "{name} publishes no delivery at generation {}: {layer:?}",
+                view.generation
+            );
+        }
+        let calls = scene.broker.calls();
+        let granted: Vec<&BrokerEndpointCall> = calls
+            .iter()
+            .filter(|call| call.verb == EndpointAccessVerb::Grant)
+            .collect();
+        assert_eq!(
+            granted.len(),
+            2,
+            "one grant per published relationship crossed the real broker socket: {granted:?}"
+        );
+
+        // With both deliveries standing the two worker rows leave the launch
+        // gate and publish readiness, which is what the session's aggregate
+        // gate reads.
+        for key in &processes {
+            let status = settled(
+                &scene.plane,
+                key,
+                ResourceStatus::Ready,
+                DISPLAY_AGGREGATE_BUDGET,
+            )
+            .await;
+            assert_eq!(
+                status,
+                ResourceStatus::Ready,
+                "{key} is released by its own delivered relationship, not by the session"
+            );
+        }
+        // The claim is WHICH rows take the host launch, not how many times
+        // the scripted provider is asked before it records the identity its
+        // own launch produced. Those are different facts, and this scene's
+        // double scripts the second one: it reports no retained identity
+        // until its launch is serving, and the launch gate now answers
+        // before a row acts at all, so the pass that finds its sources
+        // unproven never reaches the provider to be asked. Counting launches
+        // therefore counted this double's pacing rather than this graph's
+        // shape. Which row launched is stated the way the two sibling
+        // acceptance tests over this same scene state it.
+        let (host_proxy, _frontend) = display_worker_rows(&processes);
+        let launches = scene.processes.launch_calls();
+        assert!(
+            !launches.is_empty()
+                && launches
+                    .iter()
+                    .all(|launch| launch.resource_ref.ends_with(&host_proxy.name)),
+            "the host proxy is the one worker the Process family launches over the host Provider; \
+             the guest frontend realizes through its own Guest target: {launches:?}"
+        );
+        scene.plane.shutdown().await;
+    }
+
+    /// The authenticated client the daemon's own Resource API session holds:
+    /// the real service over the real manager-backed store, bound to a subject
+    /// the real authorizer admitted.
+    type DisplayApiClient = d2b_resource_api::ResourceApiClient<
+        d2b_resource_api::manager_backend::ManagerBackend,
+        d2b_resource_api::service::UnavailableUpgradeDispatcher,
+    >;
+
+    /// The controller generation this Zone's daemon session is bound to, and
+    /// the one its authorization state is admitted under.
+    ///
+    /// A status mutation is routed to the store only for a session whose
+    /// controller generation the evaluator still reads as current, so the two
+    /// are declared as one value here rather than two that could drift.
+    const DISPLAY_API_CONTROLLER_GENERATION: u64 = 11;
+
+    /// The policy revision [`display_api_authorizer`] installs, and the
+    /// revision [`display_api_authorization_state`] is admitted under; the
+    /// evaluator refuses a session whose snapshot names another one.
+    const DISPLAY_API_POLICY_REVISION: u64 = 7;
+
+    /// The identity the daemon's own system-core Resource API session carries
+    /// into a display Zone: a locally bound `Provider` session, admitted by a
+    /// policy that names exactly this Zone.
+    ///
+    /// This is the identity the daemon's own update path is authenticated
+    /// with, not a stand-in for it. What the path then reaches is this scene's
+    /// own plane.
+    fn display_api_subject(
+        zone: &ZoneId,
+    ) -> d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext {
+        use d2b_contracts_resource::v3::identity::{
+            BindingDigest, EvidenceClass, Locality, ReconnectGeneration, ServiceName,
+            SessionBinding, SessionPurpose, TranscriptHash,
+        };
+
+        d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext::new(
+            ResourceRef::parse("Provider/system-core").expect("the system-core Provider reference"),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001")
+                .expect("the subject's own committed uid"),
+            // The Zone's own Display is redacted; the ref carries its canonical
+            // name, which is what the authorizer matches the request Zone by.
+            ResourceRef::parse(&format!("Zone/{}", zone.as_str()))
+                .expect("the Zone self reference"),
+            EvidenceClass::UnixPeer,
+            SessionPurpose::parse("resource-api").expect("a bounded session purpose"),
+            ServiceName::parse("d2b.resource.v3").expect("a bounded service name"),
+            SessionBinding::new(
+                d2b_contracts_resource::v3::SchemaFingerprint::parse(format!(
+                    "sha256:{}",
+                    "1".repeat(64)
+                ))
+                .expect("a bounded schema fingerprint"),
+                d2b_contracts_resource::v3::identity::TransportBinding::new(
+                    Locality::Local,
+                    BindingDigest::parse(format!("sha256:{}", "2".repeat(64)))
+                        .expect("a bounded binding digest"),
+                ),
+                ReconnectGeneration::new(1).expect("a bounded reconnect generation"),
+                TranscriptHash::from_bytes([3; 32]),
+            ),
+        )
+        .with_controller_generation(
+            ControllerGeneration::new(DISPLAY_API_CONTROLLER_GENERATION)
+                .expect("a bounded controller generation"),
+        )
+    }
+
+    /// The authorization state this session's policy revision is admitted
+    /// under; its revision is the one [`display_api_authorizer`] installs.
+    fn display_api_authorization_state() -> d2b_resource_api::authz::AuthorizationState {
+        d2b_resource_api::authz::AuthorizationState {
+            snapshot: d2b_contracts_resource::v3::PolicySnapshot {
+                policy_revision: DISPLAY_API_POLICY_REVISION,
+                api_catalog_revision: 1,
+                active_configuration_revision:
+                    d2b_contracts_resource::v3::ConfigurationGeneration::new(7)
+                        .expect("a bounded configuration generation"),
+                controller_generation: Some(
+                    ControllerGeneration::new(DISPLAY_API_CONTROLLER_GENERATION)
+                        .expect("a bounded controller generation"),
+                ),
+            },
+            zone_policy_revision: ZoneRevision::new(DISPLAY_API_POLICY_REVISION),
+            bootstrap_phase: d2b_resource_api::authz::BootstrapPhase::Disabled,
+            now_tick: 1,
+        }
+    }
+
+    /// The real authorizer this Zone's session is admitted by, and the store
+    /// seal its manager backend answers to.
+    ///
+    /// The rule grants every resource verb the graph's own types carry,
+    /// `UpdateStatus` among them, so the refusal the test asserts is the one
+    /// the mutation reaches AFTER authorization rather than a denial standing
+    /// in for it.
+    fn display_api_authorizer(
+        zone: &ZoneId,
+    ) -> (
+        Arc<d2b_resource_api::authz::NativeAuthorizer>,
+        d2b_contracts_resource::v3::operations::seal::MutationSealAcceptor,
+    ) {
+        use d2b_resource_api::authz::{
+            ApiCatalog, BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding,
+            NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority, ResourceVerb, SessionVerb,
+        };
+
+        let catalog = ApiCatalog::with_extensions([
+            d2b_contracts_resource::v3::ResourceTypeName::parse(WAYLAND_SESSION_TYPE)
+                .expect("the display session type"),
+        ])
+        .expect("the display catalog extends the standard one");
+        let subject = display_api_subject(zone);
+        let rule = PolicyRule::new(
+            &catalog,
+            [
+                d2b_contracts_resource::v3::ResourceTypeName::parse(WAYLAND_SESSION_TYPE)
+                    .expect("the display session type"),
+                d2b_contracts_resource::v3::ResourceTypeName::parse("Process")
+                    .expect("the worker type"),
+                d2b_contracts_resource::v3::ResourceTypeName::parse("Endpoint")
+                    .expect("the endpoint type"),
+                d2b_contracts_resource::v3::ResourceTypeName::parse("EndpointBinding")
+                    .expect("the relationship type"),
+            ],
+            [
+                ResourceVerb::Get,
+                ResourceVerb::Create,
+                ResourceVerb::UpdateSpec,
+                ResourceVerb::UpdateStatus,
+                ResourceVerb::UpdateMetadata,
+                ResourceVerb::UpdateFinalizers,
+                ResourceVerb::Delete,
+            ],
+            [SessionVerb::Connect],
+            [],
+            [],
+            [zone.clone()],
+            [],
+        )
+        .expect("the display status rule compiles");
+        let role =
+            CompiledRole::new(ResourceRef::parse("Role/system-core").expect("role ref"), vec![rule])
+                .expect("the system-core role compiles");
+        let binding = CompiledRoleBinding::new(
+            role.role_ref.clone(),
+            [BoundSubject {
+                subject_ref: subject.subject_ref().clone(),
+                subject_uid: subject.subject_uid().clone(),
+            }],
+            BindingScope::default(),
+            RelayGrantAuthority::None,
+        )
+        .expect("the system-core role binding compiles");
+        let policy =
+            PolicySet::new(&catalog, DISPLAY_API_POLICY_REVISION, vec![role], vec![binding])
+                .expect("the system-core policy set compiles");
+        let authorizer =
+            Arc::new(NativeAuthorizer::new(catalog, Some(policy)).expect("authorizer binds"));
+        let seal = d2b_contracts_resource::v3::StoreSealIdentity::new(
+            d2b_contracts_resource::v3::StoreSlot::new(0).expect("the manager plane's slot"),
+            zone.clone(),
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111")
+                .expect("the sealed store's own uid"),
+        );
+        let acceptor = authorizer
+            .take_store_seal(seal)
+            .expect("the manager plane takes the store seal");
+        (authorizer, acceptor)
+    }
+
+    /// The operation metadata the Resource API requires of every request.
+    fn display_api_request_meta(operation: &str) -> wire::RequestMeta {
+        let mut meta = wire::RequestMeta::new();
+        meta.operation_id = operation.to_owned();
+        meta.idempotency_key = operation.to_owned();
+        meta.correlation_id = operation.to_owned();
+        meta.trace_id = operation.to_owned();
+        meta.deadline_ms = 10_000;
+        meta
+    }
+
+    /// The authenticated read this Zone's client issues for one row.
+    fn display_api_get_request(
+        zone: &ZoneId,
+        key: &ResourceKey,
+        operation: &str,
+    ) -> wire::GetRequest {
+        let mut request = wire::GetRequest::new();
+        request.meta = protobuf::MessageField::some(display_api_request_meta(operation));
+        let mut target = wire::ResourceIdentity::new();
+        target.zone = zone.as_str().to_owned();
+        target.resource_type = key.type_name.clone();
+        target.name = key.name.clone();
+        request.target = protobuf::MessageField::some(target);
+        // The service refuses a read that does not name its projection; this
+        // one wants the whole envelope, published status layer included.
+        let mut projection = wire::Projection::new();
+        projection.kind =
+            protobuf::EnumOrUnknown::new(wire::ProjectionKind::PROJECTION_KIND_FULL);
+        request.projection = protobuf::MessageField::some(projection);
+        request
+    }
+
+    /// The canonical envelope this Zone's Resource API serves for one row,
+    /// read through the same authenticated client the daemon holds.
+    async fn display_api_served(
+        client: &DisplayApiClient,
+        zone: &ZoneId,
+        key: &ResourceKey,
+        operation: &str,
+    ) -> wire::ResourceEnvelopeBytes {
+        let response = client.get(display_api_get_request(zone, key, operation)).await;
+        assert!(
+            response.error.is_none(),
+            "the Resource API serves {key}: {:?}",
+            response.error.as_ref().map(|error| (
+                error.kind.enum_value_or_default(),
+                error.reason.clone()
+            ))
+        );
+        *response
+            .resource
+            .0
+            .expect("a served envelope for the read")
+    }
+
+    /// The daemon's own status mutation for one row: the canonical envelope
+    /// the plane serves for it with its published phase replaced, carried
+    /// under the exact revision and uid that same read reported.
+    ///
+    /// Nothing here is malformed on purpose. A status write the API cannot
+    /// even parse would prove nothing about the refusal under test, so this
+    /// is a well-formed `UpdateStatus` over a valid canonical envelope, and
+    /// the only thing that can answer it is `ManagerBackend`.
+    fn display_api_status_write_request(
+        served: &wire::ResourceEnvelopeBytes,
+        phase: &str,
+        operation: &str,
+    ) -> wire::UpdateStatusRequest {
+        let mut envelope: serde_json::Value =
+            serde_json::from_slice(&served.canonical_json).expect("a canonical envelope");
+        envelope["status"]["phase"] = serde_json::Value::String(phase.to_owned());
+        let payload = d2b_contracts_resource::v3::CanonicalJsonValue::parse(
+            &serde_json::to_vec(&envelope).expect("the canonical status document"),
+        )
+        .expect("the status document parses")
+        .to_canonical_bytes();
+        let identity = served
+            .identity
+            .as_ref()
+            .expect("a served identity for the read")
+            .clone();
+        let mut body = wire::ResourceEnvelopeBytes::new();
+        body.identity = protobuf::MessageField::some(identity.clone());
+        body.canonical_json = payload.clone();
+        body.payload_digest = d2b_contracts_resource::v3::canonical_digest(
+            d2b_contracts_resource::v3::RESOURCE_ENVELOPE_DOMAIN_TAG,
+            &payload,
+        );
+        let mut precondition = wire::Precondition::new();
+        precondition.kind = protobuf::EnumOrUnknown::new(
+            wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
+        );
+        precondition.expected_revision = served.identity.revision;
+        precondition.expected_uid = served.identity.uid.clone();
+        let mut mutation = wire::Mutation::new();
+        mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_STATUS);
+        mutation.target = protobuf::MessageField::some(identity);
+        mutation.precondition = protobuf::MessageField::some(precondition);
+        mutation.resource = protobuf::MessageField::some(body);
+        let mut request = wire::UpdateStatusRequest::new();
+        request.meta = protobuf::MessageField::some(display_api_request_meta(operation));
+        request.mutation = protobuf::MessageField::some(mutation);
+        request
+    }
+
+    /// The daemon's own authenticated Resource API cannot durably write a
+    /// status, and the whole converged display graph is where that shows.
+    ///
+    /// The client is the daemon's own, assembled the way the composition
+    /// assembles it: `ResourceBusAdapter::bind_component_session`
+    /// over a `ResourceService` whose store IS the `ManagerBackend` this
+    /// scene's own plane handed over, authorized by a real `NativeAuthorizer`
+    /// over a real compiled policy that grants `UpdateStatus` on every type in
+    /// the graph. So the mutation is admitted all the way to the production
+    /// refusal in `ManagerBackend::commit_mutation`: it is not a double's
+    /// answer, and it is not unconstructible either - it is a well-formed
+    /// status mutation over a valid canonical envelope.
+    ///
+    /// The closed code is the load-bearing part of that answer, not the class.
+    /// The service refuses a status mutation whose session carries no current
+    /// controller generation under `status controller generation does not
+    /// match` - the same class, a different code, and a refusal that happens
+    /// before the store is ever asked. Only `resource-status-owner-mismatch`
+    /// is `ManagerBackend` answering a mutation that was authorized, parsed
+    /// and sealed on its way in.
+    ///
+    /// What it cannot be is a write. Every row of the graph - the session and
+    /// all seven children its own durable derivation commits - still carries
+    /// exactly the status its owning `ResourceActor` published, at exactly the
+    /// revision it held before the attempt.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_daemons_own_api_cannot_durably_write_a_status() {
+        let scene = display_scene().await;
+        let zone = ZoneId::parse("test").expect("bounded zone");
+        let (endpoints, processes) = derived_display_rows(&scene.session_uid);
+        // The evidence the graph has to produce first: both of the
+        // relationships the display Provider's own derivation publishes,
+        // granted over this scene's real broker socket. The session row's
+        // readiness is what the whole graph converges behind, and it is what
+        // the relationships are derived behind, so both waits are on the
+        // graph's own output rather than on a clock.
+        granted_endpoints(
+            &scene.broker,
+            &[endpoints[0].0.clone(), endpoints[1].0.clone()],
+            DISPLAY_EVIDENCE_BUDGET,
+        )
+        .await;
+        assert_eq!(
+            settled(
+                &scene.plane,
+                &scene.session_key,
+                ResourceStatus::Ready,
+                DISPLAY_AGGREGATE_BUDGET
+            )
+            .await,
+            ResourceStatus::Ready,
+            "the session row is driven to readiness by its own owning actor, before this test \
+             writes anything"
+        );
+        // The whole graph, in the display Provider's own derivation: the
+        // session row, its two worker children, its three endpoint children,
+        // and the two relationships the endpoint rows publish.
+        let mut graph = vec![scene.session_key.clone()];
+        graph.extend(processes.iter().cloned());
+        graph.extend(endpoints.iter().map(|(key, _)| key.clone()));
+        graph.extend(
+            rows_of_type(&scene.plane, "EndpointBinding")
+                .await
+                .keys()
+                .map(|name| ResourceKey::new("test", "EndpointBinding", name.as_str())),
+        );
+        assert_eq!(
+            graph.len(),
+            8,
+            "the session row and the seven children its durable derivation commits: {graph:?}"
+        );
+        // Every child row is standing before anything is attempted: a status
+        // write refused against a row that is still converging would say
+        // nothing about the status its owning actor owns.
+        for key in &graph {
+            assert_eq!(
+                settled(
+                    &scene.plane,
+                    key,
+                    ResourceStatus::Ready,
+                    DISPLAY_AGGREGATE_BUDGET
+                )
+                .await,
+                ResourceStatus::Ready,
+                "{key} is driven to readiness by its own owning actor, before this test writes \
+                 anything"
+            );
+        }
+
+        let (authorizer, acceptor) = display_api_authorizer(&zone);
+        let backend = d2b_resource_api::manager_backend::ManagerBackend::new(
+            scene.plane.client().clone(),
+            scene.plane.hub(),
+            acceptor,
+        );
+        let service = Arc::new(
+            d2b_resource_api::ResourceService::new_with_zone_uid(
+                Arc::new(backend),
+                Arc::clone(&authorizer),
+                None,
+            )
+            .expect("the display Resource service binds"),
+        );
+        let capability = authorizer
+            .issue_authenticated_subject(
+                display_api_subject(&zone),
+                display_api_authorization_state(),
+            )
+            .expect("the policy grants the system-core session its display status verb");
+        let client = d2b_resource_api::ResourceBusAdapter::bind_component_session(
+            service,
+            capability,
+        )
+        .expect("the session binds to the Resource service")
+        .client();
+
+        for (index, key) in graph.iter().enumerate() {
+            let before = display_api_served(
+                &client,
+                &zone,
+                key,
+                &format!("display-status-read-{index}"),
+            )
+            .await;
+            let envelope: serde_json::Value =
+                serde_json::from_slice(&before.canonical_json).expect("a canonical envelope");
+            let status_before = envelope["status"].clone();
+            let published = status_before["phase"]
+                .as_str()
+                .expect("the served envelope publishes a phase")
+                .to_owned();
+            // A status the daemon would have to accept as a change, so an
+            // unchanged row after the attempt is the actor's answer and not a
+            // value the write happened to agree with.
+            let attempted = if published == "Failed" { "Degraded" } else { "Failed" };
+            assert_ne!(
+                attempted, published,
+                "{key} is attempted with a phase its own actor never published"
+            );
+            let response = client
+                .update_status(display_api_status_write_request(
+                    &before,
+                    attempted,
+                    &format!("display-status-write-{index}"),
+                ))
+                .await;
+            let error = response.error.as_ref().unwrap_or_else(|| {
+                panic!("{key} published {published} and admitted a daemon status write")
+            });
+            assert_eq!(
+                error.kind.enum_value_or_default(),
+                wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_STATUS_OWNER_MISMATCH,
+                "{key} is refused because the daemon's API is not the status owner: {:?} {}",
+                error.kind.enum_value_or_default(),
+                error.reason,
+            );
+            assert_eq!(
+                error.reason, "resource-status-owner-mismatch",
+                "the refusal is the manager backend's own closed code, over the real policy that \
+                 grants the verb: {key} answered {:?} {}",
+                error.kind.enum_value_or_default(),
+                error.reason,
+            );
+            // The row the attempt named still carries the actor's own status,
+            // at the actor's own revision.
+            let after = display_api_served(
+                &client,
+                &zone,
+                key,
+                &format!("display-status-reread-{index}"),
+            )
+            .await;
+            let envelope: serde_json::Value =
+                serde_json::from_slice(&after.canonical_json).expect("a canonical envelope");
+            assert_eq!(
+                envelope["status"], status_before,
+                "{key} kept the status its owning actor published across the refused write"
+            );
+            assert_eq!(
+                after.identity.revision, before.identity.revision,
+                "{key} carries the revision it held before the refused write"
+            );
+            // The row is still driven to readiness by its owning actor. That is
+            // read over a window rather than at one instant: every actor in
+            // this graph republishes on its own resync cadence, so a single
+            // sample can land inside a pass that has not published its own
+            // classification yet, and would report a row mid-pass as one the
+            // daemon had taken over.
+            assert_eq!(
+                settled(
+                    &scene.plane,
+                    key,
+                    ResourceStatus::Ready,
+                    WAYLAND_SESSION_RESYNC * 2
+                )
+                .await,
+                ResourceStatus::Ready,
+                "{key} is still driven by its owning actor, read back through the manager the \
+                 refused write would have had to reach"
+            );
+        }
+        scene.plane.shutdown().await;
+    }
+
+    /// The host proxy reaches readiness BEFORE the guest frontend, and the
+    /// order is the graph's evidence rather than an order this graph imposed.
+    ///
+    /// The host proxy's private carriage is a `ProducerRow` shape realized
+    /// behind the host proxy's own `Process` row, so the relationship the
+    /// guest frontend launches against cannot be delivered - and the frontend
+    /// therefore cannot be released - while that row is not standing. This
+    /// test withholds exactly that one relationship at the broker, watches the
+    /// host proxy converge with the frontend still blocked, then lets the
+    /// broker answer and watches the frontend follow. The Process family's
+    /// own recorded effects say what happened in between: no launch effect
+    /// was issued for the frontend while its delivery did not exist.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_host_proxy_reaches_readiness_before_the_guest_frontend() {
+        let scene = display_scene().await;
+        let (endpoints, processes) = derived_display_rows(&scene.session_uid);
+        // The scene's own derivation order: the host compositor source, the
+        // host proxy's private carriage, the guest frontend's own endpoint
+        // (which publishes nothing). The carriage is the second of the three.
+        let (compositor, carriage) = (endpoints[0].0.clone(), endpoints[1].0.clone());
+        let (host_proxy, frontend) = {
+            let proxy = processes
+                .iter()
+                .find(|key| key.name.starts_with("display-host-proxy-"))
+                .expect("the host proxy row");
+            let frontend = processes
+                .iter()
+                .find(|key| key.name.starts_with("display-guest-frontend-"))
+                .expect("the guest frontend row");
+            (proxy.clone(), frontend.clone())
+        };
+
+        // The carriage's relationship is refused at the broker for as long as
+        // this test holds it. Everything else is answered normally.
+        scene.broker.hold(&carriage);
+        // The evidence the host proxy needs before it can be released: the
+        // compositor relationship, the one this scene still answers, granted
+        // over the real broker socket. The carriage is named nowhere in this
+        // wait, because a broker end that refuses a row still records its
+        // grant - counting calls would be satisfied by the refusal this test
+        // is holding.
+        granted_endpoints(
+            &scene.broker,
+            std::slice::from_ref(&compositor),
+            DISPLAY_EVIDENCE_BUDGET,
+        )
+        .await;
+        let proxy = settled(
+            &scene.plane,
+            &host_proxy,
+            ResourceStatus::Ready,
+            DISPLAY_AGGREGATE_BUDGET,
+        )
+        .await;
+        assert_eq!(
+            proxy,
+            ResourceStatus::Ready,
+            "the host proxy is released by the compositor relationship, which this scene answers"
+        );
+        let held = settled(
+            &scene.plane,
+            &frontend,
+            ResourceStatus::Pending,
+            DISPLAY_LINK_RESYNC,
+        )
+        .await;
+        assert_ne!(
+            held,
+            ResourceStatus::Ready,
+            "the guest frontend is NOT released while the relationship its launch gate reads has \
+             no delivery: the ordering is its evidence, not an order this graph issued"
+        );
+        assert!(
+            scene
+                .processes
+                .launch_calls()
+                .iter()
+                .all(|launch| launch.resource_ref.ends_with(&host_proxy.name)),
+            "no launch effect was issued for a consumer whose own delivery does not exist: {:?}",
+            scene.processes.launch_calls()
+        );
+
+        scene.broker.release(&carriage);
+        // The evidence the frontend needs before it can answer: the carriage
+        // relationship granted over the real broker socket now that this scene
+        // answers it, and the Guest having applied the frontend's realization.
+        // A frame is the last effect in this graph, so neither wait can expire
+        // in the middle of a chain that was still making progress.
+        granted_endpoints(
+            &scene.broker,
+            &[compositor.clone(), carriage.clone()],
+            DISPLAY_EVIDENCE_BUDGET,
+        )
+        .await;
+        let _ = frames_until(
+            &scene.realized,
+            &ResourceRef::parse(&format!("Process/{}", frontend.name))
+                .expect("the frontend's own canonical reference")
+                .to_canonical_string(),
+            DISPLAY_EVIDENCE_BUDGET,
+        )
+        .await;
+        let released = settled(
+            &scene.plane,
+            &frontend,
+            ResourceStatus::Ready,
+            DISPLAY_AGGREGATE_BUDGET,
+        )
+        .await;
+        assert_eq!(
+            released,
+            ResourceStatus::Ready,
+            "the guest frontend follows once its own relationship is delivered"
+        );
+        let Some(carriage_grant) = scene.broker.last_call(&carriage) else {
+            panic!("the carriage relationship reached the broker socket");
+        };
+        let Some(compositor_grant) = scene.broker.last_call(&compositor) else {
+            panic!("the compositor relationship reached the broker socket");
+        };
+        assert!(
+            compositor_grant.at <= carriage_grant.at,
+            "the host proxy's own delivery crossed the wire first: compositor {compositor_grant:?} \
+             carriage {carriage_grant:?}"
+        );
+        scene.plane.shutdown().await;
+    }
+
+    /// A source that cannot prove a realization hands out no access through
+    /// it, and nothing downstream reads `Ready` (R18, R21).
+    ///
+    /// The carriage is a `ProducerRow` shape: its realization IS the host
+    /// proxy's `Process` row, so while that row is not standing the carriage
+    /// publishes the unrealized class and NO token - and the guest frontend,
+    /// whose admission is gated on exactly that token, can be handed nothing
+    /// through it. The Process provider is therefore given a runtime that
+    /// admits nothing for the host proxy, which is the state its own driver
+    /// reaches whenever a launch does not come back serving.
+    ///
+    /// What is asserted is the fence and nothing weaker: the frontend's row
+    /// does not read `Ready`, NO realization the Guest applied names it at
+    /// all, and the session is not `Ready` either. The startup pass itself is
+    /// blocked too, and that is the point rather than an accident: while the
+    /// carriage names no realization there is nothing the frontend's gate can
+    /// be satisfied over, so a launch in that state could only ever carry an
+    /// EMPTY delivery set - and a process with no endpoint access still runs,
+    /// so that was never a fence. The frame itself is what must not be
+    /// written.
+    ///
+    /// The observation is over the FRAMES, across a window spanning more than
+    /// the Process family's own resync cadence so the assertion covers the
+    /// retries as well as the first pass. It cannot be over the row's status:
+    /// a worker row publishes its own classification while its launch is
+    /// still being prepared, so whether the pass has run at any given instant
+    /// is decided by where that read lands against the source's own
+    /// republication cadence.
+    ///
+    /// Nothing here scripts a verdict. The Endpoint and Process drivers derive
+    /// every class, the relationship is delivered by the PRODUCTION dispatch
+    /// over the real broker socket, and the frames are read back out of the
+    /// bytes the production Process family wrote to the Guest.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unproven_endpoint_realization_blocks_the_guest_frontend() {
+        // The Process provider admits nothing while this test says so, so the
+        // host proxy row is never standing. Everything else is the same real
+        // scene: the same manager, the same provider set, the same driver
+        // factories, the same REAL broker socket, and the same bound Guest
+        // target.
+        let silent = Arc::new(d2b_provider_process::test_support::FakeFacets::new(
+            Default::default(),
+        ));
+        silent.set_active(false);
+        let scene = display_scene_with_processes(Arc::clone(&silent)).await;
+        let (endpoints, processes) = derived_display_rows(&scene.session_uid);
+        let carriage = endpoints[1].0.clone();
+        let (host_proxy, frontend) = display_worker_rows(&processes);
+        let frontend_ref = ResourceRef::parse(&format!("Process/{}", frontend.name))
+            .expect("the frontend's own canonical reference");
+        let blocked = settled(
+            &scene.plane,
+            &host_proxy,
+            ResourceStatus::Pending,
+            Duration::from_secs(60),
+        )
+        .await;
+        assert_ne!(
+            blocked,
+            ResourceStatus::Ready,
+            "the host proxy row is not standing while its provider admits nothing for it"
+        );
+        assert!(
+            scene
+                .processes
+                .launch_calls()
+                .iter()
+                .all(|launch| launch.resource_ref.ends_with(&host_proxy.name)),
+            "only the host proxy row ever reached its own launch effect: {:?}",
+            scene.processes.launch_calls()
+        );
+
+        // The carriage is a `ProducerRow` shape realized behind THAT row, so
+        // with no standing producer it publishes the unrealized class and NO
+        // token at all.
+        // A positive wait: it ends when the endpoint actor publishes, so the
+        // bound only decides how long a graph that never published takes to
+        // be reported. The publication itself is one `Endpoint` actor's first
+        // pass over a row the session actor committed, which is one chain away.
+        let layer = published_projection(&scene.plane, &carriage, DISPLAY_EVIDENCE_BUDGET).await;
+        assert_eq!(
+            layer
+                .pointer("/endpoint/readiness")
+                .and_then(serde_json::Value::as_str),
+            Some("realizing"),
+            "a ProducerRow shape with no standing producer row is not realized: {layer}"
+        );
+        assert!(
+            layer.pointer("/endpoint/incarnation").is_none(),
+            "a realization this row cannot prove publishes NO token, so no launch can be gated on \
+             one: {layer}"
+        );
+
+        let frontend_status = settled(
+            &scene.plane,
+            &frontend,
+            ResourceStatus::Pending,
+            Duration::from_secs(30),
+        )
+        .await;
+        assert_ne!(
+            frontend_status,
+            ResourceStatus::Ready,
+            "the guest frontend is not released while its source names no realization"
+        );
+        // The frontend's own startup pass is BLOCKED, and what proves it is
+        // the absence of a frame rather than the row's status: a worker row
+        // publishes its own classification while its launch is still being
+        // prepared, so `Pending` there is an answer that says nothing about
+        // what reached the Guest. An empty delivery set was the old fence - a
+        // realized row carrying no access - and it was not a fence at all,
+        // because a process with no endpoint access still runs. The frame
+        // itself is the thing that must never be written.
+        //
+        // Every frame this Guest has applied is recorded from the moment the
+        // scene bound it, so this window answers for the pass that raced the
+        // carriage's own first publication - the one a source that had
+        // published nothing at all used to let through - as well as for the
+        // retries that run during it.
+        let before = frames_over(
+            &scene.realized,
+            &frontend_ref.to_canonical_string(),
+            DISPLAY_RETRY_WINDOW,
+        )
+        .await;
+        assert!(
+            before.is_empty(),
+            "no realization reached the guest frontend while its source names no realization: \
+             {before:?}"
+        );
+
+        let session = settled(
+            &scene.plane,
+            &scene.session_key,
+            ResourceStatus::Pending,
+            Duration::from_secs(30),
+        )
+        .await;
+        assert_ne!(
+            session,
+            ResourceStatus::Ready,
+            "a session whose frontend has no admitted carriage is not a ready display session"
+        );
+
+        // Admit the worker the host proxy launched, and the graph converges:
+        // the frame the frontend is realized with carries EXACTLY the token
+        // the carriage published and EXACTLY the one its delivered
+        // relationship was granted over. That equality is the fence - a launch
+        // over any other token would be a launch over a realization this graph
+        // cannot prove.
+        silent.push_adoption(d2b_provider_process::ProviderAdoption::Adopted(
+            adopted_report(),
+        ));
+        // What the convergence has to produce is the evidence first and the
+        // session's own answer second: both relationships granted over this
+        // scene's real broker socket, and the Guest this plane is bound to
+        // having applied the frontend's realization. Neither is a status any
+        // row publishes, so waiting on them is waiting on the graph rather
+        // than on a clock, and only the aggregate read that follows them is
+        // left on a budget.
+        granted_endpoints(
+            &scene.broker,
+            &[endpoints[0].0.clone(), carriage.clone()],
+            DISPLAY_EVIDENCE_BUDGET,
+        )
+        .await;
+        assert_eq!(
+            settled(
+                &scene.plane,
+                &scene.session_key,
+                ResourceStatus::Ready,
+                DISPLAY_AGGREGATE_BUDGET,
+            )
+            .await,
+            ResourceStatus::Ready,
+            "the whole graph converges once the source can prove its realization"
+        );
+        let token =
+            standing_endpoint_token(&scene.plane, &carriage, DISPLAY_AGGREGATE_BUDGET).await;
+        assert!(
+            !token.is_empty(),
+            "the standing carriage publishes the token its dependents gate on"
+        );
+        let relationship = published_relationship(&carriage, &endpoints[1].1);
+        assert_eq!(
+            relationship_token(&scene.plane, &relationship, DISPLAY_AGGREGATE_BUDGET).await,
+            token,
+            "the delivered relationship was granted over exactly the realization the endpoint \
+             published"
+        );
+        let frames = frames_until(
+            &scene.realized,
+            &frontend_ref.to_canonical_string(),
+            DISPLAY_AGGREGATE_BUDGET,
+        )
+        .await;
+        let frame = frames.last().expect(
+            "the frontend realize frame the Process family wrote",
+        );
+        assert_eq!(
+            frame.deliveries().len(),
+            1,
+            "the frontend is realized with exactly the one relationship it requires: {frame:?}"
+        );
+        assert_eq!(
+            frame.deliveries()[0].incarnation(),
+            token,
+            "the launch was gated on the realization this endpoint row currently proves"
+        );
+        scene.plane.shutdown().await;
+    }
+
+    /// A restart RE-OBSERVES: the session comes back to `Ready` from evidence
+    /// a restarted provider produced, never from the status the previous boot
+    /// left on the durable row.
+    ///
+    /// The durable store still carries the first boot's `Ready`, so the second
+    /// half of this test is the decisive one: the restarted actors must REPLACE
+    /// it. The restarted Process provider is given a runtime that admits
+    /// nothing - the same double, scripted differently - and the session has to
+    /// leave `Ready` and stay off it. Only when that provider admits the
+    /// worker it launched does the graph return, and it returns over grants
+    /// that crossed the RESTARTED daemon's own broker socket.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_restart_re_observation_returns_the_session_to_ready_from_fresh_evidence() {
+        let DisplayComposition {
+            dir: _first_dir,
+            inputs,
+            client,
+            broker: first_broker,
+            processes: _first_processes,
+        } = display_composition().await;
+        let store_dir = inputs.spec_store_dir.clone();
+        let plane = Arc::new(
+            ResourcePlaneV3::open(inputs)
+                .await
+                .expect("the first boot opens"),
+        );
+        client
+            .set(plane.client().clone())
+            .expect("the first plane's client is bound once");
+        bind_display_guest_target(&plane).await;
+        plane
+            .ingest_nix_bundle(&display_scene_bundle(true, 0))
+            .await
+            .expect("the scene's rows commit");
+        let (session_key, session_uid) = display_session_row("test", DISPLAY_SESSION_NAME);
+        let (endpoints, processes) = derived_display_rows(&session_uid);
+        let (compositor, carriage) = (endpoints[0].0.clone(), endpoints[1].0.clone());
+        let frontend = display_worker_rows(&processes).1;
+        // The evidence the first boot has to produce before its session row
+        // can answer: both of the relationships the display Provider's own
+        // derivation publishes, granted over this scene's real broker socket.
+        // A grant is the deepest thing this graph publishes about a
+        // relationship, so waiting for both of them covers the whole chain -
+        // each `Endpoint` realizing, each `EndpointBinding` delivering, each
+        // consumer `Process` launching - however many of this machine's
+        // five-second ticks that takes.
+        granted_endpoints(
+            &first_broker,
+            &[compositor.clone(), carriage.clone()],
+            DISPLAY_EVIDENCE_BUDGET,
+        )
+        .await;
+        assert_eq!(
+            settled(&plane, &session_key, ResourceStatus::Ready, DISPLAY_AGGREGATE_BUDGET).await,
+            ResourceStatus::Ready,
+            "the first boot realizes the whole graph before it is torn down"
+        );
+        let before = standing_endpoint_token(&plane, &carriage, DISPLAY_AGGREGATE_BUDGET).await;
+        assert!(
+            !before.is_empty(),
+            "the first boot published the realization the restart must re-prove: {before}"
+        );
+        plane.shutdown().await;
+        drop(plane);
+
+        // -- the second boot, over the same durable rows -------------------
+        let silent = Arc::new(d2b_provider_process::test_support::FakeFacets::new(
+            Default::default(),
+        ));
+        silent.set_active(false);
+        let DisplayComposition {
+            dir: _second_dir,
+            mut inputs,
+            client: second_client,
+            broker: second_broker,
+            processes: second_processes,
+        } = display_composition_with_processes(Arc::clone(&silent)).await;
+        inputs.spec_store_dir = store_dir;
+        let plane = Arc::new(
+            ResourcePlaneV3::open(inputs)
+                .await
+                .expect("the second boot reopens the same Zone over the same store"),
+        );
+        second_client
+            .set(plane.client().clone())
+            .expect("the second plane's client is bound once");
+        let second_realized = bind_display_guest_target(&plane).await;
+
+        // The restarted provider admits nothing, so the graph has no standing
+        // worker - and the durable rows still carry the first boot's `Ready`.
+        let trail = status_trail(&plane, &session_key, DISPLAY_RESTART_WINDOW).await;
+        assert!(
+            trail.iter().any(|status| *status != ResourceStatus::Ready),
+            "a restart that adopted the cached status would leave the session `Ready` for ever: \
+             {trail:?}"
+        );
+        assert_ne!(
+            trail.last(),
+            Some(&ResourceStatus::Ready),
+            "the session came back to `Ready` over no freshly observed evidence: {trail:?}"
+        );
+        // The carriage is a `ProducerRow` shape realized behind a `Process` row
+        // the restarted provider admits nothing for, so the restarted endpoint
+        // actor re-publishes the unrealized class over the realization the
+        // previous boot left on the durable row. That re-publication is one
+        // `ENDPOINT_REALIZE_RESYNC` away, so the wait is one such link at the
+        // load factor rather than a fixed span.
+        let mut carriage_token = endpoint_token(&plane, &carriage, DISPLAY_RETRY_WINDOW).await;
+        let reobserved = tokio::time::Instant::now() + DISPLAY_RETRY_WINDOW;
+        while !carriage_token.is_empty() && tokio::time::Instant::now() < reobserved {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            carriage_token = endpoint_token(&plane, &carriage, DISPLAY_RETRY_WINDOW).await;
+        }
+        assert!(
+            carriage_token.is_empty(),
+            "the restarted endpoint actor kept the cached realization instead of re-observing: \
+             {carriage_token}"
+        );
+
+        // Now let the restarted provider admit what it launched, and the graph
+        // has to return on its own.
+        second_processes.push_adoption(d2b_provider_process::ProviderAdoption::Adopted(
+            adopted_report(),
+        ));
+        // What that convergence has to produce is the evidence first: both
+        // relationships re-granted over the RESTARTED daemon's own broker
+        // socket, and the Guest this plane is bound to having applied the
+        // frontend's realization. A frame is the last effect in this graph -
+        // the worker row publishes its own readiness only once the Guest
+        // applied the frame its launch wrote - so neither wait sits on a clock
+        // that could expire mid-chain, and only the session row's own
+        // aggregate answer is left on a budget.
+        granted_endpoints(
+            &second_broker,
+            &[compositor.clone(), carriage.clone()],
+            DISPLAY_EVIDENCE_BUDGET,
+        )
+        .await;
+        let frontend_ref = ResourceRef::parse(&format!("Process/{}", frontend.name))
+            .expect("the frontend's own canonical reference");
+        let _ = frames_until(
+            &second_realized,
+            &frontend_ref.to_canonical_string(),
+            DISPLAY_EVIDENCE_BUDGET,
+        )
+        .await;
+        assert_eq!(
+            settled(&plane, &session_key, ResourceStatus::Ready, DISPLAY_AGGREGATE_BUDGET).await,
+            ResourceStatus::Ready,
+            "the restarted session returns to `Ready` from freshly re-observed evidence"
+        );
+        let grants: Vec<BrokerEndpointCall> = second_broker
+            .calls()
+            .into_iter()
+            .filter(|call| call.verb == EndpointAccessVerb::Grant)
+            .collect();
+        assert_eq!(
+            grants.len(),
+            2,
+            "both relationships were re-proved over the restarted daemon's own broker socket: \
+             {grants:?}"
+        );
+        let after = standing_endpoint_token(&plane, &carriage, DISPLAY_AGGREGATE_BUDGET).await;
+        assert!(
+            !after.is_empty(),
+            "the restarted endpoint actor re-observed a standing realization: {after}"
+        );
+        assert!(
+            !silent.launch_calls().is_empty(),
+            "the restarted Process actor re-proved against its provider instead of adopting the \
+             previous boot's status: {:?}",
+            silent.launch_calls()
+        );
+        plane.shutdown().await;
+    }
+
+    /// Teardown closes endpoint access BEFORE it retires any row, and leaves
+    /// no child of the withdrawn session behind.
+    ///
+    /// The ordering is only observable if the revoke really travels: a
+    /// relationship actor derives the broker entry it removes from its OWN
+    /// row, so a teardown that retired the row first could not issue a revoke
+    /// at all. Both revokes are therefore asserted on the real socket, each
+    /// naming the exact endpoint row and the exact consumer its grant admitted,
+    /// and each landing after the delivery it releases. Nothing re-admits
+    /// access afterwards, and the Zone is left holding no worker, no endpoint,
+    /// and no relationship of this session.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_session_teardown_revokes_on_the_wire_before_it_retires_any_child() {
+        let scene = display_scene().await;
+        let (endpoints, processes) = derived_display_rows(&scene.session_uid);
+        let (compositor, carriage) = (endpoints[0].0.clone(), endpoints[1].0.clone());
+        let (host_proxy, frontend) = display_worker_rows(&processes);
+        // The graph has to be standing before a teardown runs over it, and
+        // what "standing" means here is the evidence: both relationships
+        // granted over this scene's real broker socket. Only the session
+        // row's own aggregate answer is left on a budget.
+        granted_endpoints(
+            &scene.broker,
+            &[compositor.clone(), carriage.clone()],
+            DISPLAY_EVIDENCE_BUDGET,
+        )
+        .await;
+        assert_eq!(
+            settled(
+                &scene.plane,
+                &scene.session_key,
+                ResourceStatus::Ready,
+                DISPLAY_AGGREGATE_BUDGET,
+            )
+            .await,
+            ResourceStatus::Ready,
+            "the graph is standing, so the teardown below runs over live rows"
+        );
+        let grants: Vec<BrokerEndpointCall> = scene
+            .broker
+            .calls()
+            .into_iter()
+            .filter(|call| call.verb == EndpointAccessVerb::Grant)
+            .collect();
+        assert_eq!(
+            grants.len(),
+            2,
+            "both relationships are delivered before the teardown begins: {grants:?}"
+        );
+        let delivered = grants.last().expect("a delivered relationship").at;
+
+        // Withdraw the session row from the Zone's desired state, exactly as a
+        // Nix apply that no longer declares it does.
+        scene
+            .plane
+            .ingest_nix_bundle(&display_scene_bundle(false, 0))
+            .await
+            .expect("the withdrawal commits");
+
+        // The withdrawal only commits the durable mark; each relationship's
+        // own actor issues its revoke on a later pass, so the wire is read
+        // until both releases have actually crossed it.
+        let mut released = 0;
+        let deadline = tokio::time::Instant::now() + DISPLAY_EVIDENCE_BUDGET;
+        while released < 2 && tokio::time::Instant::now() < deadline {
+            released = usize::from(!revokes_for(&scene.broker, &compositor).is_empty())
+                + usize::from(!revokes_for(&scene.broker, &carriage).is_empty());
+            if released == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        for (endpoint, consumer) in [(&compositor, &host_proxy), (&carriage, &frontend)] {
+            let revokes = revokes_for(&scene.broker, endpoint);
+            assert!(
+                !revokes.is_empty(),
+                "{endpoint} released its access on the real broker socket: no revoke crossed the \
+                 wire, which is what a retired-first teardown would produce"
+            );
+            assert_eq!(
+                revokes[0].consumer,
+                ResourceRef::parse(&format!("Process/{}", consumer.name))
+                    .expect("the consumer's own canonical reference")
+                    .to_canonical_string(),
+                "the revoke names the consumer its own grant admitted"
+            );
+            assert!(
+                revokes[0].at > delivered,
+                "the revoke is issued after the delivery it releases, never before: {revokes:?}"
+            );
+            assert_eq!(
+                scene.broker.last_call(endpoint).map(|call| call.verb),
+                Some(EndpointAccessVerb::Revoke),
+                "the last thing this broker hears about {endpoint} is its release"
+            );
+        }
+        let first_revoke = scene
+            .broker
+            .calls()
+            .iter()
+            .position(|call| call.verb == EndpointAccessVerb::Revoke)
+            .expect("a revoke crossed the wire");
+        let after_revoke = &scene.broker.calls()[first_revoke..];
+        assert!(
+            !after_revoke
+                .iter()
+                .any(|call| call.verb == EndpointAccessVerb::Grant),
+            "no access is re-admitted once it has been released: {after_revoke:?}"
+        );
+
+        for type_name in ["EndpointBinding", "Endpoint", "Process"] {
+            let held = drained(&scene.plane, type_name, DISPLAY_EVIDENCE_BUDGET).await;
+            assert!(
+                held.is_empty(),
+                "the teardown retired every {type_name} row the session derived: {held:?}"
+            );
+        }
+        let session = drained(&scene.plane, WAYLAND_SESSION_TYPE, DISPLAY_EVIDENCE_BUDGET).await;
+        assert!(
+            session.is_empty(),
+            "the withdrawn session row retired with its children: {session:?}"
         );
         scene.plane.shutdown().await;
     }

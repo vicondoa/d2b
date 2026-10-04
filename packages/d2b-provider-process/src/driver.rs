@@ -935,9 +935,13 @@ enum BindingObservationFault {
 /// Nothing here consults a consumer-local slot table or the set of rows that
 /// happen to exist: the endpoint's own `/endpoint/bindings` layer is the
 /// publication intent, and only the entries naming this exact consumer are
-/// required. An endpoint that publishes nothing therefore mints no
-/// expectation, which is the answer for every Process that requires no
-/// `EndpointBinding` at all.
+/// required. An endpoint that PUBLISHED that layer and named no entry for
+/// this consumer mints no expectation, which is the answer for every Process
+/// that requires no `EndpointBinding` at all.
+///
+/// An endpoint that has published nothing is a different answer, and the
+/// difference is the whole point: it has stated nothing, and a statement that
+/// was never made is not read as the one that would have been made.
 async fn observe_endpoint_bindings(
     ctx: &mut ResourceContext,
     view: &ResourceView,
@@ -945,7 +949,14 @@ async fn observe_endpoint_bindings(
     observation: &mut BindingObservation,
 ) -> Result<(), BindingObservationFault> {
     let Some(projection) = view.observed_status_projection() else {
-        return Ok(());
+        // The manager holds this endpoint's row and view, and the view
+        // carries no projection published for its CURRENT generation: its
+        // actor has not run a pass yet (spawn in flight, actor restart), or
+        // the row has moved past the generation its last publication was for.
+        // None of those is this source saying it publishes no relationship
+        // for this consumer, so the launch defers until it has published -
+        // silence is not a publication (R18, R21).
+        return Err(BindingObservationFault::Unproven);
     };
     let published = projection.pointer("/endpoint/bindings");
     let Some(entries) = published.and_then(serde_json::Value::as_array) else {
@@ -953,7 +964,14 @@ async fn observe_endpoint_bindings(
             // The layer is published and does not carry the publication set:
             // the source stated something this reader cannot interpret.
             Some(_) => Err(BindingObservationFault::Refused(BindingGateError::Malformed)),
-            None => Ok(()),
+            // The endpoint family publishes this layer on every pass - an
+            // endpoint that grants nothing publishes an EMPTY array - so a
+            // projection with no layer under `/endpoint` is not this source
+            // saying it grants nothing. It is a publication this read could
+            // not interpret as the publication set, which is the same
+            // not-proven the missing projection is, and defers on the same
+            // terms: a later pass over a layer this source does publish.
+            None => Err(BindingObservationFault::Unproven),
         };
     };
     let consumer = process_ref.to_canonical_string();
@@ -2198,10 +2216,20 @@ impl ProcessDriver {
             observation.dependencies.push(row.key.clone());
             let view = match ctx.lookup_view(&row.key).await {
                 RowLookup::Present { row, .. } => row,
-                // An endpoint row the plane holds no view for has published no
-                // publication intent this launch could require.
-                RowLookup::Absent { .. } => continue,
-                RowLookup::Unavailable { .. } | RowLookup::Error { .. } => {
+                // The owner-scoped listing named this endpoint, and the
+                // manager then answered that it holds no view for it. Both
+                // answers come from the one committed-row set, so this is one
+                // pass learning that the row it must reason about is not there
+                // to be reasoned about - deleted between the two reads, or a
+                // listing this pass could not catch up with. Skipping it
+                // would drop an expectation this launch may owe and start the
+                // row carrying no delivery at all. Deferring is not a stall:
+                // the next pass re-derives the sibling set from the manager,
+                // so an endpoint that really is gone is simply absent from
+                // that listing.
+                RowLookup::Absent { .. }
+                | RowLookup::Unavailable { .. }
+                | RowLookup::Error { .. } => {
                     return Err(BindingObservationFault::Unproven);
                 }
             };
@@ -6110,6 +6138,7 @@ mod tests {
     /// (KTD6, R18).
     mod binding_delivery {
         use super::*;
+        use crate::driver::PROCESS_RESYNC;
         use d2b_contracts_resource::v3::execution_policy::BoundedToken;
         use d2b_contracts_resource::v3::{
             BindingArbitration, BindingRealizationFacet, BindingSourceDecision,
@@ -6447,6 +6476,183 @@ mod tests {
             assert_eq!(realization.deliveries()[0].binding_ref(), "EndpointBinding/relay");
             assert_eq!(realization.deliveries()[0].slot(), SLOT);
             assert_eq!(realization.deliveries()[0].incarnation(), INCARNATION);
+        }
+
+        /// The committed source row whose actor has published nothing for its
+        /// current generation: the row and its view are both there, and the
+        /// projection that states what it would grant is not.
+        fn unpublished_endpoint_view() -> ResourceView {
+            view(endpoint_key(), [0x62; 16], 2, None, Vec::new())
+        }
+
+        /// A source that PUBLISHED a projection, but not the layer naming the
+        /// relationships it grants. The endpoint family writes that layer on
+        /// every pass - an endpoint granting nothing writes an EMPTY array -
+        /// so this is a publication that carries no statement either way.
+        fn endpoint_view_without_the_publication_layer() -> ResourceView {
+            view(
+                endpoint_key(),
+                [0x62; 16],
+                2,
+                Some(serde_json::json!({ "endpoint": { "readiness": "realizing" } })),
+                Vec::new(),
+            )
+        }
+
+        /// The guest row whose launch gate reads the same owner-scoped
+        /// neighbourhood, over the manager the case chooses.
+        fn guest_fixture_over(manager: &Arc<BindingManager>) -> GuestFixture {
+            let mut row = guest_row();
+            row.owner_uid = Some(OWNER_UID);
+            // The durable owner uid only resolves through the row's own
+            // authored owner reference; the launch identity refuses a uid with
+            // no reference to link it to.
+            row.metadata =
+                br#"{"annotations":{},"labels":{},"ownerRef":"Provider/runtime-local"}"#.to_vec();
+            GuestFixture::with(row, Arc::clone(manager) as Arc<dyn ManagerEndpoint>)
+        }
+
+        /// A source that has COMMITTED and published nothing proves nothing
+        /// about what it would grant, so the launch defers: no launch effect,
+        /// and no realize frame for a row committed to a Guest target.
+        ///
+        /// The relationship this case also commits is committed AND delivered,
+        /// so nothing in the answer can be explained by that row being absent:
+        /// the only unproven fact is the source's own silence. Reading that
+        /// silence as "this Process requires no `EndpointBinding`" is what let
+        /// a realize frame leave with an EMPTY delivery set and a row start
+        /// over endpoint access it was never granted (R18, R21).
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn a_committed_endpoint_that_published_nothing_blocks_the_launch() {
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![unpublished_endpoint_view(), binding_view(true)],
+            );
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
+                active: false,
+                ..FakeFacetsConfig::default()
+            }));
+
+            let mut host = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+            assert_eq!(
+                d.reconcile(&mut host.ctx).await.expect("the unproven pass"),
+                ReconcileOutcome::RetryScheduled,
+                "an unproven source defers the launch instead of admitting it needs no binding"
+            );
+            yield_until_effects_settled().await;
+            assert!(
+                fake.launch_calls().is_empty(),
+                "a source that published nothing starts nothing: {:?}",
+                fake.launch_calls()
+            );
+            assert!(
+                manager.view_reads().contains(&endpoint_key()),
+                "the pass READ that source's view rather than passing it by"
+            );
+            assert!(
+                host.requeue_calls().contains(&PROCESS_RESYNC),
+                "and it schedules the cadence that re-reads the source: {:?}",
+                host.requeue_calls()
+            );
+
+            // The same evidence over a row committed to a Guest target. For
+            // that row the realize frame IS its launch, so a frame carrying
+            // no delivery is the fail-open arriving in the Guest.
+            let mut guest = guest_fixture_over(&manager);
+            let mut guest_driver = driver(Arc::clone(&fake)).await;
+            assert_eq!(
+                guest_driver
+                    .reconcile(&mut guest.fixture.ctx)
+                    .await
+                    .expect("the unproven pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            yield_until_effects_settled().await;
+            assert!(
+                guest.target.realized().is_empty(),
+                "no realize frame crosses the session while the source has published nothing: {:?}",
+                guest.target.realized()
+            );
+        }
+
+        /// A projection that carries no `/endpoint/bindings` layer is not the
+        /// source saying it grants nothing, because that source writes an
+        /// EMPTY layer when it grants nothing. An unread publication is not a
+        /// publication.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn an_endpoint_publication_without_the_binding_layer_defers_the_launch() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
+                active: false,
+                ..FakeFacetsConfig::default()
+            }));
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![endpoint_view_without_the_publication_layer(), binding_view(true)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the unread publication pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            yield_until_effects_settled().await;
+            assert!(
+                fake.launch_calls().is_empty(),
+                "a publication this reader cannot take the publication set from grants nothing \
+                 and starts nothing: {:?}",
+                fake.launch_calls()
+            );
+        }
+
+        /// The owner-scoped listing named an endpoint and the manager then
+        /// answered that it holds no view for it. Skipping that row would drop
+        /// an expectation this launch may owe, so the pass defers and reads
+        /// the sibling set again on the next one.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn an_endpoint_listed_and_then_absent_is_not_skipped_out_of_the_gate() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
+                active: false,
+                ..FakeFacetsConfig::default()
+            }));
+            // The relationship row is committed and delivered; only the source
+            // view the listing named is missing.
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![binding_view(true)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the torn sibling pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            yield_until_effects_settled().await;
+            assert!(
+                fake.launch_calls().is_empty(),
+                "an endpoint this pass could not prove is not an endpoint this launch does not \
+                 need: {:?}",
+                fake.launch_calls()
+            );
+            assert!(
+                f.requeue_calls().contains(&PROCESS_RESYNC),
+                "and the retry re-derives the sibling set from the manager: {:?}",
+                f.requeue_calls()
+            );
         }
 
         /// A lease that no longer revalidates delivers nothing: the launch

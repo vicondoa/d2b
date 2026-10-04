@@ -34,3 +34,38 @@
 - The `Provider/execution-policy` reference. Nothing enforced it, so the
   `ExecutionPolicy` resource claimed a Provider that did not exist; the
   ResourceType vocabulary is now accepted without it.
+
+### Fixed
+
+- The broker collapsed its own absent endpoint-access class into a live
+  handler failure, so a driver's no-grant proof could never match and an
+  already-revoked relationship retried forever instead of converging. The
+  dispatch now answers that class with its own closed code and keeps its
+  audit entry; every other refusal class still becomes a live handler
+  failure.
+- The endpoint driver replaced every child-ensure, child-list, delete, and
+  finalize failure with a bare drain-pending code and discarded the cause, so
+  a real failure was reported as still draining and was never diagnosable.
+  The underlying error now rides out as a compared value.
+- A derived endpoint binding carried its consumer reference as the target
+  execution reference, which the target directory's closed Host-and-Guest
+  vocabulary cannot place. No actor was ever spawned and the endpoint sat in
+  drain-pending indefinitely.
+- A Process whose committed target binding resolves to a Guest was refused
+  under a host-mode driver, which made the guest-target launch path
+  unreachable in the real composition.
+- The endpoint driver reported a scheduled retry without ever scheduling one,
+  and its only remaining wake fired on a status projection the Process
+  family does not publish. An endpoint realized behind its producer in
+  roughly one run in six, so a display session could fail to start. The
+  driver now honours its own outcome contract.
+- A display session published readiness from its first pass regardless of
+  its children, so it reported ready while its processes were still pending
+  and its bindings undelivered. The session now publishes readiness only
+  when every owned child is ready and both canonical bindings are delivered,
+  and reports its own projection rather than an empty one.
+- A committed endpoint that had published nothing was read as an endpoint
+  that grants nothing. A guest process could therefore launch carrying no
+  endpoint access at all. An unproven source is now treated as unproven
+  everywhere the surrounding branches already treated it that way, so the
+  launch defers until the source has actually spoken.

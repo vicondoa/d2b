@@ -48,6 +48,7 @@
 //! closed set above is unchanged by an absent answer.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use d2b_contracts_resource::v3::{
     BoundedText, CanonicalJsonObject, ChildSupportCeiling, ResourceRef, ResourceSpec, ResourceUid,
@@ -559,6 +560,15 @@ impl ResourceDriverFactory for EndpointDriverFactory {
 // ---------------------------------------------------------------------------
 // Driver
 // ---------------------------------------------------------------------------
+
+/// The bounded cadence one unrealized Provider-committed shape re-proves on.
+///
+/// The realization belongs to the Provider that committed it, so this driver
+/// spawns no effect for it and a pass that found no standing realization owns
+/// its own retry. The cadence matches the family's relationship resync so one
+/// unrealized endpoint and the relationships its publication derives are
+/// observed on the same clock.
+const ENDPOINT_REALIZE_RESYNC: Duration = Duration::from_secs(5);
 
 /// The closed connectability state a host-socket realization publishes.
 ///
@@ -1190,9 +1200,14 @@ impl ResourceDriver for EndpointDriver {
             // No effect is spawned for a Provider-committed shape: its
             // realization belongs to the Provider that committed it - a worker
             // it launched, or a socket the daemon owns - so this driver
-            // creates and mutates nothing. The pass re-proves on the next
-            // tick, or the moment the dependency it watches moves.
+            // creates and mutates nothing. `RetryScheduled` reports that THIS
+            // pass scheduled its own retry, so it schedules one: the
+            // dependency watch fires on a published projection change, and a
+            // producer row that moves to `Ready` publishing none is exactly the
+            // move this row is realized behind. Without the schedule the row
+            // sits at `realizing` over a realization that later stands.
             ctx.set_status(EndpointDriverStatus::Realizing);
+            ctx.requeue_after(ENDPOINT_REALIZE_RESYNC);
             return Ok(ReconcileOutcome::RetryScheduled);
         }
         let (incarnation, producer_generation) = self.realization_incarnation(ctx, &spec, op).await?;

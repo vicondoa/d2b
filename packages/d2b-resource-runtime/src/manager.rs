@@ -3718,6 +3718,16 @@ mod tests {
 
     /// Spec section 32: the delete path cancels the pending requeue timer -
     /// after cleanup, no further reconcile is ever delivered.
+    ///
+    /// The count is read once, at the boundary where the delete has run, and
+    /// asserted not to move from there. A requeue that fires while the row is
+    /// still live and the delete has not reached the actor is not a violation
+    /// - that timer had not been cancelled yet, and the row was not deleting
+    /// either - so the request's own wall-clock window is not part of what
+    /// this asserts. What is asserted is that no timer survives the delete to
+    /// deliver anything afterwards, and that is decided on a frozen clock:
+    /// the advance below crosses the deadline, so a timer the delete failed to
+    /// cancel fires inside it and is caught.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn delete_cancels_pending_requeue_timer() {
@@ -3742,18 +3752,25 @@ mod tests {
         // being dropped at stop.
         shared.delete_terminal_failure.store(true, AtomicOrdering::SeqCst);
         h.client.remove(subject(), k.clone()).await.expect("remove");
-        until(|| shared.delete_calls.load(AtomicOrdering::SeqCst) == 1).await;
 
-        // Freeze the clock and pass well past the 300ms requeue deadline.
-        // Whether the stale timer (if the delete failed to cancel it) fires
-        // before the freeze or during the frozen advance, its Reconcile is
-        // delivered to the live deleting actor and the settled state below
-        // is the deterministic signal - no wall-clock window is read.
+        // Causal barrier, not a clock: wait for the delete pass to run, because
+        // that is the boundary the property is about. Only a delete pass could
+        // have run so far - a requeue tick delivered before the actor saw the
+        // delete drives a reconcile pass, not a delete - so exactly one delete
+        // has happened, and the pass count from here on is the property the
+        // assertions below hold still.
+        until(|| shared.delete_calls.load(AtomicOrdering::SeqCst) == 1).await;
+        let reconciled = shared.reconcile_calls.load(AtomicOrdering::SeqCst);
+
+        // Freeze the clock and pass well past the 300ms requeue deadline. A
+        // timer the delete failed to cancel fires inside this advance and
+        // delivers its Reconcile to the live deleting actor; a cancelled one
+        // delivers nothing, and no wall-clock window is read.
         tokio::time::pause();
         pass_virtual(Duration::from_millis(700)).await;
         assert_eq!(
             shared.reconcile_calls.load(AtomicOrdering::SeqCst),
-            1,
+            reconciled,
             "the cancelled requeue timer must never deliver a reconcile"
         );
         assert_eq!(
@@ -3772,7 +3789,7 @@ mod tests {
         wait_row_gone(&h.client, &k).await;
         assert_eq!(
             shared.reconcile_calls.load(AtomicOrdering::SeqCst),
-            1,
+            reconciled,
             "the cancelled requeue never delivers a reconcile, only the delete pass"
         );
     }
