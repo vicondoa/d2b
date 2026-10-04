@@ -1008,7 +1008,7 @@ async fn observe_endpoint_bindings(
         ) else {
             return Err(BindingObservationFault::Refused(BindingGateError::Malformed));
         };
-        let key = binding_key(ctx, &binding_ref);
+        let key = binding_key(ctx, binding_ref.name().as_str());
         observation.dependencies.push(key.clone());
         let relation = match ctx.lookup_view(&key).await {
             RowLookup::Present { row, .. } => row,
@@ -1081,13 +1081,10 @@ async fn observe_endpoint_bindings(
     Ok(())
 }
 
-/// The manager key of one canonical relationship row.
-fn binding_key(ctx: &ResourceContext, binding_ref: &ResourceRef) -> ResourceKey {
-    ResourceKey::new(
-        ctx.key().zone.as_str(),
-        ENDPOINT_BINDING_RESOURCE_TYPE,
-        binding_ref.name().as_str(),
-    )
+/// The manager key of the canonical relationship row one published
+/// relationship names.
+fn binding_key(ctx: &ResourceContext, name: &str) -> ResourceKey {
+    ResourceKey::new(ctx.key().zone.as_str(), ENDPOINT_BINDING_RESOURCE_TYPE, name)
 }
 
 /// One committed row that still holds a `Process` row's retirement.
@@ -2285,42 +2282,40 @@ impl ProcessDriver {
         let siblings = ctx
             .owner_siblings()
             .await
-            .map_err(|_| retained("dependency.unreadable", "unavailable"))?;
+            .map_err(|_| retained(RetirementBlocker::Unreadable.code(), "unavailable"))?;
+        let consumer_ref = identity.resource_ref.to_canonical_string();
         for endpoint in siblings
             .iter()
             .filter(|row| row.key.type_name == ENDPOINT_ROW_TYPE)
         {
-            let published = match ctx.lookup_view(&endpoint.key).await {
-                RowLookup::Present { row, .. } => row.observed_status_projection().cloned(),
+            let view = match ctx.lookup_view(&endpoint.key).await {
+                RowLookup::Present { row, .. } => row,
                 // A view the manager cannot answer is not evidence that
                 // nothing is published for this consumer.
                 RowLookup::Unavailable { .. } | RowLookup::Error { .. } => {
-                    return Err(retained("dependency.unreadable", "unavailable"));
+                    return Err(retained(RetirementBlocker::Unreadable.code(), "unavailable"));
                 }
                 // No view at all: the endpoint's own actor published no
                 // publication intent, which names no relationship here.
-                RowLookup::Absent { .. } => None,
+                RowLookup::Absent { .. } => continue,
             };
-            let entries = published
-                .as_ref()
+            // The entries are read in place: the publication layer is the
+            // view's own value and nothing here mutates it, so neither the
+            // layer nor the array is copied out of it.
+            let entries = view
+                .observed_status_projection()
                 .and_then(|layer| layer.pointer("/endpoint/bindings"))
-                .and_then(serde_json::Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            for entry in entries {
-                let publishes_this_consumer = published_field(&entry, "/consumer").as_deref()
-                    == Some(identity.resource_ref.to_canonical_string().as_str());
+                .and_then(serde_json::Value::as_array);
+            for entry in entries.into_iter().flatten() {
+                let publishes_this_consumer =
+                    published_field(entry, "/consumer").as_deref() == Some(consumer_ref.as_str());
                 if !publishes_this_consumer {
                     continue;
                 }
-                let Some(name) = published_field(&entry, "/name") else {
+                let Some(name) = published_field(entry, "/name") else {
                     continue;
                 };
-                let key = ResourceKey::new(
-                    ctx.key().zone.as_str(),
-                    ENDPOINT_BINDING_RESOURCE_TYPE,
-                    &name,
-                );
+                let key = binding_key(ctx, &name);
                 if matches!(ctx.lookup(&key).await, RowLookup::Present { .. }) {
                     return Err(retained(RetirementBlocker::ConsumedBinding.code(), "committed"));
                 }
@@ -2357,14 +2352,12 @@ impl ProcessDriver {
     /// this Host cannot attribute is left alone and never signalled: it is
     /// reported as not-ready and replaced by nothing.
     ///
-    /// Returns whether a live incarnation was stopped, so the caller can keep
-    /// an already-published terminal classification rather than restating it.
     async fn stop_withdrawn_effect(
         &mut self,
         ctx: &mut ResourceContext,
         identity: &ProcessResourceIdentity,
         spec: &ProcessSpec,
-    ) -> Result<bool, ProcessDriverError> {
+    ) -> Result<(), ProcessDriverError> {
         let op = DriverOp::Reconcile;
         let mut guest = self.guest_arm(ctx.target().cloned(), op).await?;
         if self.has_active_process(guest.as_ref(), identity, op).await? {
@@ -2376,9 +2369,9 @@ impl ProcessDriver {
             ctx.set_status(ProcessDriverStatus::Succeeded {
                 code: "binding-delivery-withdrawn",
             });
-            return Ok(true);
+            return Ok(());
         }
-        Ok(false)
+        Ok(())
     }
 
     /// Stop the verified live one-shot whose delivery authority was
@@ -2394,14 +2387,14 @@ impl ProcessDriver {
         ctx: &mut ResourceContext,
         identity: &ProcessResourceIdentity,
         spec: &EphemeralProcessSpec,
-    ) -> Result<bool, ProcessDriverError> {
+    ) -> Result<(), ProcessDriverError> {
         let op = DriverOp::Reconcile;
         if !self.effects.has_active(
             &identity.zone,
             identity.zone_uid.as_ref(),
             &identity.resource_ref,
         ) {
-            return Ok(false);
+            return Ok(());
         }
         tracing::warn!(
             resource = %identity.resource_ref.to_canonical_string(),
@@ -2411,7 +2404,7 @@ impl ProcessDriver {
         ctx.set_status(ProcessDriverStatus::Succeeded {
             code: "binding-delivery-withdrawn",
         });
-        Ok(true)
+        Ok(())
     }
 
     async fn reconcile_process(

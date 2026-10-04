@@ -603,7 +603,18 @@ impl DeclaredProviders {
             }
             (true, false) => self.identities.identity(crate_name, Surface::Runtime),
             (false, true) => self.identities.identity(crate_name, Surface::Session),
-            (false, false) => return self.no_provider(crate_name),
+            (false, false) => {
+                // A crate that declares no registration and no catalog still
+                // declares its operation rows, and it registers no Provider
+                // in the graph.
+                return Ok(DeclaredProvider {
+                    provider_ref: None,
+                    crate_name: crate_name.to_owned(),
+                    effect_services: Vec::new(),
+                    service_packages: Vec::new(),
+                    methods: self.methods(crate_name),
+                });
+            }
         }
         .ok_or_else(|| {
             format!("declared-provider-without-identity: crate {crate_name} declares a registration and a service catalog but owns no Provider identity on either surface")
@@ -614,11 +625,7 @@ impl DeclaredProviders {
         });
         let service_packages: BTreeSet<String> =
             catalog.map_or_else(BTreeSet::new, |file| file.services.iter().cloned().collect());
-        let methods = self
-            .operations
-            .get(crate_name)
-            .map(|file| file.operations.iter().map(|row| row.method.clone()).collect())
-            .unwrap_or_default();
+        let methods = self.methods(crate_name);
         Ok(DeclaredProvider {
             provider_ref: Some(provider_ref),
             crate_name: crate_name.to_owned(),
@@ -628,22 +635,12 @@ impl DeclaredProviders {
         })
     }
 
-    /// The declared surface of a crate that declares no registration and no
-    /// catalog: it still declares its operation rows, and it registers no
-    /// Provider in the graph.
-    fn no_provider(&self, crate_name: &str) -> Result<DeclaredProvider, String> {
-        let methods = self
-            .operations
+    /// The operation methods one crate declares, in declaration order.
+    fn methods(&self, crate_name: &str) -> Vec<String> {
+        self.operations
             .get(crate_name)
             .map(|file| file.operations.iter().map(|row| row.method.clone()).collect())
-            .unwrap_or_default();
-        Ok(DeclaredProvider {
-            provider_ref: None,
-            crate_name: crate_name.to_owned(),
-            effect_services: Vec::new(),
-            service_packages: Vec::new(),
-            methods,
-        })
+            .unwrap_or_default()
     }
 }
 

@@ -3022,7 +3022,6 @@ const AUTHORIZATION_DIGEST_DOMAIN: &str = "d2b:v3:endpoint-binding-authorization
 /// The domain tag framing one relationship dependency revision.
 const DEPENDENCY_REVISION_DOMAIN: &str = "d2b:v3:endpoint-binding-dependency-revision";
 
-
 /// The exact wire request one committed relationship's delivery is sent as.
 ///
 /// The request is a pure function of the committed row and the verb: the

@@ -495,7 +495,6 @@ impl DisplayEndpointRole {
     }
 }
 
-
 /// The endpoint shapes this Provider has committed, keyed by the producer
 /// each one is realized behind (U5, KTD5).
 ///

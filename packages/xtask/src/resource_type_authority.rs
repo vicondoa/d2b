@@ -1544,7 +1544,7 @@ mod tests {
                 // fixture's own plant: there is nothing to resolve it
                 // against, and the render refuses it by grammar first.
                 .filter_map(|provider| provider.strip_prefix("Provider/").map(str::to_owned))
-                .filter(|provider| !provider.is_empty() && is_provider_reference(&format!("Provider/{provider}")))
+                .filter(|provider| is_provider_reference(&format!("Provider/{provider}")))
                 .collect::<BTreeSet<_>>()
             {
                 let crate_name = format!("d2b-provider-{referenced}");

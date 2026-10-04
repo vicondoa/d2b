@@ -332,8 +332,8 @@ impl InteractionEffectsService {
         // gates readiness here through `children_ready` above.
         let sources = intents
             .iter()
+            .filter(|intent| intent.target().resource_type().as_str() == "Endpoint")
             .map(|intent| intent.target().clone())
-            .filter(|target| target.resource_type().as_str() == "Endpoint")
             .collect::<Vec<_>>();
         if !self.display_binding_delivery(&sources).await? {
             return Ok(InteractionEffectOutcome::phase(

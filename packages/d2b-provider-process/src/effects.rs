@@ -282,34 +282,9 @@ impl ExpectedBindingRow {
         &self.endpoint_ref
     }
 
-    /// The endpoint row generation the expectation was derived at.
-    pub const fn endpoint_generation(&self) -> u64 {
-        self.endpoint_generation
-    }
-
-    /// The relationship row generation the expectation was derived at.
-    pub const fn binding_generation(&self) -> u64 {
-        self.binding_generation
-    }
-
-    /// The exact consumer this relationship is for.
-    pub const fn consumer_ref(&self) -> &ResourceRef {
-        &self.consumer_ref
-    }
-
     /// The canonical consumer slot.
     pub fn slot(&self) -> &str {
         &self.slot
-    }
-
-    /// The digest of the authorization this relationship was derived under.
-    pub fn authorization_digest(&self) -> &str {
-        &self.authorization_digest
-    }
-
-    /// The revision of the dependencies the derivation was read at.
-    pub fn dependency_revision(&self) -> &str {
-        &self.dependency_revision
     }
 
     /// The opaque realization-incarnation token the endpoint published.
@@ -449,15 +424,6 @@ impl BindingDeliveryEvidence {
         )
     }
 
-    /// The closed state slug this evidence publishes.
-    pub const fn state_slug(&self) -> &'static str {
-        match self {
-            Self::Delivered { .. } => "delivered",
-            Self::EndpointReplaced => "endpoint-replaced",
-            Self::Undelivered => "undelivered",
-            Self::Draining => "draining",
-        }
-    }
 }
 
 /// What the manager currently reports for one expected relationship.
@@ -539,16 +505,6 @@ impl BindingLeaseRow {
         &self.expectation
     }
 
-    /// The relationship row identity observed when the lease was sealed.
-    pub fn binding_uid(&self) -> &str {
-        &self.binding_uid
-    }
-
-    /// The relationship row generation observed when the lease was sealed.
-    pub const fn binding_generation(&self) -> u64 {
-        self.binding_generation
-    }
-
     /// Whether one freshly observed relationship still matches what was
     /// sealed: the same row identity, the same row generation, the same
     /// authority facts, the same ENDPOINT row generation, the same
@@ -617,34 +573,6 @@ pub enum ProcessBindingPreparation {
     Refused(BindingGateError),
 }
 
-impl ProcessBindingPreparation {
-    /// Whether this preparation produced a sealed lease.
-    pub fn lease(&self) -> Option<&BindingAuthorityLease> {
-        match self {
-            Self::Ready(lease) => Some(lease),
-            Self::NotRequired | Self::Pending | Self::Refused(_) => None,
-        }
-    }
-
-    /// Whether this launch requires no relationship.
-    pub const fn is_not_required(&self) -> bool {
-        matches!(self, Self::NotRequired)
-    }
-
-    /// Whether this launch must wait for delivery evidence.
-    pub const fn is_pending(&self) -> bool {
-        matches!(self, Self::Pending)
-    }
-
-    /// The refusal this preparation ended in, if it refused.
-    pub const fn refusal(&self) -> Option<BindingGateError> {
-        match self {
-            Self::Refused(error) => Some(*error),
-            Self::NotRequired | Self::Ready(_) | Self::Pending => None,
-        }
-    }
-}
-
 /// A revocable snapshot of the authority a `Ready` preparation proved.
 ///
 /// The lease is what makes the gate a fence rather than a reading: it carries
@@ -690,11 +618,6 @@ impl BindingAuthorityLease {
             });
         }
         Ok(Self { consumer, rows })
-    }
-
-    /// The committed consumer identity this lease was sealed for.
-    pub const fn consumer(&self) -> &ResourceUid {
-        &self.consumer
     }
 
     /// The relationships this lease covers.

@@ -20,7 +20,7 @@
 
 use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
 
-use crate::provider_crate_policy::PROVIDER_MATRIX;
+use crate::provider_crate_policy::{PROVIDER_MATRIX, ProviderMatrixRow};
 use crate::provider_identity_authority::{ProviderIdentities, Surface};
 
 const GENERATED_HEADER: &str = concat!(
@@ -201,16 +201,19 @@ fn all_fields() -> Vec<String> {
 fn generated_catalog_shape_module(identities: &ProviderIdentities) -> Result<String, String> {
     let mut out = String::new();
     let rows = product_rows(identities)?;
-    let fixed_bootstrap = identities.fixed_bootstrap_identities();
-    for (crate_name, identity) in &fixed_bootstrap {
-        if !rows.iter().any(|(row, _)| row.crate_name == *crate_name) {
-            return Err(format!(
-                "fixed-bootstrap-without-matrix-row: crate {crate_name} owns the fixed-bootstrap identity {identity} but carries no packaging matrix row; a fixed-bootstrap Provider is a packaged product identity"
-            ));
-        }
-    }
-    let bootstrap_set: BTreeSet<&str> = fixed_bootstrap
+    // The fixed-bootstrap set, and the packaging rows it selects, are read
+    // once: every crate a fixed-bootstrap identity belongs to already owns a
+    // product identity, and `product_rows` refuses a product identity no row
+    // packages, so the two sets are exact and no row can name a crate the
+    // matrix does not.
+    let bootstrap_set: BTreeSet<&str> = identities
+        .fixed_bootstrap_identities()
+        .into_iter()
+        .map(|(_, identity)| identity)
+        .collect();
+    let bootstrap_ids: Vec<&str> = rows
         .iter()
+        .filter(|(_, identity)| bootstrap_set.contains(*identity))
         .map(|(_, identity)| *identity)
         .collect();
     if !bootstrap_set.contains(NO_BINARY_BOOTSTRAP_PROVIDER) {
@@ -319,10 +322,8 @@ fn generated_catalog_shape_module(identities: &ProviderIdentities) -> Result<Str
         nix_string(NO_BINARY_BOOTSTRAP_PROVIDER)
     ));
     out.push_str("    fixedBootstrapProviders = [\n");
-    for (_, identity) in &rows {
-        if bootstrap_set.contains(identity) {
-            out.push_str(&format!("      {}\n", nix_string(identity)));
-        }
+    for identity in &bootstrap_ids {
+        out.push_str(&format!("      {}\n", nix_string(identity)));
     }
     out.push_str("    ];\n");
     out.push_str("  };\n");
@@ -352,9 +353,7 @@ fn generated_catalog_shape_module(identities: &ProviderIdentities) -> Result<Str
         out.push_str(&format!("      unit = {};\n", nix_string(row.unit)));
         out.push_str(&format!(
             "      bootstrap = {};\n",
-            fixed_bootstrap
-                .iter()
-                .any(|(crate_name, _)| *crate_name == row.crate_name)
+            bootstrap_set.contains(identity)
         ));
         out.push_str("    }\n");
     }
@@ -367,10 +366,8 @@ fn generated_catalog_shape_module(identities: &ProviderIdentities) -> Result<Str
     out.push_str("  ];\n\n");
 
     out.push_str("  fixedBootstrapProviderIds = [\n");
-    for (_, identity) in &rows {
-        if bootstrap_set.contains(identity) {
-            out.push_str(&format!("    {}\n", nix_string(identity)));
-        }
+    for identity in &bootstrap_ids {
+        out.push_str(&format!("    {}\n", nix_string(identity)));
     }
     out.push_str("  ];\n");
 
@@ -389,16 +386,16 @@ fn generated_catalog_shape_module(identities: &ProviderIdentities) -> Result<Str
 /// rows with a guessed identity.
 fn product_rows(
     identities: &ProviderIdentities,
-) -> Result<Vec<(&crate::provider_crate_policy::ProviderMatrixRow, &str)>, String> {
+) -> Result<Vec<(&ProviderMatrixRow, &str)>, String> {
     product_rows_for(PROVIDER_MATRIX, identities)
 }
 
 /// The same join over any row set, so a refusal is testable without editing
 /// the committed matrix.
 fn product_rows_for<'a>(
-    matrix: &'a [crate::provider_crate_policy::ProviderMatrixRow],
+    matrix: &'a [ProviderMatrixRow],
     identities: &'a ProviderIdentities,
-) -> Result<Vec<(&'a crate::provider_crate_policy::ProviderMatrixRow, &'a str)>, String> {
+) -> Result<Vec<(&'a ProviderMatrixRow, &'a str)>, String> {
     let mut rows = Vec::with_capacity(matrix.len());
     for row in matrix {
         let identity = identities
@@ -602,15 +599,14 @@ mod tests {
         // checked for the positive half; the refusal itself is exercised
         // over a row the authority does not cover.
         assert!(row.is_none(), "every committed packaging row names a crate with a product identity");
-        const UNCOVERED: &[crate::provider_crate_policy::ProviderMatrixRow] =
-            &[crate::provider_crate_policy::ProviderMatrixRow {
-                crate_name: "d2b-provider-endpoint",
-                source_path: "packages/d2b-provider-endpoint/src/lib.rs",
-                test_path: "packages/d2b-provider-endpoint/tests/endpoint.rs",
-                dossier_path: "docs/specs/providers/ADR-046-provider-endpoint.md",
-                bazel_target: "//packages/d2b-provider-endpoint:all-tests",
-                unit: "U9",
-            }];
+        const UNCOVERED: &[ProviderMatrixRow] = &[ProviderMatrixRow {
+            crate_name: "d2b-provider-endpoint",
+            source_path: "packages/d2b-provider-endpoint/src/lib.rs",
+            test_path: "packages/d2b-provider-endpoint/tests/endpoint.rs",
+            dossier_path: "docs/specs/providers/ADR-046-provider-endpoint.md",
+            bazel_target: "//packages/d2b-provider-endpoint:all-tests",
+            unit: "U9",
+        }];
         let error = product_rows_for(UNCOVERED, &identities)
             .expect_err("a row for a crate with no product identity is refused");
         assert!(
@@ -624,7 +620,7 @@ mod tests {
     #[test]
     fn a_product_identity_with_no_matrix_row_is_refused() {
         let identities = identities();
-        const EMPTY: &[crate::provider_crate_policy::ProviderMatrixRow] = &[];
+        const EMPTY: &[ProviderMatrixRow] = &[];
         let error =
             product_rows_for(EMPTY, &identities).expect_err("an uncovered product identity is refused");
         assert!(

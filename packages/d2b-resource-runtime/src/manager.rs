@@ -3718,16 +3718,6 @@ mod tests {
 
     /// Spec section 32: the delete path cancels the pending requeue timer -
     /// after cleanup, no further reconcile is ever delivered.
-    ///
-    /// The count is read once, at the boundary where the delete has run, and
-    /// asserted not to move from there. A requeue that fires while the row is
-    /// still live and the delete has not reached the actor is not a violation
-    /// - that timer had not been cancelled yet, and the row was not deleting
-    /// either - so the request's own wall-clock window is not part of what
-    /// this asserts. What is asserted is that no timer survives the delete to
-    /// deliver anything afterwards, and that is decided on a frozen clock:
-    /// the advance below crosses the deadline, so a timer the delete failed to
-    /// cancel fires inside it and is caught.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn delete_cancels_pending_requeue_timer() {

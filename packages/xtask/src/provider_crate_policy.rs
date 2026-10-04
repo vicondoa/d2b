@@ -7951,14 +7951,7 @@ fn on_disk_providers(repo_root: &Path) -> Result<Vec<OnDiskProvider>, String> {
 ///
 /// The classification is read, not inferred: a crate is a packaging Provider
 /// exactly when it owns a product-plane Provider identity, which its own
-/// `provider-identity.json` declares. The convention this replaced read the
-/// answer off two things the crate never states - how many segments its
-/// directory name has, and whether its manifest depends on the resource-type
-/// crate - so `d2b-provider-endpoint` was a driver because its name had one
-/// segment, `d2b-provider-guest-qemu-media` and `d2b-provider-process-minijail`
-/// were real Providers only because their names had two, and the five
-/// provider-prefixed crates that are not Providers had to be named in an
-/// exclusion list to escape the same rule. A crate that declares no product
+/// `provider-identity.json` declares. A crate that declares no product
 /// identity is not a packaging Provider whatever its name reads, and a crate
 /// that does is one whatever its name reads.
 fn is_packaging_provider(identities: &ProviderIdentities, crate_name: &str) -> bool {
@@ -8331,7 +8324,7 @@ fn collect_provider_family_signals(
         if let Some(family) = identities.family(crate_name) {
             own_names.insert(family);
         }
-        for surface in [Surface::Product, Surface::Runtime, Surface::Session] {
+        for surface in Surface::ALL {
             if let Some(identity) = identities.identity(crate_name, surface) {
                 own_names.insert(identity);
             }
@@ -9498,7 +9491,7 @@ mod tests {
     fn every_provider_prefixed_crate_declares_its_classification() {
         let root = repo_root().expect("resolve repository root");
         let identities = ProviderIdentities::load(root).expect("the identity authority loads");
-        let mut names: BTreeSet<String> = fs::read_dir(root.join("packages"))
+        let names: BTreeSet<String> = fs::read_dir(root.join("packages"))
             .expect("read packages directory")
             .map(|entry| entry.expect("read package entry"))
             .filter(|entry| entry.file_type().expect("read package entry type").is_dir())
@@ -9515,7 +9508,6 @@ mod tests {
                 "{name} is a provider-prefixed crate with no identity declaration"
             );
         }
-        names.clear();
 
         let fixture = Fixture::new("undeclared-crate");
         write_package(&fixture.root, "d2b-provider-undeclared");

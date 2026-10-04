@@ -645,6 +645,32 @@ impl EndpointReadiness {
     fn unrealized_committed(connectability: Option<EndpointConnectability>) -> Self {
         Self { connectability, committed: true, ..Self::unrealized() }
     }
+
+    /// A pass over a Provider-committed shape whose evidence proved a
+    /// realization standing, with the axis that shape's own evidence kind
+    /// carries and the other one left absent.
+    fn realized_committed(
+        incarnation: crate::endpoint::RealizationIncarnation,
+        producer_generation: Option<u64>,
+        connectability: Option<EndpointConnectability>,
+    ) -> Self {
+        Self {
+            realized: true,
+            incarnation: Some(incarnation),
+            producer_generation,
+            connectability,
+            committed: true,
+        }
+    }
+}
+
+/// The manager key of the producer row one Endpoint spec declares.
+fn producer_key(ctx: &ResourceContext, spec: &EndpointSpec) -> ResourceKey {
+    ResourceKey::new(
+        ctx.key().zone.as_str(),
+        spec.producer_ref().resource_type().as_str(),
+        spec.producer_ref().name().as_str(),
+    )
 }
 
 /// One Endpoint resource's driver. It drives the resource through the
@@ -827,11 +853,7 @@ impl EndpointDriver {
         spec: &EndpointSpec,
         op: DriverOp,
     ) -> Result<(Option<crate::endpoint::RealizationIncarnation>, u64), EndpointDriverError> {
-        let producer_key = ResourceKey::new(
-            ctx.key().zone.as_str(),
-            spec.producer_ref().resource_type().as_str(),
-            spec.producer_ref().name().as_str(),
-        );
+        let producer_key = producer_key(ctx, spec);
         let producer = match ctx.lookup_view(&producer_key).await {
             d2b_resource_runtime::context::RowLookup::Present { row, .. } => row,
             _ => return Ok((None, 0)),
@@ -914,20 +936,14 @@ impl EndpointDriver {
                     )));
                 };
                 let incarnation = derive(handle.nonce().as_str(), handle.rotation())?;
-                Ok(EndpointReadiness {
-                    realized: true,
-                    incarnation: Some(incarnation),
-                    producer_generation: None,
-                    connectability: Some(EndpointConnectability::Connectable),
-                    committed: true,
-                })
+                Ok(EndpointReadiness::realized_committed(
+                    incarnation,
+                    None,
+                    Some(EndpointConnectability::Connectable),
+                ))
             }
             Some(ProviderRealizationEvidence::ProducerRow) => {
-                let producer_key = ResourceKey::new(
-                    ctx.key().zone.as_str(),
-                    spec.producer_ref().resource_type().as_str(),
-                    spec.producer_ref().name().as_str(),
-                );
+                let producer_key = producer_key(ctx, spec);
                 self.watch_once(ctx, producer_key.clone()).await;
                 let d2b_resource_runtime::context::RowLookup::Present { row: producer, .. } =
                     ctx.lookup_view(&producer_key).await
@@ -944,13 +960,11 @@ impl EndpointDriver {
                 let producer_uid = ResourceUid::from_bytes(&producer.uid)
                     .map_err(|_| EndpointDriverError::new(EndpointDriverErrorKind::SpecInvalid, op))?;
                 let incarnation = derive(producer_uid.as_str(), producer.generation)?;
-                Ok(EndpointReadiness {
-                    realized: true,
-                    incarnation: Some(incarnation),
-                    producer_generation: Some(producer.generation),
-                    connectability: None,
-                    committed: true,
-                })
+                Ok(EndpointReadiness::realized_committed(
+                    incarnation,
+                    Some(producer.generation),
+                    None,
+                ))
             }
             None => Ok(EndpointReadiness::unrealized_committed(None)),
         }

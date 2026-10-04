@@ -680,17 +680,6 @@ impl EndpointSpec {
         &self.binding_publication
     }
 
-    /// Whether this endpoint publishes a relationship for `subject` AND
-    /// authorizes it.
-    ///
-    /// Both halves are required: a published subject the owner does not
-    /// authorize is a declaration this family cannot honor, and an authorized
-    /// subject the owner does not publish is a relationship that does not
-    /// exist.
-    pub fn publishes_and_admits(&self, subject: &ResourceRef) -> bool {
-        self.binding_publication.publishes_to(subject)
-            && self.consumer_policy.admits_subject(subject)
-    }
 }
 
 redacted_debug!(EndpointSpec);
@@ -880,7 +869,6 @@ mod tests {
         object["producerRef"] = serde_json::json!("User/alice");
         assert!(serde_json::from_value::<EndpointSpec>(object).is_err());
     }
-
 
     #[test]
     fn a_derived_incarnation_is_a_grammar_token_and_is_stable_for_one_realization() {

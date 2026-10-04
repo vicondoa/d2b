@@ -114,6 +114,7 @@ use d2b_resource_runtime::watch::{
 use d2b_resource_types::DriverDescriptor;
 use d2bd_runtime::resource_runtime_support::NewPlaneReadinessState;
 use d2bd_runtime::target_runtime::DaemonMode;
+use d2bd_runtime::runtime_util::hex_bytes;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
 
 use d2b_provider_credential::{
@@ -1531,7 +1532,7 @@ impl PlaneHostSocketEvidence {
 fn realization_nonce() -> Option<BoundedToken> {
     let mut bytes = [0_u8; 16];
     getrandom::getrandom(&mut bytes).ok()?;
-    let hex = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let hex = hex_bytes(&bytes);
     BoundedToken::parse(format!("r{hex}")).ok()
 }
 
@@ -9402,6 +9403,13 @@ HOST_EFFECTS_SERVICE.id,
     /// subject.
     const DISPLAY_GUEST_NAME: &str = "work";
 
+    /// The scene's session row reference, the canonical spelling of the two
+    /// constants above.
+    fn display_session_ref() -> ResourceRef {
+        ResourceRef::parse(&format!("{WAYLAND_SESSION_TYPE}/{DISPLAY_SESSION_NAME}"))
+            .expect("the session's own canonical reference")
+    }
+
     /// The session's committed interaction identity: the row's own reference
     /// and durable uid, and the Guest, Host, and User references its spec
     /// must name. This is the bounded subset the daemon resolves from its
@@ -9410,10 +9418,7 @@ HOST_EFFECTS_SERVICE.id,
         let (session_key, session_uid) = display_session_row("test", DISPLAY_SESSION_NAME);
         assert_eq!(session_key.type_name, WAYLAND_SESSION_TYPE);
         d2b_provider_wayland_policy::InteractionEffectIdentity {
-            wayland_session_ref: ResourceRef::parse(&format!(
-                "{WAYLAND_SESSION_TYPE}/{DISPLAY_SESSION_NAME}"
-            ))
-            .expect("the session's own canonical reference"),
+            wayland_session_ref: display_session_ref(),
             wayland_session_uid: session_uid,
             subject_ref: ResourceRef::parse("Guest/work").expect("guest ref"),
             host_execution_ref: ResourceRef::parse("Host/host-system").expect("host ref"),
@@ -9468,6 +9473,62 @@ HOST_EFFECTS_SERVICE.id,
     impl AudioMediatorSource for NoAudioCapability {
         fn build(&self, _vm_name: &str, _projection: bool) -> Option<Box<dyn AudioMediator>> {
             None
+        }
+    }
+
+    /// The scripted private host observation the display scene installs for
+    /// the daemon's own socket facet.
+    ///
+    /// The production facet ([`PlaneHostSocketEvidence`]) resolves the locator
+    /// the endpoint owner committed, compares the exact socket standing there
+    /// and whether it accepts a connection, and mints a handle only for an
+    /// observation that proved it. A scene hosts no socket to compare, so this
+    /// one answers the same scripted presence the rest of the Endpoint family's
+    /// double answers - and mints ONE handle per endpoint reference, because a
+    /// fresh nonce on every pass is a replacement the scene never made and
+    /// would rotate the realization under the binding that already read it.
+    struct ScriptedHostSocketObservation {
+        present: std::sync::atomic::AtomicBool,
+        minted: tokio::sync::Mutex<std::collections::HashMap<String, RealizationHandle>>,
+    }
+
+    impl ScriptedHostSocketObservation {
+        fn new() -> Self {
+            Self {
+                present: std::sync::atomic::AtomicBool::new(false),
+                minted: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            }
+        }
+
+        /// Script the observation as proving a realization, as a bound and
+        /// connectable socket does.
+        fn make_present(&self) {
+            self.present.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HostSocketEvidenceSource for ScriptedHostSocketObservation {
+        async fn observe(
+            &self,
+            endpoint_ref: &ResourceRef,
+            _purpose: &str,
+        ) -> Option<RealizationHandle> {
+            if !self.present.load(std::sync::atomic::Ordering::SeqCst) {
+                return None;
+            }
+            let mut minted = self.minted.lock().await;
+            let handle = minted
+                .entry(endpoint_ref.to_canonical_string())
+                .or_insert_with(|| {
+                    RealizationHandle::mint(
+                        realization_nonce().expect("128 bits of kernel randomness"),
+                        1,
+                    )
+                    .expect("a full-width nonce clears the incarnation floor")
+                })
+                .clone();
+            Some(handle)
         }
     }
 
@@ -9753,6 +9814,9 @@ HOST_EFFECTS_SERVICE.id,
     /// the broker end the production dispatch delivers over, so a test can
     /// move the delivery evidence without rebuilding the composition.
     struct DisplayComposition {
+        /// The durable directory the plane's own fixture created is the one
+        /// this composition keeps, so a restart can reopen the same Zone over
+        /// the same store.
         dir: tempfile::TempDir,
         inputs: ConstructionInputs,
         client: Arc<std::sync::OnceLock<ResourceManagerClient>>,
@@ -9866,61 +9930,6 @@ HOST_EFFECTS_SERVICE.id,
         let serving = d2b_provider_volume_binding::test_support::FakeServingEffects::new();
         serving.make_ready();
         inputs.binding_facets = serving.facet_set();
-    /// The scripted private host observation the display scene installs for
-    /// the daemon's own socket facet.
-    ///
-    /// The production facet ([`PlaneHostSocketEvidence`]) resolves the locator
-    /// the endpoint owner committed, compares the exact socket standing there
-    /// and whether it accepts a connection, and mints a handle only for an
-    /// observation that proved it. A scene hosts no socket to compare, so this
-    /// one answers the same scripted presence the rest of the Endpoint family's
-    /// double answers - and mints ONE handle per endpoint reference, because a
-    /// fresh nonce on every pass is a replacement the scene never made and
-    /// would rotate the realization under the binding that already read it.
-    struct ScriptedHostSocketObservation {
-        present: std::sync::atomic::AtomicBool,
-        minted: tokio::sync::Mutex<std::collections::HashMap<String, RealizationHandle>>,
-    }
-
-    impl ScriptedHostSocketObservation {
-        fn new() -> Self {
-            Self {
-                present: std::sync::atomic::AtomicBool::new(false),
-                minted: tokio::sync::Mutex::new(std::collections::HashMap::new()),
-            }
-        }
-
-        /// Script the observation as proving a realization, as a bound and
-        /// connectable socket does.
-        fn make_present(&self) {
-            self.present.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl HostSocketEvidenceSource for ScriptedHostSocketObservation {
-        async fn observe(
-            &self,
-            endpoint_ref: &ResourceRef,
-            _purpose: &str,
-        ) -> Option<RealizationHandle> {
-            if !self.present.load(std::sync::atomic::Ordering::SeqCst) {
-                return None;
-            }
-            let mut minted = self.minted.lock().await;
-            let handle = minted
-                .entry(endpoint_ref.to_canonical_string())
-                .or_insert_with(|| {
-                    RealizationHandle::mint(
-                        realization_nonce().expect("128 bits of kernel randomness"),
-                        1,
-                    )
-                    .expect("a full-width nonce clears the incarnation floor")
-                })
-                .clone();
-            Some(handle)
-        }
-    }
 
         let sockets = d2b_provider_endpoint::test_support::FakeSocketEffects::new();
         sockets.make_present();
@@ -9951,9 +9960,6 @@ HOST_EFFECTS_SERVICE.id,
         }
     }
 
-    /// The durable directory the plane's own fixture created is the one this
-    /// composition keeps, so a restart can reopen the same Zone over the same
-    /// store.
     /// The Host row's own closed contract: the family's canonical Host spec
     /// behind the Provider selector the Host driver fences on. A row without
     /// that selector is not a Host row this family admits.
@@ -10266,7 +10272,8 @@ HOST_EFFECTS_SERVICE.id,
     /// unconverged session row re-enters its pass on this one, so it is the
     /// slowest clock in this graph and the fallback for the aggregate read
     /// that ends every chain.
-    const WAYLAND_SESSION_RESYNC_SECS: u64 = 30;
+    const WAYLAND_SESSION_RESYNC_SECS: u64 =
+        d2b_provider_display_wayland::DISPLAY_REPAIR_INTERVAL_SECS;
 
     /// How much wall clock one of those ticks costs on a machine that is not
     /// idle, as a multiple of its nominal length.
@@ -10668,16 +10675,12 @@ HOST_EFFECTS_SERVICE.id,
     ) -> String {
         let deadline = tokio::time::Instant::now() + budget;
         loop {
-            let token = published_projection(
+            let token = endpoint_token(
                 plane,
                 key,
                 deadline.saturating_duration_since(tokio::time::Instant::now()),
             )
-            .await
-            .pointer("/endpoint/incarnation")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
+            .await;
             if !token.is_empty() || tokio::time::Instant::now() >= deadline {
                 return token;
             }
@@ -10709,10 +10712,7 @@ HOST_EFFECTS_SERVICE.id,
         Vec<(ResourceKey, d2b_provider_display_wayland::EndpointSpec)>,
         Vec<ResourceKey>,
     ) {
-        let session_ref = ResourceRef::parse(&format!(
-            "{WAYLAND_SESSION_TYPE}/{DISPLAY_SESSION_NAME}"
-        ))
-        .expect("the session's own canonical reference");
+        let session_ref = display_session_ref();
         let spec = display_session_spec();
         let endpoints = display_endpoint_child_rows(&session_ref, session_uid, &spec);
         let processes = d2b_provider_display_wayland::session_children::display_owned_child_intents(
@@ -11413,17 +11413,7 @@ HOST_EFFECTS_SERVICE.id,
         // host proxy's private carriage, the guest frontend's own endpoint
         // (which publishes nothing). The carriage is the second of the three.
         let (compositor, carriage) = (endpoints[0].0.clone(), endpoints[1].0.clone());
-        let (host_proxy, frontend) = {
-            let proxy = processes
-                .iter()
-                .find(|key| key.name.starts_with("display-host-proxy-"))
-                .expect("the host proxy row");
-            let frontend = processes
-                .iter()
-                .find(|key| key.name.starts_with("display-guest-frontend-"))
-                .expect("the guest frontend row");
-            (proxy.clone(), frontend.clone())
-        };
+        let (host_proxy, frontend) = display_worker_rows(&processes);
 
         // The carriage's relationship is refused at the broker for as long as
         // this test holds it. Everything else is answered normally.

@@ -127,6 +127,16 @@ const REGISTERS_NO_PLANE_FACING_SURFACE: &str = "declares the ResourceType vocab
 /// A crate whose session identity answers no closed service package.
 const PUBLISHES_NO_SERVICE_PACKAGE: &str = "publishes no service package: the crate owns a session identity that answers no closed service package on the zone-plane session contract and states no fixed bootstrap resource UID, so a `service-catalog.json` would carry no routing fact at all";
 
+/// Every declaration kind but the Provider identity one, in declaration
+/// order: it is the one kind no row below is ever absent for, because every
+/// provider crate carries it.
+const ALL_BUT_PROVIDER_IDENTITY: &[Declaration] = &[
+    Declaration::ResourceTypes,
+    Declaration::Operations,
+    Declaration::Registrations,
+    Declaration::ServiceCatalog,
+];
+
 /// Every provider crate that owns no file for a declaration kind, in crate-name
 /// order.
 const DECLARATION_ABSENCES: &[DeclarationAbsence] = &[
@@ -149,7 +159,7 @@ const DECLARATION_ABSENCES: &[DeclarationAbsence] = &[
     // this table two authorities for one fact.
     DeclarationAbsence { crate_name: "d2b-provider-activation-nixos", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-audio-binding", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
-    DeclarationAbsence { crate_name: "d2b-provider-audio-pipewire", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    DeclarationAbsence { crate_name: "d2b-provider-audio-pipewire", absent: ALL_BUT_PROVIDER_IDENTITY, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
     DeclarationAbsence { crate_name: "d2b-provider-audio-service", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-clipboard-wayland", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations], reason: PUBLISHES_A_SERVICE_PACKAGE },
     DeclarationAbsence { crate_name: "d2b-provider-config-nixos", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations], reason: PUBLISHES_A_SERVICE_PACKAGE },
@@ -184,7 +194,7 @@ const DECLARATION_ABSENCES: &[DeclarationAbsence] = &[
     // would leave a published service out of the registration table. Until
     // the production composition carries a TPM effects factory the two
     // forms are both false, and a documented null is the honest row.
-    DeclarationAbsence { crate_name: "d2b-provider-device-tpm", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: REGISTERS_NO_PLANE_FACING_SURFACE },
+    DeclarationAbsence { crate_name: "d2b-provider-device-tpm", absent: ALL_BUT_PROVIDER_IDENTITY, reason: REGISTERS_NO_PLANE_FACING_SURFACE },
     DeclarationAbsence { crate_name: "d2b-provider-device-usbip", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-display-wayland", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations], reason: PUBLISHES_A_SERVICE_PACKAGE },
     // The vocabulary-owning rows that state no `Declaration::Registrations`
@@ -227,10 +237,10 @@ const DECLARATION_ABSENCES: &[DeclarationAbsence] = &[
     DeclarationAbsence { crate_name: "d2b-provider-host", absent: &[Declaration::Operations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_AND_IDENTITY },
     DeclarationAbsence { crate_name: "d2b-provider-network-local", absent: &[Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_IDENTITY_AND_ROWS },
     DeclarationAbsence { crate_name: "d2b-provider-notification-desktop", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations], reason: PUBLISHES_A_SERVICE_PACKAGE },
-    DeclarationAbsence { crate_name: "d2b-provider-observability-otel", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    DeclarationAbsence { crate_name: "d2b-provider-observability-otel", absent: ALL_BUT_PROVIDER_IDENTITY, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
     DeclarationAbsence { crate_name: "d2b-provider-operation", absent: &[Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_ONLY },
     DeclarationAbsence { crate_name: "d2b-provider-process", absent: &[Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_IDENTITY_AND_ROWS },
-    DeclarationAbsence { crate_name: "d2b-provider-process-minijail", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    DeclarationAbsence { crate_name: "d2b-provider-process-minijail", absent: ALL_BUT_PROVIDER_IDENTITY, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
     DeclarationAbsence { crate_name: "d2b-provider-process-systemd", absent: &[Declaration::ResourceTypes, Declaration::ServiceCatalog], reason: DECLARES_IDENTITY_AND_ROWS },
     DeclarationAbsence { crate_name: "d2b-provider-provider", absent: &[Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_ONLY },
     DeclarationAbsence { crate_name: "d2b-provider-quota", absent: &[Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_ONLY },
@@ -247,13 +257,13 @@ const DECLARATION_ABSENCES: &[DeclarationAbsence] = &[
     // A `service-catalog.json` holding only the identity it used to restate
     // would carry no routing fact at all, so the file is absent and the
     // identity stays where it belongs - in the identity authority.
-    DeclarationAbsence { crate_name: "d2b-provider-shell-terminal", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: PUBLISHES_NO_SERVICE_PACKAGE },
-    DeclarationAbsence { crate_name: "d2b-provider-supervisor", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    DeclarationAbsence { crate_name: "d2b-provider-shell-terminal", absent: ALL_BUT_PROVIDER_IDENTITY, reason: PUBLISHES_NO_SERVICE_PACKAGE },
+    DeclarationAbsence { crate_name: "d2b-provider-supervisor", absent: ALL_BUT_PROVIDER_IDENTITY, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
     DeclarationAbsence { crate_name: "d2b-provider-system-core", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations], reason: PUBLISHES_A_SERVICE_PACKAGE },
     DeclarationAbsence { crate_name: "d2b-provider-telemetry-binding", absent: &[Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_ONLY },
     DeclarationAbsence { crate_name: "d2b-provider-telemetry-service", absent: &[Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: DECLARES_VOCABULARY_ONLY },
-    DeclarationAbsence { crate_name: "d2b-provider-test-controller", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
-    DeclarationAbsence { crate_name: "d2b-provider-toolkit", absent: &[Declaration::ResourceTypes, Declaration::Operations, Declaration::Registrations, Declaration::ServiceCatalog], reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    DeclarationAbsence { crate_name: "d2b-provider-test-controller", absent: ALL_BUT_PROVIDER_IDENTITY, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
+    DeclarationAbsence { crate_name: "d2b-provider-toolkit", absent: ALL_BUT_PROVIDER_IDENTITY, reason: IMPLEMENTS_OTHER_CRATES_SURFACES },
     // `transport-azure-relay` is named by the `runtimeProviderRefs` list and
     // its credential-boundary assertion branch in
     // `nixos-modules/provider-runtime-contracts.nix`, and by the gateway

@@ -1017,7 +1017,6 @@ pub fn binding_child_ensure(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use async_trait::async_trait;
@@ -1026,9 +1025,10 @@ mod tests {
     use d2b_provider_display_wayland::{
         DisplayIdentity, EndpointSpec, WaylandSessionSpec, session_children,
     };
+    use d2b_provider_toolkit::testing::fakes::RecordingRequeue;
     use d2b_resource_runtime::ResourceStatus;
     use d2b_resource_runtime::context::{
-        ChildEnsure, EffectCompleted, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext,
+        ChildEnsure, EffectCompleted, ManagerEndpoint, RequeueScheduler, ResourceContext,
         WatchId, WatchRegistration, WatchSatisfied,
     };
     use d2b_resource_runtime::driver::{ReconcileOutcome, ResourceDriver};
@@ -1261,19 +1261,6 @@ mod tests {
         }
     }
 
-    /// The requeue sink, counting the schedules a not-converged pass issues.
-    struct CountingRequeue {
-        schedules: AtomicUsize,
-    }
-
-    impl RequeueScheduler for CountingRequeue {
-        fn schedule(&self, _key: ResourceKey, _after: Duration) -> RequeueId {
-            RequeueId(self.schedules.fetch_add(1, Ordering::SeqCst) as u64)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
-
     // -- the zone plane the effects read -------------------------------------
 
     fn plane_view(
@@ -1386,7 +1373,7 @@ mod tests {
 
     struct Fixture {
         ctx: ResourceContext,
-        requeue: Arc<CountingRequeue>,
+        requeue: Arc<RecordingRequeue>,
     }
 
     /// The real interaction driver over the real effects service, reading the
@@ -1409,9 +1396,7 @@ mod tests {
             rows: Arc::new(Mutex::new(Vec::new())),
             parent_uid: row.uid,
         });
-        let requeue = Arc::new(CountingRequeue {
-            schedules: AtomicUsize::new(0),
-        });
+        let requeue = Arc::new(RecordingRequeue::default());
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel::<EffectCompleted>();
         let (watch_tx, _watch_rx) = tokio::sync::mpsc::unbounded_channel::<WatchSatisfied>();
         let ctx = ResourceContext::new(
@@ -1461,7 +1446,7 @@ mod tests {
             "a pending aggregate publishes no projection: nothing is realized to name"
         );
         assert_eq!(
-            fixture.requeue.schedules.load(Ordering::SeqCst),
+            fixture.requeue.scheduled().len(),
             1,
             "the pass requeues on the type's cadence, so the row is re-driven"
         );

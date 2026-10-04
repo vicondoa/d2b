@@ -525,22 +525,13 @@ impl TargetBinding {
         self.guest().map(GuestTargetHandle::reference)
     }
 
-    /// The authenticated session generation this binding is bound to.
-    ///
-    /// `None` while no session is live. The assignment itself survives a
-    /// disconnect unchanged (R21), and every operation below re-validates
-    /// against the directory's live session rather than trusting this value.
-    pub const fn session_generation(&self) -> Option<u64> {
-        self.assignment.session_generation()
-    }
-
     /// The guest target's live session generation right now.
     ///
-    /// Distinct from [`Self::session_generation`], which reports the
-    /// generation this assignment was bound under and is therefore a
-    /// snapshot. A reconnect makes this newer; a caller that compares the two
-    /// learns that its binding no longer speaks for the live session and must
-    /// re-adopt before it acts (F5).
+    /// The assignment records the generation it was bound under, which is a
+    /// snapshot; this reads the directory instead. A reconnect makes this
+    /// newer, and a caller that knows the bound generation learns from the
+    /// difference that its binding no longer speaks for the live session and
+    /// must re-adopt before it acts (F5).
     pub fn live_generation(&self) -> Option<u64> {
         self.guest_reference().and_then(|reference| self.directory.live_generation(reference))
     }
@@ -548,36 +539,6 @@ impl TargetBinding {
     /// The Host-zone resource this assignment binds.
     pub const fn source(&self) -> &ResourceKey {
         self.assignment.source()
-    }
-
-    /// The committed uid of the resource this assignment binds.
-    ///
-    /// A replacement source has a different uid, and the target refuses to
-    /// let it inherit the previous source's realization.
-    pub const fn source_uid(&self) -> &[u8; 16] {
-        self.assignment.uid()
-    }
-
-    /// The desired generation this assignment was committed at.
-    pub const fn assignment_generation(&self) -> u64 {
-        self.assignment.desired_generation()
-    }
-
-    /// The live session generation this binding may act under.
-    ///
-    /// This is the pre-effect fence (R19): a caller reads it, performs its
-    /// manager-side work, and issues the frame only while the value still
-    /// stands. A Host row, and a Guest row with no live session, both refuse.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TargetError::NotGuestTarget`] for a Host-targeted row and
-    /// [`TargetError::GuestUnavailable`] while no Guest session is live.
-    pub fn live_session(&self) -> Result<u64, TargetError> {
-        if !self.is_guest() {
-            return Err(TargetError::NotGuestTarget);
-        }
-        self.session_generation().ok_or(TargetError::GuestUnavailable)
     }
 
     /// Realize (create or update) the target-local instance through the live

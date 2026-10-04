@@ -215,8 +215,7 @@ fn declaration_errors(
 ) -> Vec<String> {
     let mut errors = Vec::new();
     let mut services: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for crate_name in registry.keys() {
-        let file = &registry[crate_name];
+    for (crate_name, file) in registry {
         if identities.identity(crate_name, Surface::Session).is_none() {
             errors.push(format!(
                 "session-identity-missing: crate {crate_name} publishes a session service catalog but owns no session Provider identity; the identity a routing row points at is the crate's own session identity in its `provider-identity.json`"

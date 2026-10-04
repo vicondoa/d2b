@@ -233,10 +233,6 @@ pub(crate) enum NoIdentityReason {
 }
 
 impl NoIdentityReason {
-    /// Every reason, in declaration order.
-    #[allow(dead_code, reason = "read by this module's own census tests; no generator consumes it")]
-    pub(crate) const ALL: [Self; 2] = [Self::NoIdentityOwned, Self::CompositionHosted];
-
     /// The closed vocabulary as the `serde` error names it.
     pub(crate) const fn vocabulary() -> &'static str {
         "no-identity-owned | composition-hosted"
@@ -1354,7 +1350,7 @@ mod tests {
         assert_eq!(declaration.roles(), &[Role::Product, Role::Runtime]);
         assert_eq!(
             identities.evidence("d2b-provider-fixture", Surface::Product).len(),
-1,
+            1,
             "the product identity carries its production evidence"
         );
         assert_eq!(
@@ -2081,7 +2077,7 @@ mod tests {
         let error = fixture.expect_refusal();
         assert!(
             error.contains("identity-without-role") && error.contains("product"),
- "the refusal names the surface whose role is missing:\n{error}"
+            "the refusal names the surface whose role is missing:\n{error}"
         );
     }
 
