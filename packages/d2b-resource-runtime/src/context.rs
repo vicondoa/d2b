@@ -4,6 +4,7 @@
 pub const MODULE_NAME: &str = "context";
 use std::any::Any;
 use std::cell::OnceCell;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -54,6 +55,19 @@ pub struct EffectCompleted {
 
 /// Minimal internal watch condition, evaluated by the target actor against
 /// its in-memory status (never the store, R12).
+///
+/// A condition is either LEVEL or EDGE, and the target actor answers the two
+/// differently:
+///
+/// - LEVEL ([`Self::Ready`]) answers whether the target is ready NOW. It is
+///   the only shape that may be satisfied on arrival, and so it is the only
+///   shape a registration cannot hold unconditionally: a target that already
+///   reports ready spends the registration the moment it lands.
+/// - EDGE ([`Self::ReadyChanged`], [`Self::ProjectionChanged`]) answers
+///   whether THIS transition moved the thing the condition names. No
+///   transition moves it, no arrival satisfies it, so a subscriber can hold
+///   one unconditionally and learns about every later change under a phase
+///   that never moves - including a readiness phase STOPPING.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WatchCondition {
     /// Satisfied when the watched resource's status reports ready.
@@ -64,6 +78,17 @@ pub enum WatchCondition {
     /// [`ResourceContext::get_view`] (the watch is the wake-up, the read is
     /// the proof). This is the seam readiness checks use.
     Ready,
+    /// Satisfied when the watched resource ENTERS or LEAVES `Ready`.
+    ///
+    /// [`Self::Ready`] cannot express the second half of that: a target that
+    /// already reports ready has the arrival answer spent before the
+    /// registration can stand, so a subscriber watching a ready target holds
+    /// nothing and is never told when the target stops being ready - a
+    /// degraded row that publishes no new projection (a lost target, a
+    /// refused operation) keeps reporting `Ready` and stays silent. This
+    /// condition is the other half, and it is never answered on arrival, so
+    /// the same subscriber can hold it for a ready target as well.
+    ReadyChanged,
     /// Named custom predicate; the target actor's driver supplies the
     /// predicate implementation by id.
     ///
@@ -71,6 +96,17 @@ pub enum WatchCondition {
     /// unsatisfied, so readiness is expressed with [`Self::Ready`] until the
     /// driver-supplied predicate hook lands (U6+).
     Custom(String),
+    /// Satisfied when the watched resource publishes a NEW `status.resource`
+    /// projection.
+    ///
+    /// A readiness phase cannot express a delivery downgrade: a relationship
+    /// whose endpoint was replaced, or whose authorization was withdrawn,
+    /// keeps reporting `Ready` while its evidence layer changes underneath.
+    /// This condition is how a dependent learns about that change (R21): the
+    /// target actor notifies on every transition that carries a projection
+    /// different from the one it published before, so the subscriber re-reads
+    /// the evidence instead of waiting for a phase that never changes.
+    ProjectionChanged,
 }
 
 /// Runtime-only watch id allocated by the target actor at registration.
@@ -94,9 +130,15 @@ pub struct WatchSatisfied {
 /// and register the watch in ONE mailbox handler:
 ///
 /// ```text
-/// if status matches condition { notify(subscriber, Satisfied) }
-/// else { watchers.insert(watch_id, ...) }
+/// if condition_is_level && condition_holds_now(status) {
+///     notify(subscriber, Satisfied)
+/// } else {
+///     watchers.insert(watch_id, ...)
+/// }
 /// ```
+///
+/// An EDGE condition is never satisfied there, because no transition is
+/// being evaluated: it holds from the first transition that moves it.
 ///
 /// Status transitions evaluate registered watches in the same handler. U3
 /// enforces this by construction inside `ResourceActor`; the shapes here
@@ -154,6 +196,29 @@ pub trait ManagerEndpoint: Send + Sync + 'static {
         registration: WatchRegistration,
     ) -> Result<WatchId, ResourceError>;
     async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError>;
+
+    /// Every committed row of `type_name` in `zone` (R18, R22).
+    ///
+    /// The completeness scope of a row with NO owner: an owner-scoped listing
+    /// answers an empty set for it without asking anyone, so the only scope
+    /// that can say what the Zone publishes for this consumer is the Zone
+    /// itself. Committed rows and not views: a reader names the rows it must
+    /// observe and reads each one through [`Self::view`] itself.
+    ///
+    /// The default refuses rather than answering an empty set. An empty set is
+    /// a STATEMENT - "the Zone holds no such row" - and a default that
+    /// returned one would let every endpoint that cannot carry the read mint a
+    /// launch with no delivery at all. Refusing leaves the read unproven, which
+    /// is what a plane that cannot answer it honestly is.
+    async fn list_zone_type(
+        &self,
+        _zone: &str,
+        _type_name: &str,
+    ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+        Err(ResourceError::ManagerRejected {
+            reason: "endpoint carries no zone-scoped row listing".to_owned(),
+        })
+    }
 
     /// Create a source-owned binding under the source controller's
     /// authenticated authority (U6, KTD2).
@@ -379,6 +444,26 @@ pub struct ResourceContext {
     /// owner uid. Drivers select their launch shape from it; `None` for
     /// roots and for rows whose owner row is not in this manager.
     owner_key: Option<crate::identity::ResourceKey>,
+    /// The committed target binding the manager resolved for this row (R19,
+    /// R29). It carries the exact execution target, the committed uid, and -
+    /// for a Guest-targeted row - the live session generation, so a driver
+    /// reaches the authenticated target session through the binding instead
+    /// of through a coarse handle that said nothing about authority.
+    target: Option<crate::target::TargetBinding>,
+    /// The internal-watch registrations this row holds that are still
+    /// standing in their target actor's mailbox, each mapped to the target
+    /// that holds it.
+    ///
+    /// This is the runtime's own record of what this row is subscribed to,
+    /// and it is COMPLETE: a registration leaves it in exactly two cases,
+    /// both of which this row is told about - the target notified on it
+    /// ([`Self::mark_watch_spent`], AE2) or the target's actor went away
+    /// ([`Self::mark_target_watches_lost`], spec section 16). Nothing else
+    /// ends a registration's life, so a driver never has to guess from
+    /// evidence whether it is still subscribed: a target pass can satisfy
+    /// every registration it holds and republish the very pair it published
+    /// before, which is exactly the case no comparison of evidence can read.
+    live_watches: HashMap<WatchId, ResourceKey>,
 }
 
 impl ResourceContext {
@@ -404,13 +489,50 @@ impl ResourceContext {
             status: None,
             status_projection: None,
             owner_key: None,
+            target: None,
+            live_watches: HashMap::new(),
         }
+    }
+
+    /// Carry this row's outstanding internal-watch registrations onto a
+    /// rebuilt context (spec change, generation move).
+    ///
+    /// The registrations live in the target actors' mailboxes, not in this
+    /// context, so a rebuild that forgot them would make every id this row
+    /// remembers read as spent and re-arm duplicates on top of registrations
+    /// that are still standing.
+    pub(crate) fn take_live_watches(&mut self) -> HashMap<WatchId, ResourceKey> {
+        std::mem::take(&mut self.live_watches)
+    }
+
+    /// Adopt the registrations carried onto a rebuilt context (the actor's
+    /// spec-change path).
+    pub(crate) fn with_live_watches(mut self, live: HashMap<WatchId, ResourceKey>) -> Self {
+        self.live_watches = live;
+        self
     }
 
     /// Attach the owning resource's key (manager-resolved).
     pub fn with_owner_key(mut self, owner_key: Option<crate::identity::ResourceKey>) -> Self {
         self.owner_key = owner_key;
         self
+    }
+
+    /// Attach the committed target binding (manager-resolved, U13).
+    pub fn with_target(mut self, target: crate::target::TargetBinding) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    /// The committed target binding this row realizes through.
+    ///
+    /// `None` only for a context assembled outside the resource actor (a unit
+    /// test driving a driver directly), where no target layer exists. A row
+    /// the manager committed always has one, including a Host-targeted row:
+    /// its binding reports [`TargetBinding::is_guest`] as `false` and the
+    /// driver runs its effects locally.
+    pub fn target(&self) -> Option<&crate::target::TargetBinding> {
+        self.target.as_ref()
     }
 
     /// The owning resource's key, when this resource is an owned child and
@@ -611,6 +733,41 @@ impl ResourceContext {
         self.manager.list_owned(self.row.uid).await
     }
 
+    /// Rows owned by this resource's OWNER (R8).
+    ///
+    /// A dependent derives what it requires from the committed declarations
+    /// its owner publishes, and those declarations are siblings: a session
+    /// owns the `Process` rows and the `Endpoint` rows together, so the
+    /// endpoints a process consumes are this row's siblings rather than its
+    /// children. The read is the existing owner-scoped listing applied to the
+    /// owner uid this row already carries, so it adds no new manager surface.
+    ///
+    /// `Vec::new()` for a row with no owner: a root row has no siblings. That
+    /// is what the listing can answer, and it is NOT a statement that nothing
+    /// publishes for this row - the Zone is, and [`Self::zone_rows`] is how a
+    /// reader asks it.
+    pub async fn owner_siblings(&mut self) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+        match self.row.owner_uid {
+            Some(owner) => self.manager.list_owned(owner).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Committed rows of `type_name` in this row's own Zone (R18, R22).
+    ///
+    /// The completeness scope for a row with no owner: a root Process is
+    /// admitted through the API or a Nix ingest rather than as a session child,
+    /// so its owner-scoped listing answers an empty set without asking anyone,
+    /// and only a Zone-scoped listing can say what the Zone publishes for it.
+    /// It is deliberately NOT the scope for an owned row, whose committed child
+    /// set is settled by its owner's own publication.
+    pub async fn zone_rows(
+        &mut self,
+        type_name: &str,
+    ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+        self.manager.list_zone_type(&self.row.key.zone, type_name).await
+    }
+
     /// Finalize every resource this one owns, children first (F3; owner
     /// directive 2026-09-11): the parent's `finalize` handler runs this before
     /// its own drain work, so no resource tears down ahead of what it owns.
@@ -654,16 +811,93 @@ impl ResourceContext {
         target: ResourceKey,
         condition: WatchCondition,
     ) -> Result<WatchId, ResourceError> {
-        self.manager
+        let watch = self
+            .manager
             .register_watch(
                 &self.row.key,
                 WatchRegistration {
-                    target,
+                    target: target.clone(),
                     condition,
                     notify: self.watch_notify.clone(),
                 },
             )
-            .await
+            .await?;
+        // The registration exists in the target actor's mailbox from here on,
+        // so this row records it - against that target - until the target
+        // notifies on it or this row releases it. See [`Self::watch_is_live`].
+        self.live_watches.insert(watch, target);
+        Ok(watch)
+    }
+
+    /// Release one internal watch this row registered ([`Self::watch`]).
+    ///
+    /// A runtime registration is one-shot - AE2 satisfies and REMOVES it - so
+    /// a driver that keeps one target subscribed across passes has to release
+    /// the registration it is replacing. Without this the target's watcher set
+    /// grows by one registration per pass and every later change on that
+    /// target is delivered once per spent registration. The manager's routing
+    /// record for the registration goes with it, so a release is also what
+    /// keeps one manager entry per row+target from outliving the row.
+    ///
+    /// Releasing is idempotent and answers `Ok` for an id that is already
+    /// gone: the target removed it (AE2), or this row released it before, and
+    /// in both cases the registration is not standing, which is what the
+    /// caller asked for. The only `Err` is a release the manager could not
+    /// be asked for at all.
+    pub async fn cancel_watch(&mut self, watch: WatchId) -> Result<(), ResourceError> {
+        self.manager.cancel_watch(watch).await?;
+        // Only a release that took is a release: the registration is gone from
+        // the target's mailbox, so it is no longer standing. A refused release
+        // leaves the id live and the caller its reason to retry.
+        self.live_watches.remove(&watch);
+        Ok(())
+    }
+
+    /// Whether `watch` is still standing in the target actor's mailbox.
+    ///
+    /// The answer is the runtime's own record, and it is complete: a
+    /// registration stops being live in exactly two cases, both of which this
+    /// row is told about. The target actor satisfied it (AE2) - the target
+    /// actor notifies this row, which reaches the actor as
+    /// [`crate::ResourceMsg::DependencySatisfied`] and is recorded by
+    /// [`Self::mark_watch_spent`] - or the target's actor went away and took
+    /// the registration with it, recorded by [`Self::mark_target_watches_lost`].
+    ///
+    /// So this answers exactly what a re-arm has to ask, and nothing else can:
+    /// evidence that reads back unchanged cannot tell a spent registration
+    /// from a standing one, because a target pass can satisfy every
+    /// registration it holds and republish the very projection it published
+    /// before.
+    pub fn watch_is_live(&self, watch: WatchId) -> bool {
+        self.live_watches.contains_key(&watch)
+    }
+
+    /// Record that the target satisfied one of this row's registrations.
+    ///
+    /// Called by the actor as it handles
+    /// [`crate::ResourceMsg::DependencySatisfied`], which is where the target
+    /// actor's notification enters this row's mailbox. The id stops being live
+    /// at exactly the moment the target removed it, so the driver's next pass
+    /// sees a spent registration and re-arms it (see [`Self::watch_is_live`]).
+    pub fn mark_watch_spent(&mut self, watch: WatchId) {
+        self.live_watches.remove(&watch);
+    }
+
+    /// Record that `target`'s actor is gone, so every registration this row
+    /// held on it died with that actor.
+    ///
+    /// Called by the actor as it handles
+    /// [`crate::ResourceMsg::DependencyChanged`], which the manager sends a
+    /// dependent when the target actor exits (R17, spec section 16). The
+    /// respawned actor starts with an EMPTY watcher set, so a row that still
+    /// read its old ids live would place nothing, hold registrations no target
+    /// has, and never be woken by that target again: the pass this message
+    /// triggers is the one chance to re-arm, and it must not read them live.
+    ///
+    /// Registrations on every OTHER target are untouched: their actors did not
+    /// go anywhere, and their records never had a reason to move.
+    pub fn mark_target_watches_lost(&mut self, target: &ResourceKey) {
+        self.live_watches.retain(|_, held| held != target);
     }
 
     /// Schedule exactly one reconcile after `after` (R13; spec section 32).
@@ -1107,6 +1341,10 @@ mod tests {
             subscriber: ResourceKey,
             reply: oneshot::Sender<Result<WatchId, ResourceError>>,
         },
+        CancelWatch {
+            watch: WatchId,
+            reply: oneshot::Sender<Result<(), ResourceError>>,
+        },
     }
 
     /// Channel endpoint stub implementing [`ManagerEndpoint`] over
@@ -1177,8 +1415,13 @@ mod tests {
             rx.await.map_err(|_| ResourceError::ManagerUnavailable("manager dropped the request".into()))?
         }
 
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerRejected { reason: "cancel_watch not exercised in-module".into() })
+        async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError> {
+            let (reply, rx) = oneshot::channel();
+            self.tx
+                .send(StubCall::CancelWatch { watch, reply })
+                .await
+                .map_err(|_| ResourceError::ManagerUnavailable("manager channel closed".into()))?;
+            rx.await.map_err(|_| ResourceError::ManagerUnavailable("manager dropped the request".into()))?
         }
     }
 
@@ -1651,6 +1894,80 @@ mod tests {
         assert_eq!(satisfied.watch, WatchId(5));
         assert_eq!(satisfied.target, ResourceKey::new("z", "Process", "worker-0"));
         stub.await.unwrap();
+    }
+
+    /// The registration is live from the moment it is placed until the target
+    /// speaks on it or this row releases it, and nothing else moves it.
+    ///
+    /// This is the seam a re-arm reads: evidence that reads back identical
+    /// cannot tell a spent registration from a standing one, because a target
+    /// pass satisfies the registration and republishes the very projection it
+    /// published before. A release the manager REFUSES leaves the id live,
+    /// because the registration is still in the target's mailbox.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_registration_is_live_until_the_target_notifies_or_this_row_releases_it() {
+        let (tx, mut rx) = mpsc::channel::<StubCall>(4);
+        let mut fixture = fixture(
+            test_row("z", "Volume", "data"),
+            ChannelEndpointStub::new(tx),
+            NullRequeue,
+            Arc::new(FailingDecoder),
+        );
+        let watched = ResourceKey::new("z", "Process", "worker-0");
+        let refused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let refused_stub = refused.clone();
+        let stub = tokio::spawn(async move {
+            while let Some(call) = rx.recv().await {
+                match call {
+                    StubCall::RegisterWatch { reply, .. } => {
+                        let _ = reply.send(Ok(WatchId(7)));
+                    }
+                    StubCall::CancelWatch { watch, reply } => {
+                        if refused_stub.load(Ordering::SeqCst) {
+                            let _ = reply.send(Err(ResourceError::ManagerRejected {
+                                reason: "release refused".into(),
+                            }));
+                        } else {
+                            let _ = reply.send(Ok(()));
+                            assert_eq!(watch, WatchId(7));
+                        }
+                    }
+                    other => panic!("unexpected call: {other:?}"),
+                }
+            }
+        });
+
+        let armed = fixture
+            .ctx
+            .watch(watched.clone(), WatchCondition::ProjectionChanged)
+            .await
+            .expect("the registration lands in the target's mailbox");
+        assert!(fixture.ctx.watch_is_live(armed), "a placed registration is standing");
+
+        fixture.ctx.mark_watch_spent(armed);
+        assert!(
+            !fixture.ctx.watch_is_live(armed),
+            "the target spoke: the registration is spent and the driver re-arms it"
+        );
+
+        let rearmed = fixture
+            .ctx
+            .watch(watched.clone(), WatchCondition::ProjectionChanged)
+            .await
+            .expect("the spent registration is replaced");
+        assert!(fixture.ctx.watch_is_live(rearmed));
+
+        refused.store(true, Ordering::SeqCst);
+        assert!(
+            fixture.ctx.cancel_watch(rearmed).await.is_err(),
+            "a refused release is reported as such"
+        );
+        assert!(
+            fixture.ctx.watch_is_live(rearmed),
+            "a refused release leaves the registration standing in the target"
+        );
+        stub.abort();
     }
 
     // -- Service driver context (U3, R7) --------------------------------------

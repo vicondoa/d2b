@@ -11,29 +11,36 @@
 //! source) and the family's effects service both read the same derivation.
 //!
 //! Every host connection the workers make is a typed `EndpointBinding`
-//! relationship over an exact `Endpoint` row ([`DisplayEndpointBinding`]),
-//! never a name, an environment variable, or a directory. The host proxy
-//! reaches the host compositor through the session's compositor Endpoint and
-//! no other socket; the guest frontend reaches the proxy through the proxy's
-//! own Endpoint. [`admit_display_endpoint`] is the one admission those
-//! relationships must pass before a helper may be used, and it re-derives the
-//! expected relationship rather than trusting an observed row.
+//! relationship over an exact `Endpoint` row, never a name, an environment
+//! variable, or a directory. The host proxy reaches the host compositor
+//! through the session's compositor Endpoint and no other socket; the guest
+//! frontend reaches the proxy through the proxy's own Endpoint. Those two
+//! relationships are the ONLY ones the display graph has, and they exist
+//! because each `Endpoint` row's own publication intent names its consumer -
+//! the `Endpoint` driver derives the canonical `EndpointBinding` row from
+//! that intent, and a session gates on the delivery those rows publish. The
+//! display graph keeps no second description of them: a slot table here would
+//! be a second authority that could name a different endpoint, consumer, or
+//! generation than the committed rows do.
 //!
 //! The derivation is pure: it builds payloads and references from the
 //! session's row identity and spec, and never touches host state.
+use std::collections::BTreeMap;
+use std::sync::RwLock;
 
 use d2b_contracts_resource::v3::{
-    BindingKey, BindingRealizationFacet, BindingRealizationSupport, BindingSlot, CanonicalJsonValue,
-    EndpointAttachmentKind, EndpointBindingRequest, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef,
-    ResourceUid, ZoneId, canonical_digest,
+    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef, ResourceUid, ZoneId,
+    canonical_digest,
     execution_policy::{BoundedText, BoundedToken, BudgetSpec},
     process::{EnvironmentClass, ExecutionSpec, ProcessClass, ProcessSpec, SandboxSpec, TelemetrySpec},
 };
 use d2b_core_controller::OwnedChildIntent;
 use d2b_provider_endpoint::endpoint::{
-    EndpointAttachmentPolicy, EndpointClass, EndpointConsumerPolicy, EndpointLifecyclePolicy,
-    EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport, EndpointVisibility,
+    EndpointAttachmentPolicy, EndpointBindingPublication, EndpointClass, EndpointConsumerPolicy,
+    EndpointLifecyclePolicy, EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport,
+    EndpointVisibility, RealizationIncarnation,
 };
+use d2b_provider_endpoint::{CommittedEndpointShape, EndpointPurposeVocabulary};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -48,14 +55,6 @@ pub const DISPLAY_RESTART_ANNOTATION: &str = "d2b.d2bus.org/restart-generation";
 /// the authorized `ExecutionPolicy` the helper's privileges were admitted
 /// under, if the session names one.
 pub const DISPLAY_EXECUTION_POLICY_ANNOTATION: &str = "d2b.d2bus.org/execution-policy";
-
-/// The stable consumer slot of the host proxy's admitted compositor
-/// connection.
-pub const COMPOSITOR_BINDING_SLOT: &str = "wayland-compositor";
-
-/// The stable consumer slot of the guest frontend's admitted proxy
-/// attachment.
-pub const PROXY_BINDING_SLOT: &str = "wayland-proxy";
 
 /// The bounded purpose of the admitted compositor connection when the session
 /// names no display of its own.
@@ -174,88 +173,6 @@ pub fn display_owned_child_intents(
     Ok(intents)
 }
 
-/// One admitted endpoint relationship of one display worker role.
-///
-/// The relationship is derived from the session's row identity and spec, so a
-/// consumer can only ever reach the exact endpoint this value names, in the
-/// declared attachment form, for the declared purpose.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DisplayEndpointBinding {
-    role: DisplayProcessRole,
-    source_ref: ResourceRef,
-    consumer_ref: ResourceRef,
-    request: EndpointBindingRequest,
-}
-
-impl DisplayEndpointBinding {
-    /// Return the worker role this relationship belongs to.
-    pub const fn role(&self) -> DisplayProcessRole {
-        self.role
-    }
-
-    /// Borrow the exact source Endpoint.
-    pub const fn source_ref(&self) -> &ResourceRef {
-        &self.source_ref
-    }
-
-    /// Borrow the exact consumer row.
-    pub const fn consumer_ref(&self) -> &ResourceRef {
-        &self.consumer_ref
-    }
-
-    /// Borrow the typed binding request.
-    pub const fn request(&self) -> &EndpointBindingRequest {
-        &self.request
-    }
-}
-
-/// Every endpoint relationship one session's workers require, in the family's
-/// preserved role order.
-pub fn display_endpoint_bindings(
-    session_uid: &ResourceUid,
-    spec: &WaylandSessionSpec,
-) -> Result<Vec<DisplayEndpointBinding>, WorkerEffectError> {
-    let mut bindings = Vec::with_capacity(2);
-    for role in [
-        DisplayProcessRole::HostProxy,
-        DisplayProcessRole::GuestFrontend,
-    ] {
-        let consumer_ref = durable_process_ref(session_uid, role)?;
-        let (source_ref, slot, attachment, purpose) = match role {
-            DisplayProcessRole::HostProxy => (
-                durable_compositor_endpoint_ref(session_uid)?,
-                COMPOSITOR_BINDING_SLOT,
-                EndpointAttachmentKind::Connect,
-                compositor_purpose(spec),
-            ),
-            DisplayProcessRole::GuestFrontend => (
-                durable_endpoint_ref(session_uid, DisplayProcessRole::HostProxy)?,
-                PROXY_BINDING_SLOT,
-                EndpointAttachmentKind::Attach,
-                PROXY_BINDING_PURPOSE,
-            ),
-        };
-        let slot = BindingSlot::parse(slot).map_err(|_| WorkerEffectError::LaunchRejected)?;
-        let purpose =
-            BoundedToken::parse(purpose).map_err(|_| WorkerEffectError::LaunchRejected)?;
-        let request = EndpointBindingRequest::new(
-            source_ref.clone(),
-            consumer_ref.clone(),
-            slot,
-            attachment,
-            purpose,
-        )
-        .map_err(|_| WorkerEffectError::LaunchRejected)?;
-        bindings.push(DisplayEndpointBinding {
-            role,
-            source_ref,
-            consumer_ref,
-            request,
-        });
-    }
-    Ok(bindings)
-}
-
 /// The bounded purpose the compositor connection is admitted for.
 ///
 /// A session may name its own display, which is one socket component: an
@@ -273,172 +190,6 @@ fn compositor_purpose(spec: &WaylandSessionSpec) -> &str {
 /// be reused by a later one.
 fn endpoint_fingerprint(base: &'static str, reconnect_generation: u64) -> String {
     format!("{base}-r{reconnect_generation}")
-}
-
-/// Decode one committed endpoint row's spec into the endpoint contract its
-/// relationships are evaluated against.
-///
-/// The row is decoded here because this crate owns the endpoint vocabulary:
-/// the consumer of a relationship must read the source's own contract, not
-/// its own idea of it.
-pub fn decode_endpoint_spec(
-    spec: &Value,
-) -> Result<EndpointSpec, WorkerEffectError> {
-    serde_json::from_value(spec.clone()).map_err(|_| WorkerEffectError::LaunchRejected)
-}
-
-/// One committed endpoint observation a caller hands to
-/// [`admit_display_endpoint`].
-///
-/// The observation is the committed `Endpoint` row plus the committed
-/// consumer row; nothing here carries a socket path, because the endpoint's
-/// locator stays private to its realization.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DisplayEndpointObservation<'a> {
-    /// The committed `Endpoint` row the relationship would consume.
-    pub spec: &'a EndpointSpec,
-    /// The committed generation of that endpoint row.
-    pub source_generation: u64,
-    /// The committed generation of the consumer row.
-    pub consumer_generation: u64,
-    /// The admitted `User` the committed consumer row runs as.
-    ///
-    /// A worker row admitted for another identity cannot consume this
-    /// session's endpoints: the relationship is bound to the session's own
-    /// User, not to whatever the consumer row happens to request.
-    pub consumer_user: Option<ResourceRef>,
-}
-
-/// Admit one observed endpoint relationship for one display worker role.
-///
-/// The relationship is re-derived from the session and compared with what was
-/// observed: the exact source endpoint, the exact consumer row, the declared
-/// purpose and source fingerprint bound to this session's reconnect
-/// generation, the source's own subject and operation allowlists, and the
-/// realization facets the transport supplies. A relationship over another
-/// socket, under another purpose, for another generation, or one whose source
-/// admits another subject, is refused rather than repaired.
-pub fn admit_display_endpoint(
-    zone: &ZoneId,
-    spec: &WaylandSessionSpec,
-    session_uid: &ResourceUid,
-    binding: &DisplayEndpointBinding,
-    observed: &DisplayEndpointObservation<'_>,
-    source_uid: &ResourceUid,
-    consumer_uid: &ResourceUid,
-) -> Result<DisplayEndpointAdmission, WorkerEffectError> {
-    let refused = || WorkerEffectError::LaunchRejected;
-    let consumer_ref = durable_process_ref(session_uid, binding.role)?;
-    if consumer_ref != *binding.consumer_ref()
-        || observed.source_generation == 0
-        || observed.source_generation != observed.consumer_generation
-        || observed.consumer_user.as_ref() != Some(spec.user_ref())
-    {
-        return Err(refused());
-    }
-    let (expected_producer, expected_purpose, expected_fingerprint) = match binding.role {
-        // The host compositor socket: its declared producer is the session's
-        // own execution target, and its purpose and fingerprint are this
-        // session's display name and reconnect generation.
-        DisplayProcessRole::HostProxy => (
-            spec.host_ref().clone(),
-            compositor_purpose(spec),
-            expected_compositor_fingerprint(spec),
-        ),
-        DisplayProcessRole::GuestFrontend => (
-            durable_process_ref(session_uid, DisplayProcessRole::HostProxy)?,
-            PROXY_BINDING_PURPOSE,
-            expected_proxy_fingerprint(spec),
-        ),
-    };
-    if observed.spec.producer_ref() != &expected_producer
-        || observed.spec.purpose().as_str() != expected_purpose
-        || observed.spec.service_fingerprint().map(BoundedText::as_str)
-            != Some(expected_fingerprint.as_str())
-        || observed.spec.lifecycle_policy() != EndpointLifecyclePolicy::RecycleWithProducer
-        || observed.spec.visibility() != EndpointVisibility::Owner
-    {
-        return Err(refused());
-    }
-    let required_operation = match binding.role {
-        DisplayProcessRole::HostProxy => EndpointOperation::Resolve,
-        DisplayProcessRole::GuestFrontend => EndpointOperation::Attach,
-    };
-    if !observed
-        .spec
-        .consumer_policy()
-        .admits_operation(required_operation)
-        || !observed
-            .spec
-            .consumer_policy()
-            .admits_subject(binding.consumer_ref())
-    {
-        return Err(refused());
-    }
-    // Target support: the attachment kind's realization facets must be ones the
-    // observed transport actually supplies, or the relationship is refused
-    // rather than approximated with a wider or narrower presentation.
-    let support = display_realization_support(observed);
-    if binding
-        .request()
-        .required_facets()
-        .iter()
-        .any(|facet| !support.realizes(*facet))
-    {
-        return Err(refused());
-    }
-    let key = binding
-        .request()
-        .key(zone.clone(), source_uid.clone(), consumer_uid.clone())
-        .map_err(|_| refused())?;
-    Ok(DisplayEndpointAdmission {
-        binding: binding.clone(),
-        key,
-        generation: observed.source_generation,
-    })
-}
-
-/// One admitted display endpoint relationship.
-///
-/// The admission is the exact identity of the relationship plus the row
-/// generation it was proved against: later evidence cannot reuse it for a
-/// different endpoint, consumer, purpose, or generation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DisplayEndpointAdmission {
-    binding: DisplayEndpointBinding,
-    key: BindingKey,
-    generation: u64,
-}
-
-impl DisplayEndpointAdmission {
-    /// Borrow the admitted relationship.
-    pub const fn binding(&self) -> &DisplayEndpointBinding {
-        &self.binding
-    }
-
-    /// Borrow the KTD3 identity of the admitted relationship.
-    pub const fn key(&self) -> &BindingKey {
-        &self.key
-    }
-
-    /// Return the committed row generation this admission was proved against.
-    pub const fn generation(&self) -> u64 {
-        self.generation
-    }
-}
-
-/// The realization facets the observed endpoint transport can supply.
-fn display_realization_support(
-    observed: &DisplayEndpointObservation<'_>,
-) -> BindingRealizationSupport {
-    BindingRealizationSupport::new(match observed.spec.transport() {
-        EndpointTransport::Unix | EndpointTransport::FdAttachment => vec![
-            BindingRealizationFacet::EndpointDescriptor,
-            BindingRealizationFacet::EndpointPathname,
-        ],
-        _ => vec![BindingRealizationFacet::EndpointDescriptor],
-    })
-    .unwrap_or_default()
 }
 
 /// The durable Process reference of one worker role: the session uid's
@@ -469,6 +220,48 @@ fn durable_endpoint_ref(
         durable_display_suffix(session_uid, role)
     );
     ResourceRef::parse(&rendered).map_err(|_| WorkerEffectError::LaunchRejected)
+}
+
+/// The durable Process reference of the session's host proxy worker.
+///
+/// The host proxy is the worker the session's other worker is ordered behind,
+/// so a reader that has to name it - the display aggregation, or a test that
+/// asserts which child stands where - derives the same name here rather than
+/// picking a child row out of a list.
+pub fn durable_host_proxy_process_ref(
+    session_uid: &ResourceUid,
+) -> Result<ResourceRef, WorkerEffectError> {
+    durable_process_ref(session_uid, DisplayProcessRole::HostProxy)
+}
+
+/// The durable Process reference of the session's guest frontend worker.
+pub fn durable_guest_frontend_process_ref(
+    session_uid: &ResourceUid,
+) -> Result<ResourceRef, WorkerEffectError> {
+    durable_process_ref(session_uid, DisplayProcessRole::GuestFrontend)
+}
+
+/// The durable Endpoint reference the session projects as its Wayland
+/// endpoint (R23).
+///
+/// This is the guest frontend's OWN cross-domain transport, not the first
+/// `Endpoint` child a list happens to yield and not the host proxy's private
+/// data carriage: it is the endpoint the frontend produces, it is the one the
+/// session's readiness is gated on, and it publishes no in-Zone relationship
+/// (R20). The name is derived from the session's own row identity, so the
+/// projection names the same row across restarts and across a reconnect.
+pub fn durable_wayland_endpoint_ref(
+    session_uid: &ResourceUid,
+) -> Result<ResourceRef, WorkerEffectError> {
+    durable_endpoint_ref(session_uid, DisplayProcessRole::GuestFrontend)
+}
+
+/// The durable Endpoint reference of the host proxy's private cross-domain
+/// carriage: the source the guest frontend's own attachment consumes.
+pub fn durable_host_proxy_endpoint_ref(
+    session_uid: &ResourceUid,
+) -> Result<ResourceRef, WorkerEffectError> {
+    durable_endpoint_ref(session_uid, DisplayProcessRole::HostProxy)
 }
 
 /// The durable Endpoint reference of the session's host compositor socket.
@@ -517,6 +310,26 @@ fn durable_endpoint_payload(
     producer_ref: &ResourceRef,
     generation: u64,
 ) -> Result<Vec<u8>, WorkerEffectError> {
+    endpoint_envelope(
+        zone,
+        session_ref,
+        &durable_endpoint_ref(session_uid, role)?,
+        worker_endpoint_spec(session_uid, spec, role, producer_ref)?,
+        generation,
+    )
+}
+
+/// The committed shape of one worker role's private Endpoint row.
+///
+/// This is the ONE derivation of that shape: the durable payload the session
+/// commits and the shape this Provider admits into the Endpoint plane are
+/// the same value, so the two can never drift (KTD5).
+fn worker_endpoint_spec(
+    session_uid: &ResourceUid,
+    spec: &WaylandSessionSpec,
+    role: DisplayProcessRole,
+    producer_ref: &ResourceRef,
+) -> Result<EndpointSpec, WorkerEffectError> {
     let (endpoint_class, transport, purpose, fingerprint) = match role {
         DisplayProcessRole::HostProxy => (
             EndpointClass::Data,
@@ -531,47 +344,56 @@ fn durable_endpoint_payload(
             expected_frontend_fingerprint(spec),
         ),
     };
-    // The proxy's endpoint is consumed by the guest frontend row; the
-    // frontend's own endpoint has no in-Zone consumer, so it stays
-    // unconstrained rather than naming a subject that does not exist yet.
-    let allowed_subjects = match role {
+    // Publication intent and authorization are separate axes (KTD4). The proxy's
+    // endpoint is PUBLISHED to exactly one subject - the session's guest
+    // frontend row - and that is the only relationship derived from it. The
+    // frontend's own endpoint publishes NOTHING: it gates the session's
+    // aggregate readiness, and there is no in-Zone consumer for it to deliver
+    // to (R20), so naming a subject here would invent one.
+    let published_subjects = match role {
         DisplayProcessRole::HostProxy => vec![durable_process_ref(
             session_uid,
             DisplayProcessRole::GuestFrontend,
         )?],
         DisplayProcessRole::GuestFrontend => Vec::new(),
     };
+    let allowed_subjects = published_subjects.clone();
     let allowed_operations = match role {
         DisplayProcessRole::HostProxy => {
             vec![EndpointOperation::Attach, EndpointOperation::Resolve]
         }
         DisplayProcessRole::GuestFrontend => vec![EndpointOperation::Resolve],
     };
-    let endpoint_spec = EndpointSpec::new(
-        display_provider_ref()?,
-        producer_ref.clone(),
-        endpoint_class,
-        transport,
-        BoundedToken::parse(purpose).map_err(|_| WorkerEffectError::LaunchRejected)?,
-        Some(BoundedText::parse(fingerprint).map_err(|_| WorkerEffectError::LaunchRejected)?),
-        EndpointLocality::CrossDomain,
-        EndpointVisibility::Owner,
-        EndpointAttachmentPolicy::new(
-            matches!(role, DisplayProcessRole::HostProxy),
-            u16::from(matches!(role, DisplayProcessRole::HostProxy)),
-        )
-        .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        EndpointConsumerPolicy::new(allowed_subjects, Vec::new(), allowed_operations)
+    Ok(
+        EndpointSpec::new(
+            display_provider_ref()?,
+            producer_ref.clone(),
+            endpoint_class,
+            transport,
+            BoundedToken::parse(purpose).map_err(|_| WorkerEffectError::LaunchRejected)?,
+            Some(BoundedText::parse(fingerprint).map_err(|_| WorkerEffectError::LaunchRejected)?),
+            EndpointLocality::CrossDomain,
+            EndpointVisibility::Owner,
+            EndpointAttachmentPolicy::new(
+                matches!(role, DisplayProcessRole::HostProxy),
+                u16::from(matches!(role, DisplayProcessRole::HostProxy)),
+            )
             .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        EndpointLifecyclePolicy::RecycleWithProducer,
-    )
-    .map_err(|_| WorkerEffectError::LaunchRejected)?;
-    endpoint_envelope(
-        zone,
-        session_ref,
-        &durable_endpoint_ref(session_uid, role)?,
-        endpoint_spec,
-        generation,
+            EndpointConsumerPolicy::new(allowed_subjects, Vec::new(), allowed_operations)
+                .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            EndpointLifecyclePolicy::RecycleWithProducer,
+        )
+        .map_err(|_| WorkerEffectError::LaunchRejected)?
+        // An empty subject list is the `none` class, not an empty `named` list:
+        // "publishes nothing" and "publishes to nobody I listed" are the same
+        // commitment here, and spelling it as `none` keeps the guest frontend's
+        // endpoint honest about having no in-Zone relationship at all (R20).
+        .with_binding_publication(if published_subjects.is_empty() {
+            EndpointBindingPublication::None
+        } else {
+            EndpointBindingPublication::named(published_subjects)
+                .map_err(|_| WorkerEffectError::LaunchRejected)?
+        }),
     )
 }
 
@@ -585,34 +407,395 @@ fn durable_compositor_endpoint_payload(
     spec: &WaylandSessionSpec,
     generation: u64,
 ) -> Result<Vec<u8>, WorkerEffectError> {
-    let proxy_ref = durable_process_ref(session_uid, DisplayProcessRole::HostProxy)?;
-    let endpoint_spec = EndpointSpec::new(
-        display_provider_ref()?,
-        spec.host_ref().clone(),
-        EndpointClass::Transport,
-        EndpointTransport::Unix,
-        BoundedToken::parse(compositor_purpose(spec))
-            .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        Some(
-            BoundedText::parse(expected_compositor_fingerprint(spec))
-                .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        ),
-        EndpointLocality::CrossDomain,
-        EndpointVisibility::Owner,
-        EndpointAttachmentPolicy::new(false, 0)
-            .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        EndpointConsumerPolicy::new(vec![proxy_ref], Vec::new(), vec![EndpointOperation::Resolve])
-            .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        EndpointLifecyclePolicy::RecycleWithProducer,
-    )
-    .map_err(|_| WorkerEffectError::LaunchRejected)?;
     endpoint_envelope(
         zone,
         session_ref,
         &durable_compositor_endpoint_ref(session_uid)?,
-        endpoint_spec,
+        compositor_endpoint_spec(session_uid, spec)?,
         generation,
     )
+}
+
+/// The committed shape of the session's host compositor Endpoint row.
+///
+/// This is the ONE derivation of that shape: the durable payload the session
+/// commits and the shape this Provider admits into the Endpoint plane are
+/// the same value, so the two can never drift (KTD5).
+fn compositor_endpoint_spec(
+    session_uid: &ResourceUid,
+    spec: &WaylandSessionSpec,
+) -> Result<EndpointSpec, WorkerEffectError> {
+    let proxy_ref = durable_process_ref(session_uid, DisplayProcessRole::HostProxy)?;
+    Ok(
+        EndpointSpec::new(
+            display_provider_ref()?,
+            spec.host_ref().clone(),
+            EndpointClass::Transport,
+            EndpointTransport::Unix,
+            BoundedToken::parse(compositor_purpose(spec))
+                .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            Some(
+                BoundedText::parse(expected_compositor_fingerprint(spec))
+                    .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            ),
+            EndpointLocality::CrossDomain,
+            EndpointVisibility::Owner,
+            EndpointAttachmentPolicy::new(false, 0)
+                .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            EndpointConsumerPolicy::new(
+                vec![proxy_ref.clone()],
+                Vec::new(),
+                vec![EndpointOperation::Resolve],
+            )
+            .map_err(|_| WorkerEffectError::LaunchRejected)?,
+            EndpointLifecyclePolicy::RecycleWithProducer,
+        )
+        .map_err(|_| WorkerEffectError::LaunchRejected)?
+        // The compositor socket is published to exactly one consumer: this
+        // session's host proxy row. Nothing else reaches it.
+        .with_binding_publication(EndpointBindingPublication::named(vec![proxy_ref]).map_err(
+            |_| WorkerEffectError::LaunchRejected,
+        )?),
+    )
+}
+
+/// The endpoint shapes this Provider commits for one display session.
+///
+/// The roles are the Provider's own vocabulary. The Endpoint plane never names
+/// them: it asks which shape a committed row is, and this Provider answers
+/// with its own exact match (KTD5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayEndpointRole {
+    /// The session's host compositor socket: a transport the session's Host
+    /// execution target resolves privately, reached by exactly one consumer.
+    Compositor,
+    /// The host proxy's private data carriage: the cross-domain attachment the
+    /// session's guest frontend consumes.
+    HostProxy,
+    /// The guest frontend's own cross-domain transport, published to nobody.
+    GuestFrontend,
+}
+
+impl DisplayEndpointRole {
+    /// The realization the Endpoint plane serves this shape behind.
+    ///
+    /// Published because the mapping is this Provider's own vocabulary and a
+    /// reader of a committed row needs to know which evidence stands behind
+    /// it; the admission answers with the same value.
+    pub const fn realization(self) -> d2b_provider_endpoint::EndpointRealization {
+        use d2b_provider_endpoint::EndpointRealization as Realization;
+        match self {
+            // The compositor socket is realized behind the daemon's private
+            // observation of it; both worker shapes are realized behind the
+            // live row of the worker this Provider launched.
+            Self::Compositor => Realization::HostSocketTransport,
+            Self::HostProxy => Realization::WorkerDataAttachment,
+            Self::GuestFrontend => Realization::WorkerCrossDomainTransport,
+        }
+    }
+}
+
+/// The endpoint shapes this Provider has committed, keyed by the producer
+/// each one is realized behind (U5, KTD5).
+///
+/// The vocabulary is a registry rather than a single session's answer because
+/// the Endpoint driver asks about one committed row at a time and a Zone
+/// serves more than one display session. Each entry holds the shape the
+/// Provider committed in full, so the admission is an exact comparison: a
+/// committed row that differs from the committed shape on the provider
+/// reference, the producer, the class, the transport, the purpose, the
+/// locality, the visibility, the lifecycle, the reconnect fingerprint, the
+/// consumer policy, the attachment posture, or the publication intent is
+/// simply not a shape this Provider commits, and the Endpoint driver refuses
+/// it terminally.
+///
+/// The committed shapes are the SAME values the durable child rows are built
+/// from, so the row this Provider commits and the shape this Provider admits
+/// cannot drift apart.
+///
+/// # Wiring
+///
+/// This vocabulary is the display half of the Endpoint family's provider
+/// seam: the display Provider owns the shapes it commits, so its own
+/// vocabulary is what admits them, and nothing else decides whether a
+/// committed display `Endpoint` row is one this Provider recognizes. One
+/// session's answer is [`DisplayEndpointVocabulary`]; a Zone's whole answer is
+/// [`SharedDisplayEndpointVocabulary`].
+#[derive(Debug, Clone, Default)]
+pub struct DisplayEndpointVocabulary {
+    committed: BTreeMap<String, (EndpointSpec, CommittedEndpointShape)>,
+}
+
+impl DisplayEndpointVocabulary {
+    /// Commit the three endpoint shapes of one admitted session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkerEffectError::LaunchRejected`] when the session's own
+    /// durable derivation refuses, which is the same answer the durable child
+    /// rows would have given.
+    pub fn for_session(
+        session_uid: &ResourceUid,
+        spec: &WaylandSessionSpec,
+    ) -> Result<Self, WorkerEffectError> {
+        Self::default().with_session(session_uid, spec)
+    }
+
+    /// Commit another session's shapes into this vocabulary.
+    ///
+    /// # Errors
+    ///
+    /// The refusals [`Self::for_session`] reports.
+    pub fn with_session(
+        mut self,
+        session_uid: &ResourceUid,
+        spec: &WaylandSessionSpec,
+    ) -> Result<Self, WorkerEffectError> {
+        let reconnect_generation = spec.reconnect_generation();
+        let proxy_ref = durable_process_ref(session_uid, DisplayProcessRole::HostProxy)?;
+        let frontend_ref = durable_process_ref(session_uid, DisplayProcessRole::GuestFrontend)?;
+        let committed = [
+            (
+                DisplayEndpointRole::Compositor,
+                compositor_endpoint_spec(session_uid, spec)?,
+            ),
+            (
+                DisplayEndpointRole::HostProxy,
+                worker_endpoint_spec(
+                    session_uid,
+                    spec,
+                    DisplayProcessRole::HostProxy,
+                    &proxy_ref,
+                )?,
+            ),
+            (
+                DisplayEndpointRole::GuestFrontend,
+                worker_endpoint_spec(
+                    session_uid,
+                    spec,
+                    DisplayProcessRole::GuestFrontend,
+                    &frontend_ref,
+                )?,
+            ),
+        ];
+        for (role, endpoint) in committed {
+            // The reconnect generation travels with the shape: the shape is
+            // admitted only while its fingerprint is the one this session's
+            // currently authenticated generation mints, and the Endpoint
+            // driver's incarnation derivation is bounded by that same number.
+            self.committed.insert(
+                endpoint.producer_ref().to_canonical_string(),
+                (
+                    endpoint,
+                    CommittedEndpointShape::new(role.realization(), reconnect_generation),
+                ),
+            );
+        }
+        Ok(self)
+    }
+
+    /// The shape this Provider commits for `spec`, matched in full.
+    fn committed_shape(&self, spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
+        self.committed
+            .get(&spec.producer_ref().to_canonical_string())
+            .filter(|(committed, _)| committed == spec)
+            .map(|(_, shape)| *shape)
+    }
+}
+
+impl EndpointPurposeVocabulary for DisplayEndpointVocabulary {
+    fn committed_endpoint_shape(&self, spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
+        self.committed_shape(spec)
+    }
+}
+
+/// The Zone-wide vocabulary the Endpoint family's provider seam reads in the
+/// production composition (KTD5).
+///
+/// A Zone serves more than one display session and the Endpoint driver asks
+/// about one committed row at a time, so the object a composition installs is
+/// a registry: every admitted session contributes the shapes this Provider
+/// committed for it, and a row is admitted only when one of them matches it in
+/// full. The comparison, the constants, and the shapes are all this crate's
+/// own - the seam carries no display type into the Endpoint family, which only
+/// asks the question and takes the one exact verdict.
+///
+/// # Re-commit replaces a session's shapes
+///
+/// A session's entry is keyed by its own row uid, so re-admitting a session -
+/// after its reconnect generation moved, or after anything else in its spec
+/// changed - REPLACES the shapes it committed rather than adding to them. A
+/// row still carrying an earlier generation's fingerprint is therefore not
+/// admitted once the session moved on, which is what keeps a replaced
+/// session's shape out of the admission set (R15).
+///
+/// # Concurrency
+///
+/// The registry is written on the session admission path and read on the
+/// Endpoint driver's synchronous admission path, so it is guarded by a
+/// read-write lock. Both sides are short critical sections over an in-memory
+/// map, and neither holds its guard across a suspension point - there is no
+/// await inside either - so no task is ever parked holding one. The only wait
+/// either side can meet is the other side's whole section, over a map holding
+/// one entry per admitted session.
+///
+/// # Retention
+///
+/// A session's shapes stay until the same uid commits again. A removed
+/// session's rows are removed with it, so nothing can ask about those shapes;
+/// what the registry retains for them is three specs and no answer.
+#[derive(Debug, Default)]
+pub struct SharedDisplayEndpointVocabulary {
+    sessions: RwLock<BTreeMap<String, DisplayEndpointVocabulary>>,
+}
+
+impl SharedDisplayEndpointVocabulary {
+    /// An empty registry: no session's shapes are committed yet, so nothing is
+    /// admitted.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Commit one admitted session's three endpoint shapes, replacing whatever
+    /// that same session uid committed before.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkerEffectError::LaunchRejected`] when the session's own
+    /// durable derivation refuses, which is the same answer the durable child
+    /// rows would have given - and the registry is left untouched, so a session
+    /// that cannot derive its shapes never displaces the ones it did commit.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn commit_session(
+        &self,
+        session_uid: &ResourceUid,
+        spec: &WaylandSessionSpec,
+    ) -> Result<(), WorkerEffectError> {
+        // Derived before the lock is taken: a session that cannot derive its
+        // own shapes must not be able to displace what it committed before.
+        let committed = DisplayEndpointVocabulary::for_session(session_uid, spec)?;
+        let mut sessions = self
+            .sessions
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sessions.insert(session_uid.as_str().to_owned(), committed);
+        Ok(())
+    }
+}
+
+impl EndpointPurposeVocabulary for SharedDisplayEndpointVocabulary {
+    /// The one exact shape any admitted session committed for `spec`.
+    ///
+    /// The guard is held across the map walk and released before this returns,
+    /// and no await sits between acquiring and releasing it, so no task can be
+    /// parked holding one.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    fn committed_endpoint_shape(&self, spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
+        let sessions = self
+            .sessions
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sessions
+            .values()
+            .find_map(|committed| committed.committed_shape(spec))
+    }
+}
+
+/// The display Provider's answer on the Endpoint family's provider seam
+/// (KTD5).
+///
+/// The Endpoint family never names this type: it holds the trait object, asks
+/// which shape a committed row is, and takes this Provider's one exact
+/// verdict. The match itself is [`DisplayEndpointVocabulary`]'s, over the
+/// shapes this Provider derived for the sessions committed here.
+impl d2b_provider_endpoint::CommittedEndpointShapeSource for SharedDisplayEndpointVocabulary {
+    fn committed_endpoint_shape(&self, spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
+        EndpointPurposeVocabulary::committed_endpoint_shape(self, spec)
+    }
+}
+
+/// The canonical `EndpointBinding` rows one committed display `Endpoint` row
+/// publishes (KTD4, R16, R20).
+///
+/// This asks the Endpoint family what a committed display endpoint row
+/// publishes rather than describing the relationship here again: publication
+/// intent names the consumer, the row's own operation allowlist and
+/// attachment capacity decide how that consumer reaches it, and the delivery
+/// slot is a function of the endpoint's own row identity. The `Endpoint`
+/// driver mints the committed rows from this same derivation, so the row a
+/// reader gates on and the row the actor committed are the same name by
+/// construction - a slot table kept beside them could only ever disagree.
+///
+/// The guest frontend's own endpoint publishes nothing, so it derives no row
+/// here: it gates the session's aggregate readiness instead, and inventing a
+/// consumer for it would commit a relationship no row backs.
+///
+/// # Errors
+///
+/// Returns [`WorkerEffectError::LaunchRejected`] when the committed row
+/// declares a delivery the Endpoint family refuses to derive a row for, or
+/// when the derived row name is not a canonical reference.
+pub fn display_canonical_bindings(
+    zone: &ZoneId,
+    endpoint_ref: &ResourceRef,
+    spec: &EndpointSpec,
+) -> Result<Vec<ResourceRef>, WorkerEffectError> {
+    let deliveries = d2b_provider_endpoint::declared_endpoint_bindings(zone, spec, endpoint_ref)
+        .map_err(|_| WorkerEffectError::LaunchRejected)?;
+    d2b_provider_endpoint::canonical_binding_rows(zone, spec, endpoint_ref, &deliveries)
+        .map_err(|_| WorkerEffectError::LaunchRejected)?
+        .iter()
+        .map(|row| {
+            ResourceRef::parse(&format!(
+                "{}/{name}",
+                d2b_provider_endpoint::ENDPOINT_BINDING_TYPE_NAME,
+                name = row.name().as_str(),
+            ))
+            .map_err(|_| WorkerEffectError::LaunchRejected)
+        })
+        .collect()
+}
+
+/// Whether one published `EndpointBinding` layer proves a DELIVERED
+/// relationship for a row at `generation` and at the realization incarnation
+/// the owning `Endpoint` row currently holds (R20, AE14).
+///
+/// The published layer is the relationship actor's own redacted evidence, so
+/// it is read through the Endpoint family's own projection parser rather
+/// than matched as loose JSON here. Only the closed `delivered` state at the
+/// row's own current generation proves anything: a replaced endpoint, an
+/// undelivered row, a draining row, and a layer this reader cannot parse are
+/// all the same answer - the relationship is not standing - because a session
+/// that cannot prove its delivery is not usable.
+///
+/// The second half is the Endpoint family's own same-incarnation property
+/// ([`d2b_provider_endpoint::BindingDeliveryProjection::proves_delivery`]),
+/// not a second comparison invented here: `incarnation` is the token the
+/// owning `Endpoint` row's own readiness publishes for its current row
+/// generation, and the grant this relationship reports is made over ONE exact
+/// realization. Once the endpoint has re-realized, its token is a different
+/// one and a delivery still standing at the right row generation is evidence
+/// about the incarnation that replaced it - so the gate answers `false` until
+/// the relationship actor republishes against the current token (R17, KTD8).
+pub fn display_binding_delivered(layer: Option<&Value>, generation: u64, incarnation: &str) -> bool {
+    let Some(evidence) =
+        layer.and_then(d2b_provider_endpoint::BindingDeliveryProjection::from_projection)
+    else {
+        return false;
+    };
+    let Ok(current) =
+        serde_json::from_value::<RealizationIncarnation>(Value::String(incarnation.to_owned()))
+    else {
+        return false;
+    };
+    evidence.proves_delivery(&current)
+        && matches!(
+            evidence,
+            d2b_provider_endpoint::BindingDeliveryProjection::Delivered {
+                generation: delivered,
+                ..
+            } if delivered == generation
+        )
 }
 
 /// The display Provider reference the session's endpoint rows declare.
@@ -865,6 +1048,33 @@ pub fn wayland_session_resource_projection(
 mod tests {
     use super::*;
 
+    fn zone() -> ZoneId {
+        ZoneId::parse("work").expect("zone")
+    }
+
+    fn session_ref() -> ResourceRef {
+        ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
+            .expect("session ref")
+    }
+
+    fn session_uid() -> ResourceUid {
+        ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").expect("session uid")
+    }
+
+    fn session_spec() -> WaylandSessionSpec {
+        WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").expect("guest"),
+            ResourceRef::parse("Host/host-system").expect("host"),
+            ResourceRef::parse("User/alice").expect("user"),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/default")
+                .expect("policy"),
+            crate::DisplayIdentity::new("work", "#112233", "#223344", "#334455")
+                .expect("identity"),
+            true,
+        )
+        .expect("session spec")
+    }
+
     /// The session's durable child set: two Process rows and two Endpoint
     /// rows, owned by the session, carrying no host socket vocabulary.
     #[test]
@@ -922,5 +1132,111 @@ mod tests {
                     && !value.to_string().contains("NIRI_SOCKET")
             );
         }
+    }
+
+    /// The display graph still derives its two canonical `EndpointBinding`
+    /// rows from PUBLICATION INTENT alone (KTD4, R16).
+    ///
+    /// This is the regression guard for the cutover: publication intent
+    /// defaults to `none`, so an emitter that forgot to declare it would
+    /// silently derive no relationship at all. The two relationships this
+    /// session really has - the host proxy consuming the compositor socket,
+    /// and the guest frontend consuming the proxy's cross-domain endpoint -
+    /// are derived here through the source's own derivation, and the guest
+    /// frontend's own endpoint derives none because it gates aggregate
+    /// readiness without an in-Zone consumer (R20).
+    #[test]
+    fn display_publication_intent_derives_exactly_the_two_real_relationships() {
+        let zone = zone();
+        let session_uid = session_uid();
+        let spec = session_spec();
+        let intents =
+            display_owned_child_intents(&zone, &session_ref(), &session_uid, &spec, 4)
+                .expect("display child intents");
+
+        let mut derived: Vec<(String, String)> = Vec::new();
+        for intent in intents {
+            if intent.target().resource_type().as_str() != "Endpoint" {
+                continue;
+            }
+            let value: serde_json::Value =
+                serde_json::from_slice(intent.canonical_resource()).expect("child resource");
+            let endpoint_ref = intent.target().clone();
+            let decoded: EndpointSpec =
+                serde_json::from_value(value["spec"].clone()).expect("endpoint spec");
+            let deliveries = d2b_provider_endpoint::declared_endpoint_bindings(
+                &zone,
+                &decoded,
+                &endpoint_ref,
+            )
+            .expect("the source derives its relationships");
+            for delivery in deliveries {
+                derived.push((
+                    endpoint_ref.name().as_str().to_owned(),
+                    delivery.consumer().as_ref().to_canonical_string(),
+                ));
+            }
+        }
+        derived.sort();
+
+        let compositor = durable_compositor_endpoint_ref(&session_uid)
+            .expect("compositor endpoint reference");
+        let proxy_endpoint = durable_endpoint_ref(&session_uid, DisplayProcessRole::HostProxy)
+            .expect("proxy endpoint reference");
+        let frontend = durable_process_ref(&session_uid, DisplayProcessRole::GuestFrontend)
+            .expect("frontend process reference");
+        let proxy = durable_process_ref(&session_uid, DisplayProcessRole::HostProxy)
+            .expect("proxy process reference");
+        let mut expected = vec![
+            (compositor.name().as_str().to_owned(), proxy.to_canonical_string()),
+            (proxy_endpoint.name().as_str().to_owned(), frontend.to_canonical_string()),
+        ];
+        expected.sort();
+        derived.sort();
+        assert_eq!(
+            derived, expected,
+            "the session derives exactly the host proxy's compositor relationship \
+             and the guest frontend's proxy relationship, from publication intent"
+        );
+    }
+
+    /// The guest frontend's own endpoint publishes nothing.
+    ///
+    /// It gates the session's aggregate readiness and has no in-Zone consumer,
+    /// so an endpoint that named one would invent a relationship no row
+    /// backs (R20).
+    #[test]
+    fn the_frontend_endpoint_publishes_no_relationship() {
+        let zone = zone();
+        let uid = session_uid();
+        let spec = session_spec();
+        let endpoint_ref = durable_endpoint_ref(&uid, DisplayProcessRole::GuestFrontend)
+            .expect("frontend endpoint reference");
+        let payload = durable_endpoint_payload(
+            &zone,
+            &session_ref(),
+            &uid,
+            &spec,
+            DisplayProcessRole::GuestFrontend,
+            &durable_process_ref(&uid, DisplayProcessRole::GuestFrontend)
+                .expect("frontend process reference"),
+            4,
+        )
+        .expect("frontend endpoint payload");
+        let value: serde_json::Value =
+            serde_json::from_slice(&payload).expect("endpoint envelope");
+        let decoded: EndpointSpec =
+            serde_json::from_value(value["spec"].clone()).expect("endpoint spec");
+        assert!(
+            decoded.binding_publication().is_none(),
+            "the guest frontend's endpoint publishes nothing, which is distinct \
+             from an unconstrained consumer policy"
+        );
+        assert!(
+            d2b_provider_endpoint::declared_endpoint_bindings(&zone, &decoded, &endpoint_ref)
+                .expect("the source derives its relationships")
+                .is_empty(),
+            "and therefore derives no binding row"
+        );
     }
 }

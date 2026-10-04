@@ -508,6 +508,47 @@ impl TargetBinding {
         self.assignment.target().guest()
     }
 
+    /// Whether this row realizes through a Guest target.
+    ///
+    /// A Host-targeted row runs its effects locally; a Guest-targeted row
+    /// carries its whole lifecycle over the authenticated ComponentSession.
+    pub const fn is_guest(&self) -> bool {
+        matches!(self.assignment.target(), ResolvedTarget::Guest(_))
+    }
+
+    /// The exact Guest identity this binding resolves to, when it has one.
+    ///
+    /// The reference is the commitment every frame of the session carries:
+    /// a request naming any other Guest is refused by the target, so a driver
+    /// that needs to name the target reads it here rather than composing one.
+    pub fn guest_reference(&self) -> Option<&TargetRef> {
+        self.guest().map(GuestTargetHandle::reference)
+    }
+
+    /// The guest target's live session generation right now.
+    ///
+    /// The assignment records the generation it was bound under, which is a
+    /// snapshot; this reads the directory instead. A reconnect makes this
+    /// newer, and a caller that knows the bound generation learns from the
+    /// difference that its binding no longer speaks for the live session and
+    /// must re-adopt before it acts (F5).
+    pub fn live_generation(&self) -> Option<u64> {
+        self.guest_reference().and_then(|reference| self.directory.live_generation(reference))
+    }
+
+    /// The Host-zone resource this assignment binds.
+    pub const fn source(&self) -> &ResourceKey {
+        self.assignment.source()
+    }
+
+    /// The session generation this assignment was bound under.
+    ///
+    /// This is the snapshot, unlike [`Self::live_generation`], which reads
+    /// the directory for what is live now.
+    pub const fn session_generation(&self) -> Option<u64> {
+        self.assignment.session_generation()
+    }
+
     /// Realize (create or update) the target-local instance through the live
     /// guest session. The spec is this driver's target-local shape; the host
     /// resolved it and the target applies exactly it.
@@ -761,6 +802,25 @@ impl TargetDirectory {
                 (None, None) => TargetAvailability::Unknown,
             },
         }
+    }
+
+    /// The session generation of one guest target that is live right now.
+    ///
+    /// This is the only way a holder of a binding learns that its target
+    /// reconnected: an assignment records the generation it was bound under,
+    /// so without this read a reconnect is indistinguishable from an
+    /// unchanged session (R21, F5). Synchronous via the non-blocking
+    /// `try_lock`; a collision reports `None` fail-closed, which every caller
+    /// already reads as "no session".
+    pub fn live_generation(&self, guest: &TargetRef) -> Option<u64> {
+        let Ok(state) = self.inner.try_lock() else {
+            return None;
+        };
+        state
+            .guests
+            .get(guest)
+            .and_then(|record| record.live.as_ref())
+            .map(|live| live.session_generation)
     }
 
     fn new_guest_record() -> GuestRecord {

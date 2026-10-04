@@ -1,5 +1,3 @@
 {
-  "provider": "config-nixos",
-  "providerRef": "Provider/config-nixos",
   "services": ["d2b.config-nixos.v3"]
 }

@@ -1,5 +1,4 @@
 {
   "crate": "d2b-provider-device-gpu",
-  "provider": "device-gpu",
   "services": []
 }

@@ -757,7 +757,7 @@ in
     ];
   };
 
-  "provider-catalog/closed-26-row-matrix" = {
+  "provider-catalog/closed-product-matrix" = {
     expr = {
       rowCount = builtins.length shape.providerMatrix;
       idCount = builtins.length shape.providerIds;
@@ -767,8 +767,14 @@ in
         builtins.length (lib.unique shape.providerIds)
         == builtins.length shape.providerIds;
       bootstrapIds = shape.fixedBootstrapProviderIds;
-      bootstrapRows = map (row: row.provider)
+      bootstrapIdsMatchRows = shape.fixedBootstrapProviderIds == map (row: row.provider)
         (lib.filter (row: row.bootstrap) shape.providerMatrix);
+      # A runtime-only family is registered by the daemon and is not product
+      # packaging; a product-only family is the other way round. The
+      # identities themselves come from the per-crate identity authority, so
+      # the catalog cannot carry either one by accident.
+      endpointInProduct = builtins.elem "endpoint" shape.providerIds;
+      deviceTpmInProduct = builtins.elem "device-tpm" shape.providerIds;
       layout = shape.artifactLayout;
     };
     expected = {
@@ -777,7 +783,9 @@ in
       idsMatchRows = true;
       rowsUnique = true;
       bootstrapIds = [ "system-core" "system-minijail" ];
-      bootstrapRows = [ "system-core" "system-minijail" ];
+      bootstrapIdsMatchRows = true;
+      endpointInProduct = false;
+      deviceTpmInProduct = true;
       layout = {
         executableDirectory = "bin";
         metadataDirectory = "share/d2b/provider";
@@ -870,7 +878,7 @@ in
   };
 
   "provider-catalog/extra-provider-id-fails-closed" = {
-    expr = lib.hasInfix "outside the closed 26-row"
+    expr = lib.hasInfix "outside the derived set of"
       (matrixFailure {
         extra-provider = {
           artifactId = "not-in-the-provider-matrix";
@@ -907,7 +915,7 @@ in
           (failure:
             !failure.assertion
             && lib.hasInfix
-              "outside the closed 26-row"
+              "outside the derived set of"
               failure.message)
           catalogCfg.assertions;
       in {

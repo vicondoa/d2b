@@ -1,0 +1,31 @@
+{
+  "crate": "d2b-provider-device-gpu",
+  "family": "device-gpu",
+  "roles": ["product", "runtime"],
+  "nonBinary": false,
+  "product": {
+    "identity": "device-gpu",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "packages/d2b-core/src/bundle_resolver.rs",
+        "symbol": "DEVICE_GPU_PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "device-gpu",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "nixos-modules/assertions.nix",
+        "symbol": "deviceProviderName"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

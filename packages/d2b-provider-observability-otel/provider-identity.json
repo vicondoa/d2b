@@ -1,0 +1,29 @@
+{
+  "crate": "d2b-provider-observability-otel",
+  "family": "observability-otel",
+  "roles": ["product"],
+  "nonBinary": false,
+  "product": {
+    "identity": "observability-otel",
+    "evidence": [
+      {
+        "path": "packages/d2b-core-controller/src/authority.rs",
+        "symbol": "OPTIONAL_PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": [
+    {
+      "issue": "#630",
+      "summary": "the runtime and session surfaces stay null: #630 owns the observability Provider artifact, and this declaration claims no executable telemetry path behind the product identity"
+    }
+  ]
+}

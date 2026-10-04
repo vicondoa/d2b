@@ -1,0 +1,31 @@
+{
+  "crate": "d2b-provider-transport-vsock",
+  "family": "transport-vsock",
+  "roles": ["product", "runtime"],
+  "nonBinary": false,
+  "product": {
+    "identity": "transport-vsock",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-transport-vsock/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "transport-vsock",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "nixos-modules/provider-runtime-contracts.nix",
+        "symbol": "runtimeProviderRefs"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

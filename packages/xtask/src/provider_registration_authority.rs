@@ -1,22 +1,28 @@
 //! The per-crate provider/service registrations and the generated
 //! registration table.
 //!
-//! Every `packages/d2b-provider-*/registrations.json` declares the provider
-//! identity its owning crate registers with the daemon's composition root
-//! and the effect-service ids the family declares. This module:
+//! Every `packages/d2b-provider-*/registrations.json` declares the
+//! effect-service ids one crate's family registers with the daemon's
+//! composition root. The Provider identity that family registers under is
+//! not stated here: it is the crate's own runtime identity, read from the
+//! per-crate identity authority
+//! (`packages/d2b-provider-*/provider-identity.json`), so a crate's directory
+//! name is never the identity it registers. This module:
 //!
-//! - aggregates those declarations into the `PROVIDER_REGISTRATIONS` table
-//!   the daemon composition root composes (`include!`d from
+//! - joins every registration row against the identity authority, refusing a
+//!   crate that declares services but owns no runtime identity and one crate
+//!   naming an identity another crate already owns;
+//! - aggregates the joined rows into the `PROVIDER_REGISTRATIONS` table the
+//!   daemon composition root composes (`include!`d from
 //!   `packages/d2bd/src/resource_plane_v3.rs` straight out of the staged
 //!   `generated/new-graph/` closure, so the declaration render and the
 //!   compiled production bytes are one committed file), so a new family is
 //!   registered without the daemon naming it - a lane that declares its
 //!   family in the crate needs no daemon edit and no layout-ratchet row;
-//! - runs the declaration-to-source parity gate: a declared provider must
-//!   be the crate's own family, a declared service must be spelled in the
-//!   crate's sources (a `ServiceDecl` const), every service the crate's
-//!   sources spell or its descriptor registers must be declared, and a
-//!   service or provider declared by two crates fails naming both;
+//! - runs the declaration-to-source parity gate: a declared service must be
+//!   spelled in the crate's sources (a `ServiceDecl` const), every service
+//!   the crate's sources spell or its descriptor registers must be declared,
+//!   and a service declared by two crates fails naming both;
 //! - owns the drift gate over the generated artifact: a hand edit fails
 //!   and regeneration is idempotent.
 //!
@@ -32,9 +38,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::authority_common::{
-    admits_provider_identity, collect_rs_files, declaration_paths, verify_committed, Declaration,
-};
+use crate::authority_common::{collect_rs_files, declaration_paths, verify_committed, Declaration};
+use crate::provider_identity_authority::{ProviderIdentities, Surface};
 #[cfg(test)]
 use d2b_contracts_provider::v3::projection::PrivatePlanProjection;
 use serde::Deserialize;
@@ -50,23 +55,21 @@ pub(crate) const GENERATED_ARTIFACT: &str =
 
 /// One provider crate's registration declaration.
 ///
-/// The declaration is the crate's registration surface: the provider
-/// identity the daemon's composition root composes and the effect-service
-/// ids the family declares. The provider is the crate's own family by
-/// construction (the parity gate refuses anything else), and a service the
-/// crate does not spell in its own sources fails the same way.
+/// The declaration is the crate's executable registration surface: the
+/// effect-service ids its family registers. The Provider identity the row
+/// registers under is the crate's runtime identity in the identity
+/// authority, joined below; a service the crate does not spell in its own
+/// sources fails the parity gate the same way.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RegistrationDeclaration {
     #[serde(rename = "crate")]
     crate_name: String,
-    provider: String,
     services: Vec<String>,
 }
 
 /// Run the authority's gates: parity, drift, and regeneration idempotence,
 /// over the generated registration table.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn check(repo_root: &Path) -> Result<(), String> {
     let errors = parity_errors(repo_root)?;
     if !errors.is_empty() {
@@ -165,35 +168,28 @@ pub(crate) fn render_declaration_registrations(plan: &PrivatePlanProjection) -> 
     out
 }
 
-/// The declaration-to-source parity violations: a declared provider that is
-/// not the crate's own family, a declared service the crate's sources do not
-/// spell, a service the crate's sources spell or its descriptor registers
-/// that the declaration omits, and a service or provider declared by two
-/// crates.
+/// The registration violations: a crate that declares services but owns no
+/// runtime identity, a declared service the crate's sources do not spell, a
+/// service the crate's sources spell or its descriptor registers that the
+/// declaration omits, and a service two crates declare.
+///
+/// The Provider identity a row registers under is not decided here: it is the
+/// crate's runtime identity in the identity authority, which already gates
+/// the resource-name grammar, the deliberate cross-surface repetition, and
+/// one identity naming one crate. What this gate adds is the join - a
+/// registration row is a runtime registration, so its crate must own a
+/// runtime identity - and the service facts, which only the registration
+/// declaration and the crate's own sources speak.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn parity_errors(repo_root: &Path) -> Result<Vec<String>, String> {
     let declarations = load_declarations(repo_root)?;
+    let identities = ProviderIdentities::load(repo_root)?;
     let mut errors = Vec::new();
-    let mut providers: BTreeMap<&str, &str> = BTreeMap::new();
     let mut services: BTreeMap<&str, &str> = BTreeMap::new();
     for (crate_name, declaration) in &declarations {
-        // The declared identity is gated on the resource-name grammar, not
-        // on the crate's directory name: `d2b-provider-guest-qemu-media`
-        // registers `runtime-qemu-media` and `d2b-provider-process-minijail`
-        // registers `system-minijail`, so reading the identity back out of
-        // the directory name made a crate's real identity inexpressible and
-        // published references no production surface carries. Uniqueness
-        // below is what keeps two crates off one identity.
-        if !admits_provider_identity(&declaration.provider) {
+        if identities.identity(crate_name, Surface::Runtime).is_none() {
             errors.push(format!(
-                "malformed-provider-identity: crate {crate_name} declares provider {}; a Provider identity is a resource name the contracts admit",
-                declaration.provider
-            ));
-        }
-        if let Some(first) = providers.insert(&declaration.provider, crate_name) {
-            errors.push(format!(
-                "provider-duplicate: provider {} is declared by both {first} and {crate_name}",
-                declaration.provider
+                "runtime-identity-missing: crate {crate_name} declares a provider registration but owns no runtime Provider identity; the identity a row registers under is the crate's own runtime identity in its `provider-identity.json`"
             ));
         }
         let src_dir = repo_root.join(PACKAGES_DIR).join(crate_name).join("src");
@@ -353,22 +349,35 @@ fn load_declarations(repo_root: &Path) -> Result<BTreeMap<String, RegistrationDe
 /// installs. It reads no crate source, so the parity gate stays a separate
 /// cross-check the new-graph closure runs over the composition rather than a
 /// condition of rendering it.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub(crate) fn render_declarations_only(repo_root: &Path) -> Result<String, String> {
     render(repo_root)
 }
 
-/// Render the generated registration table from the declarations, in
-/// crate-name order.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+/// Render the generated registration table from the declarations joined
+/// against the identity authority, in crate-name order.
 fn render(repo_root: &Path) -> Result<String, String> {
     let declarations = load_declarations(repo_root)?;
+    let identities = ProviderIdentities::load(repo_root)?;
+    // The parity gate owns the refusal a registration row with no runtime
+    // identity; the render runs after it, so a row here always resolves.
+    let rows = declarations
+        .iter()
+        .map(|(crate_name, declaration)| {
+            let identity = identities
+                .identity(crate_name, Surface::Runtime)
+                .ok_or_else(|| {
+                    format!("runtime-identity-missing: crate {crate_name} declares a provider registration but owns no runtime Provider identity")
+                })?;
+            Ok((identity, declaration))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let mut out = String::new();
     out.push_str("// @generated\n");
-    out.push_str("// Provenance: emitted from the per-crate `registrations.json` declarations\n");
-    out.push_str("// by `cargo xtask check-provider-crate-layout --fix`; the layout check's\n");
-    out.push_str("// authority drift gate regenerates this file byte-for-byte, and refuses a\n");
-    out.push_str("// hand edit.\n\n");
+    out.push_str("// Provenance: emitted from the per-crate `registrations.json` service\n");
+    out.push_str("// facts joined against the per-crate `provider-identity.json` runtime\n");
+    out.push_str("// identities by `cargo xtask check-provider-crate-layout --fix`; the\n");
+    out.push_str("// layout check's authority drift gate regenerates this file byte-for-byte,\n");
+    out.push_str("// and refuses a hand edit.\n\n");
     out.push_str("/// One registered provider family row: the provider identity the daemon's\n");
     out.push_str("/// composition root composes and the effect-service ids the family declares.\n");
     out.push_str("pub(crate) struct ProviderRegistration {\n");
@@ -377,7 +386,7 @@ fn render(repo_root: &Path) -> Result<String, String> {
     out.push_str("}\n\n");
     out.push_str("/// The registered provider families, in declaration order.\n");
     out.push_str("pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[\n");
-    for declaration in declarations.values() {
+    for (identity, declaration) in &rows {
         let services = declaration
             .services
             .iter()
@@ -385,8 +394,7 @@ fn render(repo_root: &Path) -> Result<String, String> {
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!(
-            "    ProviderRegistration {{\n        provider_ref: \"{}\",\n        services: &[{services}],\n    }},\n",
-            declaration.provider
+            "    ProviderRegistration {{\n        provider_ref: \"{identity}\",\n        services: &[{services}],\n    }},\n"
         ));
     }
     out.push_str("];\n");
@@ -448,19 +456,10 @@ mod tests {
             fs::write(&path, content).expect("write");
         }
 
-        /// A declaration file for one fixture crate with the given services.
+        /// A registration file for one fixture crate with the given
+        /// services. The Provider identity the row registers under is the
+        /// crate's runtime identity, stated in its `provider-identity.json`.
         fn write_declaration(&self, crate_name: &str, services: &[&str]) {
-            self.write_declaration_for(
-                crate_name,
-                crate_name.strip_prefix("d2b-provider-").expect("provider prefix"),
-                services,
-            );
-        }
-
-        /// A declaration file for one fixture crate naming an explicit
-        /// provider identity, which need not be the directory's own suffix.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn write_declaration_for(&self, crate_name: &str, provider: &str, services: &[&str]) {
             let services = services
                 .iter()
                 .map(|service| format!("      \"{service}\""))
@@ -468,15 +467,32 @@ mod tests {
                 .join(",\n");
             self.write(
                 &format!("packages/{crate_name}/registrations.json"),
+                &format!("{{\n  \"crate\": \"{crate_name}\",\n  \"services\": [\n{services}\n  ]\n}}\n"),
+            );
+        }
+
+        /// The identity authority declaration for one fixture crate, owning
+        /// `runtime` on the runtime surface and nothing on the other two.
+        /// The evidence anchor names the crate's own driver source, which
+        /// every fixture crate carries.
+        fn write_runtime_identity(&self, crate_name: &str, runtime: &str) {
+            // The evidence anchor has to name the identity, not merely some
+            // symbol in a file the crate happens to hold, so the crate's own
+            // identity module carries the name.
+            self.write(
+                &format!("packages/{crate_name}/src/identity.rs"),
+                &format!("pub const PROVIDER_IDENTITY: &str = \"{runtime}\";\n"),
+            );
+            self.write(
+                &format!("packages/{crate_name}/provider-identity.json"),
                 &format!(
-                    "{{\n  \"crate\": \"{crate_name}\",\n  \"provider\": \"{provider}\",\n  \"services\": [\n{services}\n  ]\n}}\n"
+                    "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{runtime}\",\n  \"roles\": [\"runtime\"],\n  \"nonBinary\": false,\n  \"product\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"runtime\": {{\n    \"identity\": \"{runtime}\",\n    \"evidence\": [\n      {{\n        \"path\": \"packages/{crate_name}/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }}\n    ]\n  }},\n  \"session\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"blockers\": []\n}}\n"
                 ),
             );
         }
 
         /// The fixture crate's sources spelling one `ServiceDecl` const per
         /// service and registering it in a descriptor's `services` list.
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_sources(&self, crate_name: &str, services: &[&str]) {
             let consts = services
                 .iter()
@@ -529,12 +545,13 @@ mod tests {
         }
     }
 
-    /// A declaration that omits a service its sources spell fails the
+    /// A registration that omits a service its sources spell fails the
     /// parity check naming both the crate and the service.
     #[test]
     fn the_parity_check_fails_when_a_declaration_omits_a_spelled_service() {
         let fixture = Fixture::new("omitted-service");
         fixture.write_sources("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
+        fixture.write_runtime_identity("d2b-provider-fixture", "fixture");
         fixture.write_declaration("d2b-provider-fixture", &[]);
         let errors = parity_errors(&fixture.root).expect("parity loads");
         assert!(
@@ -547,12 +564,13 @@ mod tests {
         );
     }
 
-    /// A declaration naming a service the crate's sources do not spell fails
-    /// the parity check naming both.
+    /// A registration naming a service the crate's sources do not spell
+    /// fails the parity check naming both.
     #[test]
     fn the_parity_check_fails_when_a_declaration_names_an_unspelled_service() {
         let fixture = Fixture::new("unspelled-service");
         fixture.write_sources("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
+        fixture.write_runtime_identity("d2b-provider-fixture", "fixture");
         fixture.write_declaration("d2b-provider-fixture", &["fixture.d2bus.org/ghost"]);
         let errors = parity_errors(&fixture.root).expect("parity loads");
         assert!(
@@ -565,27 +583,47 @@ mod tests {
         );
     }
 
-    /// A declaration whose provider identity the resource-name grammar
-    /// refuses fails the parity check. The identity is not held to the
-    /// crate's directory name: a crate registers the identity it is, and
-    /// the grammar is the whole of what a declared identity owes.
+    /// A registration whose crate owns no runtime identity fails before any
+    /// generation: a `registrations.json` states the services a family
+    /// registers, and the identity it registers under is the crate's own
+    /// runtime identity in the identity authority.
     #[test]
-    fn the_parity_check_fails_when_the_provider_is_not_a_resource_name() {
-        let fixture = Fixture::new("malformed-provider");
+    fn the_parity_check_fails_when_a_registration_declares_no_runtime_identity() {
+        let fixture = Fixture::new("no-runtime-identity");
         fixture.write_sources("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
-        fixture.write_declaration_for(
-            "d2b-provider-fixture",
-            "not a name",
-            &["fixture.d2bus.org/alpha"],
+        fixture.write(
+            "packages/d2b-provider-fixture/provider-identity.json",
+            "{\n  \"crate\": \"d2b-provider-fixture\",\n  \"family\": \"fixture\",\n  \"roles\": [\"product\"],\n  \"nonBinary\": false,\n  \"product\": {\n    \"identity\": \"fixture\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-fixture/src/driver.rs\",\n        \"symbol\": \"DriverDescriptor\"\n      }\n    ]\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"composition-hosted\"\n  },\n  \"session\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"blockers\": []\n}\n",
         );
+        fixture.write_declaration("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
         let errors = parity_errors(&fixture.root).expect("parity loads");
         assert!(
             errors.iter().any(|error| {
-                error.contains("malformed-provider-identity")
-                    && error.contains("d2b-provider-fixture")
-                    && error.contains("not a name")
+                error.contains("runtime-identity-missing") && error.contains("d2b-provider-fixture")
             }),
-            "expected the identity violation naming both: {errors:?}"
+            "expected the missing runtime identity violation naming the crate: {errors:?}"
+        );
+        assert!(
+            render(&fixture.root).is_err(),
+            "the render refuses the same tree the parity gate refused"
+        );
+    }
+
+    /// A runtime identity the resource-name grammar refuses fails the
+    /// identity authority before the registration is read. The identity is
+    /// not held to the crate's directory name: a crate registers the
+    /// identity it is, and the grammar is the whole of what a declared
+    /// identity owes.
+    #[test]
+    fn the_parity_check_fails_when_the_runtime_identity_is_not_a_resource_name() {
+        let fixture = Fixture::new("malformed-identity");
+        fixture.write_sources("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
+        fixture.write_runtime_identity("d2b-provider-fixture", "not a name");
+        fixture.write_declaration("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
+        let error = parity_errors(&fixture.root).expect_err("the authority refuses the identity");
+        assert!(
+            error.contains("not a name") && error.contains("d2b-provider-fixture"),
+            "expected the identity violation naming both: {error}"
         );
     }
 
@@ -597,11 +635,17 @@ mod tests {
     fn the_parity_check_admits_an_identity_the_directory_name_does_not_spell() {
         let fixture = Fixture::new("renamed-identity");
         fixture.write_sources("d2b-provider-guest-qemu-media", &[]);
-        fixture.write_declaration_for("d2b-provider-guest-qemu-media", "runtime-qemu-media", &[]);
+        fixture.write_runtime_identity("d2b-provider-guest-qemu-media", "runtime-qemu-media");
+        fixture.write_declaration("d2b-provider-guest-qemu-media", &[]);
         assert_eq!(
             parity_errors(&fixture.root).expect("parity loads"),
             Vec::<String>::new(),
             "an identity the directory name does not spell is a declared identity, not a violation"
+        );
+        let rendered = render(&fixture.root).expect("the table resolves the identity");
+        assert!(
+            rendered.contains("provider_ref: \"runtime-qemu-media\""),
+            "the row registers the crate's own runtime identity: {rendered}"
         );
     }
 
@@ -612,6 +656,7 @@ mod tests {
         let fixture = Fixture::new("duplicate-service");
         for crate_name in ["d2b-provider-fixture", "d2b-provider-other"] {
             fixture.write_sources(crate_name, &["fixture.d2bus.org/alpha"]);
+            fixture.write_runtime_identity(crate_name, crate_name.strip_prefix("d2b-provider-").expect("prefix"));
             fixture.write_declaration(crate_name, &["fixture.d2bus.org/alpha"]);
         }
         let errors = parity_errors(&fixture.root).expect("parity loads");
@@ -626,31 +671,23 @@ mod tests {
         );
     }
 
-    /// A provider declared by two crates fails the parity check naming both
-    /// crates.
+    /// One runtime identity named by two crates fails the identity
+    /// authority naming both crates, before the registration is read: an
+    /// identity names exactly one owning crate.
     #[test]
-    fn the_parity_check_fails_when_two_crates_declare_one_provider() {
-        let fixture = Fixture::new("duplicate-provider");
-        fixture.write_sources("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
-        fixture.write_declaration("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
-        fixture.write_sources("d2b-provider-other", &[]);
-        fixture.write_declaration("d2b-provider-other", &[]);
-        let path = fixture.root.join("packages/d2b-provider-other/registrations.json");
-        let text = fs::read_to_string(&path).expect("declaration");
-        fs::write(
-            &path,
-            text.replace("\"provider\": \"other\"", "\"provider\": \"fixture\""),
-        )
-        .expect("mutate");
-        let errors = parity_errors(&fixture.root).expect("parity loads");
+    fn the_parity_check_fails_when_two_crates_declare_one_identity() {
+        let fixture = Fixture::new("duplicate-identity");
+        for crate_name in ["d2b-provider-fixture", "d2b-provider-other"] {
+            fixture.write_sources(crate_name, &["fixture.d2bus.org/alpha"]);
+            fixture.write_runtime_identity(crate_name, "fixture");
+            fixture.write_declaration(crate_name, &["fixture.d2bus.org/alpha"]);
+        }
+        let error = parity_errors(&fixture.root).expect_err("the authority refuses the repetition");
         assert!(
-            errors.iter().any(|error| {
-                error.contains("provider-duplicate")
-                    && error.contains("d2b-provider-fixture")
-                    && error.contains("d2b-provider-other")
-                    && error.contains("fixture")
-            }),
-            "expected the duplicate-provider violation naming both crates: {errors:?}"
+            error.contains("identity-declared-twice")
+                && error.contains("d2b-provider-fixture")
+                && error.contains("d2b-provider-other"),
+            "expected the duplicate-identity violation naming both crates: {error}"
         );
     }
 
@@ -660,6 +697,7 @@ mod tests {
     fn the_parity_and_drift_gates_pass_on_a_matching_fixture_and_fail_on_a_hand_edit() {
         let fixture = Fixture::new("happy");
         fixture.write_sources("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
+        fixture.write_runtime_identity("d2b-provider-fixture", "fixture");
         fixture.write_declaration("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
         let rendered = render(&fixture.root).expect("render the registration table");
         assert!(rendered.contains("fixture.d2bus.org/alpha"), "{rendered}");
@@ -685,6 +723,7 @@ mod tests {
     fn regeneration_writes_the_table_and_a_second_run_is_unchanged() {
         let fixture = Fixture::new("regenerate");
         fixture.write_sources("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
+        fixture.write_runtime_identity("d2b-provider-fixture", "fixture");
         fixture.write_declaration("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
         let written = regenerate(&fixture.root).expect("regenerate the table");
         assert_eq!(written, vec![fixture.root.join(GENERATED_ARTIFACT)]);

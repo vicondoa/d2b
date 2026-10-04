@@ -18,23 +18,25 @@ let
   resourcesBundle = import ./resources-bundle.nix { inherit lib; };
 
   # The implementation identities this deployment publishes, read from the
-  # same per-crate `registrations.json` declarations the daemon's generated
-  # provider registration table is emitted from. Reading the declarations
-  # themselves rather than any projection-owner or catalog list is what
-  # keeps the two sides from drifting: there is no second inventory to
-  # maintain, and the two framework execution providers the foundation seed
-  # binds are added from their own crate declarations.
+  # per-crate identity authority - the same `provider-identity.json` files the
+  # daemon's generated provider registration table resolves its runtime
+  # identities from. Reading the authority itself rather than any
+  # projection-owner or catalog list is what keeps the two sides from
+  # drifting: there is no second inventory to maintain, and a crate that owns
+  # no runtime identity contributes nothing here.
   deploymentProviderCrates = builtins.filter
     (name: lib.hasPrefix "d2b-provider-" name && builtins.pathExists (
-      ./../packages/${name}/registrations.json
+      ./../packages/${name}/provider-identity.json
     ))
     (builtins.attrNames (builtins.readDir ../packages));
-  deploymentRegistrations = builtins.map
-    (name:
-      (builtins.fromJSON (builtins.readFile (
-        ./../packages/${name}/registrations.json
-      ))).provider)
-    deploymentProviderCrates;
+  deploymentRegistrations = builtins.filter
+    (identity: identity != null)
+    (builtins.map
+      (name:
+        (builtins.fromJSON (builtins.readFile (
+          ./../packages/${name}/provider-identity.json
+        ))).runtime.identity)
+      deploymentProviderCrates);
   # The identities are published in sorted order so the document's bytes do
   # not depend on readdir order. `builtins.sort` takes an ordering predicate,
   # and the Nix this repository evaluates with has no `compareStrings` builtin

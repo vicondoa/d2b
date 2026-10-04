@@ -54,29 +54,32 @@ use d2b_core::processes::ProcessesJson;
 use d2b_provider_endpoint::endpoint::{
     EndpointAttachmentPolicy, EndpointClass, EndpointConsumerPolicy, EndpointLifecyclePolicy,
     EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport, EndpointVisibility,
+    RealizationIncarnation,
 };
 use d2b_resource_types::WellKnownType;
 
 use d2b_provider_endpoint::{
-    ENDPOINT_BINDING_TYPE_NAME, DeviceWorkerEvidenceSource, EndpointAccessDispatch,
-    EndpointAccessDispatchError, EndpointBindingDriverArgs, EndpointBindingDriverFactory,
-    EndpointBindingDriverStatus, EndpointDeliveryRefusal, EndpointDriverArgs,
-    EndpointDriverEffects, EndpointDriverFactory, EndpointPurposeVocabulary,
-    EndpointSocketIdentity, EndpointSocketSource, GuestControlProducer, GuestVmmEvidenceSource,
-    canonical_binding_row, declared_endpoint_bindings, VIRTIOFSD_PURPOSE,
-    endpoint_binding_descriptor, endpoint_binding_spec_decoder, endpoint_delivery_slot,
-    endpoint_spec_decoder,
+    CommittedEndpointShape, CommittedEndpointShapeSource, DeviceWorkerEvidenceSource,
+    ENDPOINT_BINDING_TYPE_NAME, EndpointAccessDispatch, EndpointAccessDispatchError,
+    EndpointBindingDriverArgs, EndpointBindingDriverFactory, EndpointBindingDriverStatus,
+    EndpointDeliveryRefusal, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverFactory,
+    EndpointDriverStatus, EndpointPurposeVocabulary, EndpointRealization, EndpointSocketIdentity,
+    EndpointSocketSource, GuestControlProducer, GuestVmmEvidenceSource, VIRTIOFSD_PURPOSE,
+    canonical_binding_row, declared_endpoint_bindings, endpoint_binding_descriptor,
+    endpoint_binding_spec_decoder, endpoint_delivery_slot, endpoint_spec_decoder,
 };
 use d2b_resource_runtime::context::{
     ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, SpecDecoder,
     WatchId, WatchRegistration,
 };
-use d2b_resource_runtime::driver::ResourceDriverFactory;
+use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
+use d2b_resource_runtime::error::{FailureClass, FailureKinds};
 use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{
     ResourceKey, ResourceProvenance, StoredDesiredResource,
 };
 use d2b_resource_runtime::manager::ResourceView;
+use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::spec_store::EnsureOutcome;
 
 // ---------------------------------------------------------------------------
@@ -88,6 +91,9 @@ const ZONE_UID: &str = "11111111-1111-4111-8111-111111111111";
 const ENDPOINT: &str = "Endpoint/compositor";
 const PRODUCER: &str = "Process/compositor";
 const CONSUMER: &str = "Process/frontend";
+/// A second consumer of the same endpoint: what the owning row's narrowed
+/// policy still admits once the fixture's own consumer is withdrawn from it.
+const OTHER_CONSUMER: &str = "Process/shell";
 /// A sibling socket in the broker's own endpoint directory, which the admitted
 /// consumer must never gain anything on.
 const SIBLING: &str = "endpoint-slot-ffffffffffff";
@@ -169,13 +175,14 @@ impl EndpointDriverEffects for RealizedSocketEffects {
 ///
 /// The socket and both evidence facets answer through the one scripted double,
 /// so the driver under test is the production construction and only the host
-/// effect is a double.
+/// effect is a double. No Provider vocabulary is installed here: this is the
+/// closed composition, and the Provider-committed lane below installs one.
 fn realized_facets() -> d2b_provider_endpoint::EndpointEffectFacets {
-    d2b_provider_endpoint::EndpointEffectFacets {
-        socket: Arc::new(RealizedSocketEffects),
-        guest_vmm: Arc::new(RealizedSocketEffects),
-        device_worker: Arc::new(RealizedSocketEffects),
-    }
+    d2b_provider_endpoint::EndpointEffectFacets::new(
+        Arc::new(RealizedSocketEffects),
+        Arc::new(RealizedSocketEffects),
+        Arc::new(RealizedSocketEffects),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +196,7 @@ fn realized_facets() -> d2b_provider_endpoint::EndpointEffectFacets {
 /// every child mutation it performs is observable.
 struct RecordingManager {
     rows: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
+    views: tokio::sync::Mutex<Vec<ResourceView>>,
     ensured: tokio::sync::Mutex<Vec<ChildEnsure>>,
     deleted: tokio::sync::Mutex<Vec<ResourceKey>>,
     watched: tokio::sync::Mutex<Vec<ResourceKey>>,
@@ -196,13 +204,22 @@ struct RecordingManager {
 
 impl RecordingManager {
     fn with(rows: Vec<StoredDesiredResource>) -> Arc<Self> {
+        Self::with_views(rows, Vec::new())
+    }
+
+    fn with_views(
+        rows: Vec<StoredDesiredResource>,
+        views: Vec<ResourceView>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             rows: tokio::sync::Mutex::new(rows),
+            views: tokio::sync::Mutex::new(views),
             ensured: tokio::sync::Mutex::new(Vec::new()),
             deleted: tokio::sync::Mutex::new(Vec::new()),
             watched: tokio::sync::Mutex::new(Vec::new()),
         })
     }
+
 
     async fn ensured(&self) -> Vec<ChildEnsure> {
         self.ensured.lock().await.to_vec()
@@ -221,6 +238,12 @@ impl RecordingManager {
             .into_iter()
             .filter(|row| row.key.type_name == ENDPOINT_BINDING_TYPE_NAME)
             .collect()
+    }
+
+    /// Drop one committed row, the way a consumer that has gone away leaves
+    /// the store while a relationship that names it is still committed.
+    async fn remove_row(&self, key: &ResourceKey) {
+        self.rows.lock().await.retain(|row| row.key != *key);
     }
 }
 
@@ -276,9 +299,16 @@ impl ManagerEndpoint for RecordingManager {
             .cloned())
     }
 
-    async fn view(&self, _key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
-        Ok(None)
+    async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+        Ok(self
+            .views
+            .lock()
+            .await
+            .iter()
+            .find(|view| view.key == *key)
+            .cloned())
     }
+
 
     async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
         self.deleted.lock().await.push(key.clone());
@@ -569,7 +599,13 @@ fn resolver() -> BundleResolver {
 /// The shape is one this driver's own closed realization set admits, so the
 /// derivation runs against a committed `Endpoint` row the plane really serves
 /// rather than against a look-alike.
+///
+/// The publication intent is stated, not inferred: the consumer allowlist says
+/// who MAY hold the endpoint, while the intent says who this endpoint
+/// PUBLISHES a relationship to. A fixture that named only the former derives
+/// no row at all.
 fn endpoint_spec(subjects: Vec<ResourceRef>) -> EndpointSpec {
+    let published = subjects.clone();
     EndpointSpec::new(
         ResourceRef::parse("Provider/display-wayland").expect("provider ref"),
         ResourceRef::parse(PRODUCER).expect("producer ref"),
@@ -585,6 +621,8 @@ fn endpoint_spec(subjects: Vec<ResourceRef>) -> EndpointSpec {
         EndpointLifecyclePolicy::RecycleWithProducer,
     )
     .expect("endpoint spec")
+    .publishing_to(published)
+    .expect("the endpoint publishes a binding to its declared consumer")
 }
 
 /// The canonical spec-store envelope one committed row is stored as.
@@ -676,6 +714,63 @@ fn graph(spec: &EndpointSpec, binding: &StoredDesiredResource) -> Vec<StoredDesi
     rows
 }
 
+/// The manager the serving pass reads, carrying the owning `Endpoint` row's
+/// OWN published readiness.
+///
+/// Delivery is granted over one exact realization, so the serving actor reads
+/// the endpoint's published status and its published incarnation token rather
+/// than re-deriving either. A manager that answered no view would leave the
+/// relationship with nothing to prove it is delivered over, which is the
+/// fail-closed answer and not the one these cases are about.
+fn serving_manager(rows: Vec<StoredDesiredResource>) -> Arc<RecordingManager> {
+    let endpoint = rows
+        .iter()
+        .find(|row| row.key.type_name == "Endpoint")
+        .expect("the graph carries the owning Endpoint row");
+    let view = endpoint_readiness_view(endpoint);
+    RecordingManager::with_views(rows, vec![view])
+}
+
+/// The view an `Endpoint` actor publishes for one realized row: the observed
+/// status, and the projection carrying the row's own opaque incarnation token.
+fn endpoint_readiness_view(endpoint: &StoredDesiredResource) -> ResourceView {
+    let incarnation = RealizationIncarnation::derive(
+        ZONE,
+        &ResourceRef::parse(ENDPOINT).expect("endpoint ref"),
+        endpoint.generation,
+        &hex(&[0x31; 16]),
+        1,
+        0,
+        Some("sha256:compositor"),
+    )
+    .expect("the fixture realizes into a bounded token");
+    let projection = serde_json::json!({
+        "endpoint": {
+            "readiness": "realized",
+            "generation": endpoint.generation,
+            "incarnation": incarnation.as_str(),
+        }
+    });
+    ResourceView {
+        key: endpoint.key.clone(),
+        uid: endpoint.uid,
+        generation: endpoint.generation,
+        deleting: endpoint.deleting,
+        provenance: endpoint.provenance,
+        spec: endpoint.spec.clone(),
+        metadata: endpoint.metadata.clone(),
+        owner_key: None,
+        status: Some(ResourceStatus::Ready),
+        status_generation: Some(endpoint.generation),
+        status_projection: Some(projection),
+    }
+}
+
+/// The canonical lowercase hex of a resource uid.
+fn hex(bytes: &[u8; 16]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// The bytes of the Zone self row's committed uid.
 ///
 /// Read back from the same string the fixture bundle declares, so the driver
@@ -719,7 +814,9 @@ impl HostEndpoints {
             .expect("a temporary directory under /tmp for the endpoint tree")
     }
 
-    fn new(admitted: &str) -> Self {
+    /// The broker-owned tree, binding exactly `sockets` inside its own
+    /// endpoint directory.
+    fn with_sockets(sockets: &[&str]) -> Self {
         let root = Self::tempdir_in_tmp();
         let runtime_root = root.path().join("run");
         let endpoints = runtime_root.join("endpoints");
@@ -733,11 +830,13 @@ impl HostEndpoints {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
                 .expect("restrict the broker endpoint tree");
         }
-        let mut listeners = vec![UnixListener::bind(endpoints.join(admitted))
-            .expect("bind the admitted endpoint")];
-        listeners.push(
-            UnixListener::bind(endpoints.join(SIBLING)).expect("bind the sibling endpoint"),
-        );
+        let mut listeners = sockets
+            .iter()
+            .map(|name| {
+                UnixListener::bind(endpoints.join(name))
+                    .unwrap_or_else(|error| panic!("bind the endpoint {name}: {error}"))
+            })
+            .collect::<Vec<UnixListener>>();
         listeners.push(
             UnixListener::bind(root.path().join(ALTERNATE_ABSOLUTE))
                 .expect("bind the alternate absolute socket"),
@@ -748,6 +847,21 @@ impl HostEndpoints {
             endpoints,
             _listeners: listeners,
         }
+    }
+
+    fn new(admitted: &str) -> Self {
+        Self::with_sockets(&[admitted, SIBLING])
+    }
+
+    /// The same tree with NOTHING bound inside the broker's own endpoint
+    /// directory.
+    ///
+    /// This is the state a second cleanup pass over an already-revoked - or
+    /// never granted - relationship finds, and it is the one the broker's own
+    /// accept path answers with its own absent class rather than with an
+    /// effect failure.
+    fn without_socket() -> Self {
+        Self::with_sockets(&[])
     }
 
     fn admitted(&self, name: &str) -> PathBuf {
@@ -1176,7 +1290,7 @@ async fn deliver_passes(
         .find(|row| row.key.type_name == ENDPOINT_BINDING_TYPE_NAME)
         .expect("the graph carries the committed relationship")
         .clone();
-    let manager = RecordingManager::with(graph);
+    let manager = serving_manager(graph);
     let (mut ctx, _requeue) = context(
         row.clone(),
         endpoint_binding_spec_decoder(),
@@ -1300,5 +1414,1313 @@ fn the_binding_type_is_registered_with_a_real_driver() {
     assert_eq!(
         descriptor.reads,
         &[WellKnownType::ENDPOINT, WellKnownType::ZONE],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Provider-committed shape lane (U5, KTD5, R14)
+// ---------------------------------------------------------------------------
+
+/// The vocabulary a declaring Provider publishes and the composition root
+/// installs: the shapes that Provider committed, matched in full.
+///
+/// This is the whole shape of any Provider's own implementation - a set of
+/// committed shapes and one exact comparison - which is why the driver admits
+/// a row on the Provider's verdict and on nothing else, and never names the
+/// Provider that produced it (KTD5).
+struct InstalledVocabulary {
+    committed: Vec<(EndpointSpec, CommittedEndpointShape)>,
+}
+
+impl CommittedEndpointShapeSource for InstalledVocabulary {
+    fn committed_endpoint_shape(&self, spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
+        self.committed
+            .iter()
+            .find(|(committed, _)| committed == spec)
+            .map(|(_, shape)| *shape)
+    }
+}
+
+/// One Provider-committed shape: the private cross-domain data carriage a
+/// worker the declaring Provider launched realizes, consumed by exactly one
+/// subject over the attach and resolve operations.
+///
+/// The purpose is outside every family this crate derives for itself, so the
+/// only thing that can classify it is the Provider that committed it.
+fn provider_committed_spec(producer: &ResourceRef, subjects: Vec<ResourceRef>) -> EndpointSpec {
+    let published = subjects.clone();
+    EndpointSpec::new(
+        ResourceRef::parse("Provider/display-wayland").expect("provider ref"),
+        producer.clone(),
+        EndpointClass::Data,
+        EndpointTransport::FdAttachment,
+        BoundedToken::parse("wayland-cross-domain").expect("bounded purpose"),
+        Some(BoundedText::parse("display-wayland-data-v3-r3").expect("bounded fingerprint")),
+        EndpointLocality::CrossDomain,
+        EndpointVisibility::Owner,
+        EndpointAttachmentPolicy::new(true, 1).expect("attachment policy"),
+        EndpointConsumerPolicy::new(
+            subjects,
+            Vec::new(),
+            vec![EndpointOperation::Attach, EndpointOperation::Resolve],
+        )
+        .expect("consumer policy"),
+        EndpointLifecyclePolicy::RecycleWithProducer,
+    )
+    .expect("endpoint spec")
+    .publishing_to(published)
+    .expect("the endpoint publishes a binding to its declared consumer")
+}
+
+/// One committed shape with a single field edited, built through the
+/// contract's own wire form so the result still decodes as a valid Endpoint
+/// spec: a look-alike, not a malformed row.
+fn mutated_spec(spec: &EndpointSpec, field: &str, value: serde_json::Value) -> EndpointSpec {
+    let mut wire = serde_json::to_value(spec).expect("the committed spec encodes");
+    wire.as_object_mut()
+        .expect("the committed spec is an object")
+        .insert(field.to_owned(), value);
+    serde_json::from_value(wire).expect("the edited spec is still a valid Endpoint spec")
+}
+
+/// The view of the worker row the Provider launched, reporting `Ready` at its
+/// own current generation: this row IS the shape's realization.
+fn producer_ready_view() -> ResourceView {
+    ResourceView {
+        key: ResourceKey::new(ZONE, "Process", "proxy"),
+        uid: [0x51; 16],
+        generation: 1,
+        deleting: false,
+        provenance: ResourceProvenance::Resource,
+        spec: envelope(
+            "Process",
+            "proxy",
+            0x51,
+            Some(ENDPOINT),
+            serde_json::json!({ "domain": "system" }),
+        ),
+        metadata: Vec::new(),
+        owner_key: None,
+        status: Some(ResourceStatus::Ready),
+        status_generation: Some(1),
+        status_projection: None,
+    }
+}
+
+/// The committed neighbourhood of a Provider-committed row: the Zone self row,
+/// the consumer row, the worker row the shape is realized behind, and the
+/// `Endpoint` row itself (index 3).
+fn provider_committed_rows(spec: &EndpointSpec) -> Vec<StoredDesiredResource> {
+    vec![
+        stored(
+            ResourceKey::new(ZONE, "Zone", ZONE),
+            zone_uid_bytes(),
+            None,
+            envelope(
+                "Zone",
+                ZONE,
+                0x11,
+                None,
+                serde_json::json!({ "display": "compositor" }),
+            ),
+        ),
+        stored(
+            ResourceKey::new(ZONE, "Process", "frontend"),
+            [0x31; 16],
+            Some([0x42; 16]),
+            envelope(
+                "Process",
+                "frontend",
+                0x31,
+                Some(ENDPOINT),
+                serde_json::json!({ "domain": "system" }),
+            ),
+        ),
+        stored(
+            ResourceKey::new(ZONE, "Process", "proxy"),
+            [0x51; 16],
+            Some([0x30; 16]),
+            envelope(
+                "Process",
+                "proxy",
+                0x51,
+                Some(ENDPOINT),
+                serde_json::json!({ "domain": "system" }),
+            ),
+        ),
+        stored(
+            ResourceKey::new(ZONE, "Endpoint", "compositor"),
+            [0x42; 16],
+            Some([0x30; 16]),
+            serde_json::to_vec(spec).expect("endpoint spec bytes"),
+        ),
+    ]
+}
+
+/// Drive one reconcile pass over `rows[3]` with `facets`, the production
+/// construction throughout: the driver factory builds this crate's own
+/// effects service from the composition's facet set.
+async fn reconcile_committed(
+    rows: Vec<StoredDesiredResource>,
+    facets: d2b_provider_endpoint::EndpointEffectFacets,
+) -> Result<ResourceContext, d2b_resource_runtime::error::DriverFailure> {
+    let manager = RecordingManager::with_views(rows.clone(), vec![producer_ready_view()]);
+    let (mut ctx, _requeue) = context(
+        rows[3].clone(),
+        endpoint_spec_decoder(),
+        Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let mut driver = EndpointDriverFactory::new(EndpointDriverArgs {
+        zone: ZONE.to_owned(),
+        facets,
+    })
+    .create(&ResourceKey::new(ZONE, "Endpoint", "compositor"))
+    .await;
+    driver.reconcile(&mut ctx).await?;
+    Ok(ctx)
+}
+
+/// The production composition admits a Provider-committed shape by the
+/// Provider's own exact match, and refuses a look-alike terminally.
+///
+/// `EndpointDriverFactory` builds this crate's own effects service from the
+/// facet set, so the only stand-in is the vocabulary a declaring Provider
+/// publishes - the object a composition root installs (KTD5). Nothing here
+/// writes a status from outside the actor: the `ManagerEndpoint` the driver
+/// holds declares no status verb at all, and what the pass published is the
+/// projection it set on its own context.
+#[tokio::test]
+async fn a_provider_committed_row_is_admitted_by_the_installed_vocabulary_and_its_look_alike_is_refused()
+ {
+    let consumer_ref = ResourceRef::parse(CONSUMER).expect("consumer ref");
+    let producer_ref = ResourceRef::parse("Process/proxy").expect("producer ref");
+    let spec = provider_committed_spec(&producer_ref, vec![consumer_ref.clone()]);
+    let shape = CommittedEndpointShape::new(EndpointRealization::WorkerDataAttachment, 3);
+
+    // The closed composition: with no Provider vocabulary installed, the very
+    // same committed row is not a shape anything realizes.
+    let closed = reconcile_committed(provider_committed_rows(&spec), realized_facets())
+        .await
+        .err()
+        .expect("a composition that injected no vocabulary admits no Provider shape");
+    assert_eq!(closed.kind().code(), "endpoint-shape-unsupported");
+
+    // The composition that installed the Provider's own vocabulary.
+    let vocabulary = Arc::new(InstalledVocabulary {
+        committed: vec![(spec.clone(), shape)],
+    });
+    let rows = provider_committed_rows(&spec);
+    let manager = RecordingManager::with_views(rows.clone(), vec![producer_ready_view()]);
+    let (mut ctx, _requeue) = context(
+        rows[3].clone(),
+        endpoint_spec_decoder(),
+        Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let mut driver = EndpointDriverFactory::new(EndpointDriverArgs {
+        zone: ZONE.to_owned(),
+        facets: realized_facets().with_committed_shapes(vocabulary),
+    })
+    .create(&ResourceKey::new(ZONE, "Endpoint", "compositor"))
+    .await;
+    driver
+        .reconcile(&mut ctx)
+        .await
+        .expect("the committed shape reaches a satisfied pass");
+
+    assert_eq!(
+        ctx.status::<EndpointDriverStatus>(),
+        Some(&EndpointDriverStatus::Realized),
+        "the actor publishes its own realized status"
+    );
+    let layer = ctx
+        .take_status_projection()
+        .expect("the actor publishes its own status layer");
+    assert_eq!(
+        layer["endpoint"]["readiness"],
+        serde_json::json!("realized")
+    );
+    assert_eq!(
+        layer["endpoint"]["observedProducerGeneration"],
+        serde_json::json!(1),
+        "the readiness is proved against the producer row's own current generation"
+    );
+    assert_eq!(
+        layer["endpoint"]["connectionAvailability"],
+        serde_json::Value::Null,
+        "a worker shape publishes no host connectability state"
+    );
+
+    // The whole set of mutations this pass issued.
+    let ensured = manager.ensured().await;
+    assert_eq!(
+        ensured.len(),
+        1,
+        "the pass committed the one relationship row it derives and nothing else"
+    );
+    assert_eq!(ensured[0].type_name.as_str(), ENDPOINT_BINDING_TYPE_NAME);
+    assert!(
+        manager.deleted().await.is_empty(),
+        "a first pass retires nothing"
+    );
+
+    // One structural field changed is not a shape this Provider commits: the
+    // driver refuses it terminally rather than repairing the near miss into
+    // an admission.
+    let look_alike = mutated_spec(&spec, "endpointClass", serde_json::json!("service"));
+    assert_ne!(&look_alike, &spec, "the look-alike fixture is edited");
+    let rejected = reconcile_committed(
+        provider_committed_rows(&look_alike),
+        realized_facets().with_committed_shapes(Arc::new(InstalledVocabulary {
+            committed: vec![(spec.clone(), shape)],
+        })),
+    )
+    .await
+    .err()
+    .expect("a look-alike on one committed axis is refused");
+    assert_eq!(
+        rejected.kind().code(),
+        "endpoint-shape-unsupported",
+        "the refusal names the shape, not an effect"
+    );
+    assert_eq!(
+        rejected.class(),
+        d2b_resource_runtime::error::FailureClass::Terminal,
+        "and it is terminal: a retry cannot turn the near miss into an admission"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cleanup: the revoke proof a retirement needs
+// ---------------------------------------------------------------------------
+
+/// The wire's own closed refusal class for "no exact endpoint is standing at
+/// the resolved path".
+///
+/// Read out of the broker's own enum rather than restated as a literal, so
+/// "the cleanup converged on a no-grant proof" stays a statement about the
+/// class the broker itself produces.
+fn endpoint_absent_code() -> &'static str {
+    EndpointAccessError::EndpointAbsent.code()
+}
+
+/// One dispatch answer, scripted.
+#[derive(Clone)]
+enum ScriptedAnswer {
+    /// The broker answered the verb.
+    Answered,
+    /// The broker refused, under this wire class.
+    Refused(String),
+    /// The privileged leg never answered at all.
+    Unanswered,
+}
+
+/// The dispatch a cleanup pass drives.
+///
+/// The broker-backed facet beside it proves a request reaches the real
+/// resolution; this one states the ANSWER instead, because what cleanup turns
+/// on is the answer and not the path that produced it. An answered revoke, the
+/// wire's absent class, some other refusal, and a dispatch that never answered
+/// are four different proofs, and only the first two may retire a row.
+struct ScriptedDispatch {
+    answer: tokio::sync::Mutex<ScriptedAnswer>,
+    /// The inode this dispatch pins on the next answer. A case moves it
+    /// between passes so a producer that replaced its socket reads as a
+    /// replacement rather than as the same delivery twice.
+    pinned: tokio::sync::Mutex<u64>,
+    sent: tokio::sync::Mutex<Vec<EndpointAccessVerb>>,
+}
+
+impl ScriptedDispatch {
+    fn new(answer: ScriptedAnswer) -> Arc<Self> {
+        Arc::new(Self {
+            answer: tokio::sync::Mutex::new(answer),
+            pinned: tokio::sync::Mutex::new(0x5150),
+            sent: tokio::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The broker answered, which is what a removal that took effect looks
+    /// like: it reports the inode the removal landed on.
+    fn answered() -> Arc<Self> {
+        Self::new(ScriptedAnswer::Answered)
+    }
+
+    fn refused(code: &str) -> Arc<Self> {
+        Self::new(ScriptedAnswer::Refused(code.to_owned()))
+    }
+
+    fn unavailable() -> Arc<Self> {
+        Self::new(ScriptedAnswer::Unanswered)
+    }
+
+    /// Move the inode this dispatch pins, the way a producer that replaced
+    /// its socket moves it.
+    async fn pin(&self, inode: u64) {
+        *self.pinned.lock().await = inode;
+    }
+
+    /// Every verb this dispatch was asked for, in order.
+    async fn sent(&self) -> Vec<EndpointAccessVerb> {
+        self.sent.lock().await.clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl EndpointAccessDispatch for ScriptedDispatch {
+    async fn dispatch(
+        &self,
+        verb: EndpointAccessVerb,
+        request: EndpointAccessRequest,
+    ) -> Result<EndpointAccessResponse, EndpointAccessDispatchError> {
+        self.sent.lock().await.push(verb);
+        let answer = self.answer.lock().await.clone();
+        match answer {
+            ScriptedAnswer::Answered => Ok(EndpointAccessResponse {
+                endpoint_ref: request.endpoint_ref.clone(),
+                consumer_ref: request.consumer_ref.clone(),
+                socket: request.socket.clone(),
+                socket_device: 0xfd00,
+                socket_inode: *self.pinned.lock().await,
+                socket_effective_rights: 0o6,
+                ancestors_traversable: true,
+                parent_listable: false,
+                consumer_uid: 0,
+                consumer_gid: 0,
+            }),
+            ScriptedAnswer::Refused(code) => Err(EndpointAccessDispatchError::Refused(code)),
+            ScriptedAnswer::Unanswered => Err(EndpointAccessDispatchError::Unavailable(
+                "the privileged leg did not answer".to_owned(),
+            )),
+        }
+    }
+}
+
+/// The committed relationship the cleanup cases are driven against: the
+/// canonical row the source itself derives, over the whole neighbourhood it
+/// reads.
+fn committed_relationship() -> (EndpointSpec, StoredDesiredResource) {
+    let zone = d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("zone id");
+    let endpoint_ref = ResourceRef::parse(ENDPOINT).expect("endpoint ref");
+    let spec = endpoint_spec(vec![ResourceRef::parse(CONSUMER).expect("consumer ref")]);
+    let deliveries =
+        declared_endpoint_bindings(&zone, &spec, &endpoint_ref).expect("declared deliveries");
+    let derived = canonical_binding_row(&zone, &spec, &endpoint_ref, &deliveries[0])
+        .expect("the source derives its committed row");
+    let binding = stored(
+        ResourceKey::new(ZONE, ENDPOINT_BINDING_TYPE_NAME, derived.name().as_str()),
+        [0x61; 16],
+        Some([0x42; 16]),
+        derived.spec().to_vec(),
+    );
+    (spec, binding)
+}
+
+/// Drive one real `EndpointBindingDriver` cleanup pass over `graph` and read
+/// back what it reported.
+///
+/// A fresh driver is built for every call, which is what a restart looks like
+/// from the row's side: nothing in memory survives, so every pass has to
+/// re-derive the relationship and re-earn its proof. The neighbourhood is
+/// exactly what the case hands over - a missing owning `Endpoint` row and a
+/// missing consumer row are states the graph really can be in, so the view
+/// this builds is empty exactly when the row it reads is absent.
+async fn cleanup_pass(
+    graph: Vec<StoredDesiredResource>,
+    dispatch: Arc<dyn EndpointAccessDispatch>,
+) -> Result<(), d2b_resource_runtime::error::DriverFailure> {
+    let row = graph
+        .iter()
+        .find(|row| row.key.type_name == ENDPOINT_BINDING_TYPE_NAME)
+        .expect("the graph carries the committed relationship")
+        .clone();
+    let views = graph
+        .iter()
+        .find(|row| row.key.type_name == "Endpoint")
+        .map(endpoint_readiness_view)
+        .into_iter()
+        .collect();
+    let manager = RecordingManager::with_views(graph, views);
+    let (mut ctx, _requeue) = context(
+        row.clone(),
+        endpoint_binding_spec_decoder(),
+        Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let mut driver = EndpointBindingDriverFactory::new(EndpointBindingDriverArgs {
+        zone: d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("zone id"),
+        access: dispatch,
+    })
+    .create(&ResourceKey::new(ZONE, ENDPOINT_BINDING_TYPE_NAME, &row.key.name))
+    .await;
+    driver.delete(&mut ctx).await
+}
+
+/// Cleanup never reports success on ambiguity (AE15, R22, R36).
+///
+/// Six states, one real driver, one committed relationship. In each of them
+/// the row's OWN committed bytes are the only thing that names the entry a
+/// revoke would remove, and in each of them the answer the broker gives is
+/// what decides whether the row may retire:
+///
+/// - delivered, then the source narrowed its own policy;
+/// - the owning `Endpoint` row is gone;
+/// - the consumer row is gone;
+/// - the row's own bytes are malformed;
+/// - a restart, which leaves the driver with no memory of what it granted;
+/// - a broker that never answers.
+///
+/// The first three and the last are the ambiguity this barrier exists for:
+/// each of them leaves an entry that MAY be standing, and each of them must
+/// retain ownership - never report a release it cannot prove. They also must
+/// still reach the broker: a source that stopped admitting the relationship
+/// and a parent that stopped existing are states of the world AROUND it, not
+/// evidence that nothing was ever installed.
+///
+/// The malformed row is refused before any verb is built, because bytes that
+/// are not this relationship cannot name an entry at all.
+///
+/// The two answers that MAY retire a row are an answered revoke and the
+/// wire's own absent class - a broker that positively reports no entry for
+/// this consumer over this socket. The same pass converges on each.
+#[tokio::test]
+async fn cleanup_retains_ownership_until_the_broker_proves_the_release() {
+    let (spec, binding) = committed_relationship();
+    let endpoint_key = ResourceKey::new(ZONE, "Endpoint", "compositor");
+    let consumer_key = ResourceKey::new(ZONE, "Process", "frontend");
+    let committed = graph(&spec, &binding);
+
+    // 1. Delivered, then the source narrowed its own consumer policy: the
+    //    parent no longer admits this consumer, and the entry it admitted
+    //    once is still installed.
+    let narrowed = {
+        let mut rows = committed.clone();
+        let parent = rows
+            .iter_mut()
+            .find(|row| row.key == endpoint_key)
+            .expect("the graph carries the owning endpoint");
+        parent.spec = serde_json::to_vec(&endpoint_spec(vec![
+            ResourceRef::parse(OTHER_CONSUMER).expect("the surviving consumer"),
+        ]))
+        .expect("narrowed spec bytes");
+        rows
+    };
+    let dispatch = ScriptedDispatch::unavailable();
+    assert!(
+        cleanup_pass(narrowed, Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_err(),
+        "a narrowed policy retains the relationship: the entry it once admitted may be standing"
+    );
+    assert_eq!(
+        dispatch.sent().await,
+        vec![EndpointAccessVerb::Revoke],
+        "and the revoke still reached the broker rather than being skipped"
+    );
+
+    // 2. The owning `Endpoint` row is gone.
+    let orphan = committed
+        .iter()
+        .filter(|row| row.key != endpoint_key)
+        .cloned()
+        .collect::<Vec<_>>();
+    let dispatch = ScriptedDispatch::unavailable();
+    assert!(
+        cleanup_pass(orphan, Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_err(),
+        "a missing parent retains the relationship: an absent source is not an absent grant"
+    );
+    assert_eq!(
+        dispatch.sent().await,
+        vec![EndpointAccessVerb::Revoke],
+        "the revoke is derived from the row, not from the parent that is gone"
+    );
+
+    // 3. The consumer row is gone, so the broker can no longer derive the
+    //    principal a revoke names.
+    let orphaned = committed
+        .iter()
+        .filter(|row| row.key != consumer_key)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        cleanup_pass(orphaned, ScriptedDispatch::unavailable() as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_err(),
+        "a missing consumer retains the relationship"
+    );
+
+    // 4. The row's own bytes are malformed: no relationship can be named, so
+    //    no revoke can be built and nothing is asked of the broker.
+    let mut malformed_row = binding.clone();
+    malformed_row.spec = b"{\"endpointRef\":\"Endpoint/compositor\"}".to_vec();
+    let mut malformed = committed.clone();
+    malformed[3] = malformed_row;
+    let dispatch = ScriptedDispatch::answered();
+    assert!(
+        cleanup_pass(malformed, Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_err(),
+        "a malformed row retains the relationship even from an answering broker"
+    );
+    assert!(
+        dispatch.sent().await.is_empty(),
+        "and it asks nothing: bytes that are not this relationship name no entry"
+    );
+
+    // 5. A restart, and a broker that never answers: the fresh driver holds no
+    //    record of what it granted, so nothing is standing by its account.
+    let dispatch = ScriptedDispatch::unavailable();
+    assert!(
+        cleanup_pass(committed.clone(), Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_err(),
+        "a restart over an unprovable revoke retains the relationship"
+    );
+
+    // 6. The two proofs. The same pass converges on an answered revoke...
+    let dispatch = ScriptedDispatch::answered();
+    assert!(
+        cleanup_pass(committed.clone(), Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>)
+            .await
+            .is_ok(),
+        "an answered revoke is positive proof the entry was removed"
+    );
+    // ...and on the wire's own absent class, which is proof there was none.
+    assert!(
+        cleanup_pass(
+            committed.clone(),
+            ScriptedDispatch::refused(endpoint_absent_code()) as Arc<dyn EndpointAccessDispatch>
+        )
+        .await
+        .is_ok(),
+        "the wire's absent class is positive proof no entry was standing"
+    );
+    // Any other refusal is not proof, and neither is an unanswered dispatch.
+    for refused in [
+        "endpoint-access-consumer-principal/consumer-principal-row-unresolved",
+        "endpoint-access-authority-mismatch",
+        "endpoint-access-effect-failed",
+    ] {
+        assert!(
+            cleanup_pass(
+                committed.clone(),
+                ScriptedDispatch::refused(refused) as Arc<dyn EndpointAccessDispatch>
+            )
+            .await
+            .is_err(),
+            "{refused} proves nothing about a standing entry, so the row is retained"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Retirement barriers: what an owning row waits for
+// ---------------------------------------------------------------------------
+
+/// A manager double over the REAL cleanup contract: a row retires only when
+/// the driver's own cleanup pass for it CONVERGED, and an owned listing
+/// reports exactly the rows that are still committed.
+///
+/// The production `finalize_owned_resources` reads this listing and reports
+/// `ChildrenDraining` while it is non-empty, and that is the barrier an
+/// owning `Endpoint` row's own retirement depends on. Nothing here decides a
+/// verdict: every driver reached through it is the production one, and this
+/// double only reflects what that driver reported.
+struct RetiringManager {
+    rows: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
+    views: tokio::sync::Mutex<Vec<ResourceView>>,
+    requested: tokio::sync::Mutex<Vec<ResourceKey>>,
+}
+
+impl RetiringManager {
+    fn new(rows: Vec<StoredDesiredResource>, views: Vec<ResourceView>) -> Arc<Self> {
+        Arc::new(Self {
+            rows: tokio::sync::Mutex::new(rows),
+            views: tokio::sync::Mutex::new(views),
+            requested: tokio::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Mark one row deleting, which is what the manager's durable mark commits
+    /// before the cleanup pass runs.
+    async fn request(&self, key: &ResourceKey) {
+        self.requested.lock().await.push(key.clone());
+        let mut rows = self.rows.lock().await;
+        if let Some(row) = rows.iter_mut().find(|row| row.key == *key) {
+            row.deleting = true;
+        }
+    }
+
+    /// Remove one row, which is what the manager does once that row's cleanup
+    /// converged.
+    async fn retire(&self, key: &ResourceKey) {
+        self.rows.lock().await.retain(|row| row.key != *key);
+        self.views.lock().await.retain(|view| view.key != *key);
+    }
+
+    /// Every key still committed under the owner uid the given row carries.
+    async fn committed(&self, owner: &[u8; 16]) -> Vec<ResourceKey> {
+        self.rows
+            .lock()
+            .await
+            .iter()
+            .filter(|row| row.owner_uid == Some(*owner))
+            .map(|row| row.key.clone())
+            .collect()
+    }
+
+    /// Every deletion the cleanup passes asked for, in order.
+    async fn requested(&self) -> Vec<ResourceKey> {
+        self.requested.lock().await.clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ManagerEndpoint for RetiringManager {
+    async fn ensure_child(
+        &self,
+        _parent: &ResourceKey,
+        _child: ChildEnsure,
+    ) -> Result<EnsureOutcome, ResourceError> {
+        Err(ResourceError::ManagerRejected {
+            reason: "this lane drives teardown, not the child surface".into(),
+        })
+    }
+
+    async fn get(&self, key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
+        Ok(self.rows.lock().await.iter().find(|row| row.key == *key).cloned())
+    }
+
+    async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+        Ok(self.views.lock().await.iter().find(|view| view.key == *key).cloned())
+    }
+
+    async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
+        self.request(key).await;
+        Ok(())
+    }
+
+    async fn list_owned(
+        &self,
+        owner_uid: [u8; 16],
+    ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+        Ok(self
+            .rows
+            .lock()
+            .await
+            .iter()
+            .filter(|row| row.owner_uid == Some(owner_uid))
+            .cloned()
+            .collect())
+    }
+
+    async fn register_watch(
+        &self,
+        _subscriber: &ResourceKey,
+        _registration: WatchRegistration,
+    ) -> Result<WatchId, ResourceError> {
+        Ok(WatchId(1))
+    }
+
+    async fn cancel_watch(&self, _id: WatchId) -> Result<(), ResourceError> {
+        Ok(())
+    }
+}
+
+/// One production `EndpointBinding` driver over the retiring manager.
+async fn relationship_driver(
+    manager: &Arc<RetiringManager>,
+    binding: &StoredDesiredResource,
+    dispatch: Arc<dyn EndpointAccessDispatch>,
+) -> (
+    ResourceContext,
+    Box<dyn DynResourceDriver>,
+    Arc<RecordingRequeue>,
+) {
+    let (ctx, requeue) = context(
+        binding.clone(),
+        endpoint_binding_spec_decoder(),
+        Arc::clone(manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let driver = EndpointBindingDriverFactory::new(EndpointBindingDriverArgs {
+        zone: d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("zone id"),
+        access: dispatch,
+    })
+    .create(&binding.key)
+    .await;
+    (ctx, driver, requeue)
+}
+
+/// One production `Endpoint` driver over the retiring manager.
+async fn endpoint_driver(
+    manager: &Arc<RetiringManager>,
+    endpoint_row: &StoredDesiredResource,
+) -> (ResourceContext, Box<dyn DynResourceDriver>, Arc<RecordingRequeue>) {
+    let (ctx, requeue) = context(
+        endpoint_row.clone(),
+        endpoint_spec_decoder(),
+        Arc::clone(manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let driver = EndpointDriverFactory::new(EndpointDriverArgs {
+        zone: ZONE.to_owned(),
+        facets: realized_facets(),
+    })
+    .create(&endpoint_row.key)
+    .await;
+    (ctx, driver, requeue)
+}
+
+/// The whole neighbourhood the retirement barriers are read over, with each
+/// row owned by exactly one thing.
+///
+/// The owning `Endpoint` row owns the relationship and nothing else, so the
+/// owned listing a parent's barrier reads contains the relationship and
+/// nothing else; the consumer row belongs to the same session the endpoint
+/// belongs to, exactly as a display session owns both.
+fn barrier_graph() -> (StoredDesiredResource, StoredDesiredResource) {
+    let zone = d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("zone id");
+    let endpoint_ref = ResourceRef::parse(ENDPOINT).expect("endpoint ref");
+    let session = [0x30; 16];
+    let endpoint = [0x42; 16];
+    let spec = endpoint_spec(vec![ResourceRef::parse(CONSUMER).expect("consumer ref")]);
+    let deliveries =
+        declared_endpoint_bindings(&zone, &spec, &endpoint_ref).expect("declared deliveries");
+    let derived = canonical_binding_row(&zone, &spec, &endpoint_ref, &deliveries[0])
+        .expect("the source derives its committed row");
+    let parent = stored(
+        ResourceKey::new(ZONE, "Endpoint", "compositor"),
+        endpoint,
+        Some(session),
+        serde_json::to_vec(&spec).expect("endpoint spec bytes"),
+    );
+    let binding = stored(
+        ResourceKey::new(ZONE, ENDPOINT_BINDING_TYPE_NAME, derived.name().as_str()),
+        [0x61; 16],
+        Some(endpoint),
+        derived.spec().to_vec(),
+    );
+    (parent, binding)
+}
+
+/// The manager the barrier cases share: the whole neighbourhood, with the
+/// owning row's own published readiness.
+fn barrier_manager(
+    parent: &StoredDesiredResource,
+    binding: &StoredDesiredResource,
+) -> Arc<RetiringManager> {
+    RetiringManager::new(
+        vec![
+            stored(
+                ResourceKey::new(ZONE, "Zone", ZONE),
+                zone_uid_bytes(),
+                None,
+                envelope("Zone", ZONE, 0x11, None, serde_json::json!({ "display": "compositor" })),
+            ),
+            stored(
+                ResourceKey::new(ZONE, "Process", "frontend"),
+                [0x31; 16],
+                Some([0x30; 16]),
+                envelope(
+                    "Process",
+                    "frontend",
+                    0x31,
+                    Some(ENDPOINT),
+                    serde_json::json!({ "domain": "system" }),
+                ),
+            ),
+            parent.clone(),
+            binding.clone(),
+        ],
+        vec![endpoint_readiness_view(parent)],
+    )
+}
+
+
+/// Assert that the owning `Endpoint` row is held by its own children-first
+/// finalization and never reaches its teardown.
+async fn endpoint_is_held(
+    manager: &Arc<RetiringManager>,
+    parent: &StoredDesiredResource,
+    label: &str,
+) {
+    let (mut ctx, mut driver, _requeue) = endpoint_driver(manager, parent).await;
+    let failure = driver
+        .finalize(&mut ctx)
+        .await
+        .err()
+        .unwrap_or_else(|| {
+            panic!("the owning endpoint retires while a relationship child is live ({label})")
+        });
+    assert_eq!(
+        failure.class(),
+        FailureClass::Retryable,
+        "{label}: the barrier defers the owning row, it never fails it terminally"
+    );
+    assert_eq!(
+        failure.kind().code(),
+        FailureKinds::CHILDREN_DRAINING.code(),
+        "{label}: the owning row waits on its children, not on its own teardown"
+    );
+}
+
+/// An `Endpoint` row may not retire while any relationship it owns still
+/// holds delivery, a drain, a replacement, or unproven authority (R22).
+///
+/// Five states of ONE real relationship row, each reached by the production
+/// driver and each keeping that row committed. The barrier is the production
+/// children-first finalization: it reports `ChildrenDraining` while any owned
+/// row is committed, and the owning row's teardown does not run until that
+/// listing empties. Only the last case - a revoke the broker positively
+/// proves - empties it.
+#[tokio::test]
+async fn an_endpoint_waits_for_every_relationship_it_still_owns() {
+    let (parent, binding) = barrier_graph();
+    let manager = barrier_manager(&parent, &binding);
+    let endpoint_uid = parent.uid;
+
+    // 1. DELIVERED. A standing grant the broker answered for.
+    let dispatch = ScriptedDispatch::answered();
+    let (mut ctx, mut driver, _requeue) = relationship_driver(
+        &manager,
+        &binding,
+        Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+    driver.reconcile(&mut ctx).await.expect("the delivered pass converges");
+    assert!(
+        matches!(
+            ctx.status::<EndpointBindingDriverStatus>(),
+            Some(EndpointBindingDriverStatus::Delivered { .. })
+        ),
+        "the broker answered for the admitted right, so the relationship is delivered"
+    );
+    endpoint_is_held(&manager, &parent, "delivered").await;
+
+    // 2. REPLACED. A producer rebound its socket: the grant landed on a new
+    //    inode, and the consumer holding the old one has to re-derive.
+    let (mut ctx, mut driver, _requeue) = relationship_driver(
+        &manager,
+        &binding,
+        Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+    driver.reconcile(&mut ctx).await.expect("the first pass converges");
+    dispatch.pin(0x5151).await;
+    driver.reconcile(&mut ctx).await.expect("the rebound pass converges");
+    assert!(
+        matches!(
+            ctx.status::<EndpointBindingDriverStatus>(),
+            Some(EndpointBindingDriverStatus::EndpointReplaced { .. })
+        ),
+        "a producer that replaced its socket reads as a replacement"
+    );
+    endpoint_is_held(&manager, &parent, "replaced").await;
+
+    // 3. DRAINING. The pre-drain fence is published before any teardown, and
+    //    the revoke has not been proved yet.
+    let unavailable = ScriptedDispatch::unavailable();
+    let (mut ctx, mut driver, _requeue) = relationship_driver(
+        &manager,
+        &binding,
+        Arc::clone(&unavailable) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+    driver.pre_drain(&mut ctx).await.expect("the pre-drain fence publishes");
+    assert_eq!(
+        ctx.status::<EndpointBindingDriverStatus>(),
+        Some(&EndpointBindingDriverStatus::Draining),
+        "new use is fenced before anything is torn down"
+    );
+    assert!(
+        driver.delete(&mut ctx).await.is_err(),
+        "an unanswered revoke retains the relationship"
+    );
+    endpoint_is_held(&manager, &parent, "draining, revoke unproved").await;
+
+    // 4. AMBIGUOUS. A broker that refused for a reason that proves nothing
+    //    about whether an entry is standing.
+    let ambiguous = ScriptedDispatch::refused("endpoint-access-effect-failed");
+    let (mut ctx, mut driver, _requeue) = relationship_driver(
+        &manager,
+        &binding,
+        Arc::clone(&ambiguous) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+    driver.pre_drain(&mut ctx).await.expect("the pre-drain fence publishes");
+    assert!(
+        driver.delete(&mut ctx).await.is_err(),
+        "an effect failure retains the relationship"
+    );
+    endpoint_is_held(&manager, &parent, "ambiguous revoke").await;
+
+    // Every state above left the same row committed, and the owning endpoint
+    // is still held by exactly that row.
+    assert_eq!(
+        manager.committed(&endpoint_uid).await,
+        vec![binding.key.clone()],
+        "the one relationship the owning endpoint still has is what holds it"
+    );
+    assert!(
+        manager
+            .requested()
+            .await
+            .iter()
+            .all(|key| *key == binding.key),
+        "the owning row only ever asks for this relationship to retire: the repeated requests \
+         are the idempotent nudge a children-first finalization issues"
+    );
+
+    // 5. ALREADY REVOKED. The broker positively reports that no entry is
+    //    standing, the cleanup converges, and the owning row may retire.
+    let absent = ScriptedDispatch::refused(endpoint_absent_code());
+    let (mut ctx, mut driver, _requeue) = relationship_driver(
+        &manager,
+        &binding,
+        Arc::clone(&absent) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+    assert!(
+        driver.delete(&mut ctx).await.is_ok(),
+        "the absent class is positive proof there is nothing left to release"
+    );
+    manager.retire(&binding.key).await;
+    assert!(
+        manager.committed(&endpoint_uid).await.is_empty(),
+        "the relationship retired on proof"
+    );
+
+    let (mut ctx, mut driver, _requeue) = endpoint_driver(&manager, &parent).await;
+    driver
+        .finalize(&mut ctx)
+        .await
+        .expect("the owning row converges once its last relationship is gone");
+    driver
+        .delete(&mut ctx)
+        .await
+        .expect("the owning row's own teardown runs last");
+}
+
+// ---------------------------------------------------------------------------
+// The authorization fence and the no-grant proof, each on the production path
+// ---------------------------------------------------------------------------
+
+/// A live relationship whose consumer is gone still fences new use.
+///
+/// The fence is the row's own in-memory status, so a relationship that
+/// reached `Delivered` with its consumer intact and lost that consumer
+/// afterwards must publish `Draining` rather than skip the fence: the ACL
+/// entry it installed may still be standing, and handing a consumer back a
+/// delivery it may no longer start is exactly what the fence exists to stop.
+///
+/// Only an UNDECODABLE relationship converges without a fence. It cannot name
+/// its own entry, so there is no delivery for it to hand out either - and
+/// that is the case cleanup converges on, which is why the asymmetry with the
+/// revoke below is the point rather than an inconsistency.
+#[tokio::test]
+async fn a_missing_consumer_fences_a_live_relationship_before_its_revoke() {
+    let (spec, binding) = committed_relationship();
+    let consumer_key = ResourceKey::new(ZONE, "Process", "frontend");
+    let manager = serving_manager(graph(&spec, &binding));
+    let dispatch = ScriptedDispatch::answered();
+    let (mut ctx, _requeue) = context(
+        binding.clone(),
+        endpoint_binding_spec_decoder(),
+        Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+    );
+    let mut driver = EndpointBindingDriverFactory::new(EndpointBindingDriverArgs {
+        zone: d2b_contracts_resource::v3::ZoneId::parse(ZONE).expect("zone id"),
+        access: Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>,
+    })
+    .create(&ResourceKey::new(ZONE, ENDPOINT_BINDING_TYPE_NAME, &binding.key.name))
+    .await;
+
+    driver.reconcile(&mut ctx).await.expect("the delivered pass converges");
+    assert!(
+        matches!(
+            ctx.status::<EndpointBindingDriverStatus>(),
+            Some(EndpointBindingDriverStatus::Delivered { .. })
+        ),
+        "the grant is standing, so there is a delivery to stop handing out"
+    );
+
+    // The consumer row goes away and nothing else does: the owning `Endpoint`
+    // row is byte-identical and its generation is exactly where it was, so
+    // nothing here is a source that narrowed its own policy.
+    manager.remove_row(&consumer_key).await;
+
+    assert!(
+        driver.pre_drain(&mut ctx).await.is_err(),
+        "a relationship whose consumer is gone defers to its revoke rather than \
+         reporting that it converged"
+    );
+    assert_eq!(
+        ctx.status::<EndpointBindingDriverStatus>(),
+        Some(&EndpointBindingDriverStatus::Draining),
+        "the fence is published even though the pass could not re-prove the \
+         relationship: the entry it installed may still be standing"
+    );
+
+    // Cleanup is unaffected, and that asymmetry is deliberate: `delete` derives
+    // the revoke from the row's OWN committed bytes precisely so it keeps
+    // working when everything around the row has moved.
+    assert!(
+        driver.delete(&mut ctx).await.is_ok(),
+        "the revoke is still derived from the row itself, so a missing consumer \
+         does not strand the relationship"
+    );
+}
+
+/// The positive no-grant proof is the broker's OWN absent class.
+///
+/// The cleanup barrier retires a row on two proofs: a revoke the broker
+/// answered, and a revoke the broker reports as leaving nothing standing. The
+/// second one is not a slug this crate invented - it is the closed code the
+/// broker's own accept path returns, read here where the broker renders it, so
+/// a rename on either side shows up as a test failure rather than as a row
+/// that silently stops converging.
+///
+/// The pass is then driven over the REAL dispatch - the broker's own
+/// `accept_endpoint_access` across the broker's own wire codec - against a
+/// broker tree that holds no socket at all. The verdict is whatever the broker
+/// answered: on a host that has provisioned an account for this fixture's
+/// consumer row that answer IS the absent class and the row retires; on a host
+/// that has provisioned none, the accept path refuses the consumer principal
+/// first, by name, and the row is retained. Both are the broker's own code and
+/// the driver acts on exactly that one of them.
+#[tokio::test]
+async fn the_no_grant_proof_is_the_brokers_own_absent_class() {
+    assert_eq!(
+        EndpointAccessError::EndpointAbsent.code(),
+        endpoint_absent_code(),
+        "the positive no-grant proof is exactly the code the broker's own accept \
+         path returns when no exact endpoint is standing"
+    );
+
+    let (spec, binding) = committed_relationship();
+    let host = HostEndpoints::without_socket();
+    let dispatch = BrokerBackedDispatch::new(host.runtime_root.clone(), resolver());
+    let verdict = cleanup_pass(
+        graph(&spec, &binding),
+        Arc::clone(&dispatch) as Arc<dyn EndpointAccessDispatch>,
+    )
+    .await;
+
+    let refusals = dispatch.refusals();
+    assert_eq!(
+        refusals.len(),
+        1,
+        "the revoke reached the broker's own resolution path exactly once"
+    );
+    assert_eq!(
+        dispatch
+            .sent()
+            .iter()
+            .map(|(verb, _)| *verb)
+            .collect::<Vec<_>>(),
+        vec![EndpointAccessVerb::Revoke],
+        "and it asked about the row's own slot with the revoke verb, not with a grant"
+    );
+    assert_eq!(
+        verdict.is_ok(),
+        refusals[0] == endpoint_absent_code(),
+        "the row retires on the absent class and on nothing else; this host answered {}",
+        refusals[0]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AE13: the published authorization digest IS the authorization fence
+// ---------------------------------------------------------------------------
+
+/// One committed consumer row whose Provider assignment the case states.
+///
+/// `providerRef` is the UNIVERSAL desired-state layer, so it rides beside the
+/// type's own base spec rather than inside it - which is where
+/// `ResourceSpec`, and therefore every reader of a committed row, looks for
+/// it. Building it through the fixture's own envelope keeps the row canonical
+/// and identical to the one the rest of this lane commits.
+fn consumer_row_with_provider(provider: Option<&str>) -> StoredDesiredResource {
+    let base = envelope(
+        "Process",
+        "frontend",
+        0x31,
+        Some("Process/compositor"),
+        serde_json::json!({ "domain": "system" }),
+    );
+    let mut resource: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&base).expect("the fixture envelope decodes as an object");
+    if let Some(provider) = provider {
+        resource.insert(
+            "providerRef".to_owned(),
+            serde_json::Value::String(provider.to_owned()),
+        );
+    }
+    stored(
+        ResourceKey::new(ZONE, "Process", "frontend"),
+        [0x31; 16],
+        Some([0x42; 16]),
+        CanonicalJsonValue::parse(
+            &serde_json::to_vec(&serde_json::Value::Object(resource))
+                .expect("fixture envelope serializes"),
+        )
+        .expect("fixture envelope is canonical JSON")
+        .to_canonical_bytes(),
+    )
+}
+
+/// The committed graph with its consumer row replaced by `consumer`, and
+/// nothing else touched.
+fn graph_with_consumer(spec: &EndpointSpec, consumer: StoredDesiredResource) -> Vec<StoredDesiredResource> {
+    committed_rows(spec)
+        .into_iter()
+        .map(|row| {
+            if row.key.type_name == "Process" {
+                consumer.clone()
+            } else {
+                row
+            }
+        })
+        .collect()
+}
+
+/// One real `EndpointDriver` pass over `rows`, and the authorization digest it
+/// PUBLISHED for the one relationship this endpoint declares.
+///
+/// The value is read out of the `/endpoint/bindings` layer - the projection a
+/// launch gate actually compares - rather than out of the function that mints
+/// it, so this lane cannot pass while the publication is still stale.
+async fn published_authorization_digest(rows: Vec<StoredDesiredResource>) -> String {
+    let endpoint_row = rows
+        .iter()
+        .find(|row| row.key.type_name == "Endpoint")
+        .expect("the graph carries the owning Endpoint row")
+        .clone();
+    let manager = RecordingManager::with(rows);
+    let (mut ctx, _requeue) = context(
+        endpoint_row,
+        endpoint_spec_decoder(),
+        Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+    );
+    EndpointDriverFactory::new(EndpointDriverArgs {
+        zone: ZONE.to_owned(),
+        facets: realized_facets(),
+    })
+    .create(&ResourceKey::new(ZONE, "Endpoint", "compositor"))
+    .await
+    .reconcile(&mut ctx)
+    .await
+    .expect("the source pass reconciles");
+    ctx.take_status_projection()
+        .expect("the pass publishes the endpoint layer")
+        .pointer("/endpoint/bindings")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|entries| entries.first())
+        .and_then(|entry| entry.pointer("/authorizationDigest"))
+        .and_then(serde_json::Value::as_str)
+        .expect("every published relationship carries its authorization digest")
+        .to_owned()
+}
+
+/// AE13, end to end: the PUBLISHED authorization digest moves when the
+/// consumer's authorization moves, at an unchanged endpoint row generation.
+///
+/// This is the property the finding said did not exist. Every input the
+/// publication is derived from except the consumer's own authorization is
+/// pinned: the endpoint row is byte-identical across all four passes, its
+/// generation is the same, and the Zone, the consumer reference, the canonical
+/// slot and the publication intent are the same facts. So the digest can only
+/// be moving because the authorization moved - which is what lets a launch
+/// gate see an authorization-only change with no endpoint generation bump
+/// (R16, R18, AE13).
+///
+/// The delivery withdrawal half is the same read seen from the serving actor:
+/// `a_missing_consumer_fences_a_live_relationship_before_its_revoke` above is
+/// where a relationship whose consumer stopped being readable stops
+/// publishing `Delivered` and publishes `Draining` instead.
+#[tokio::test]
+async fn the_published_digest_moves_with_the_consumers_authorization_alone() {
+    let spec = endpoint_spec(vec![ResourceRef::parse(CONSUMER).expect("consumer ref")]);
+
+    // The baseline is a consumer row that carries BOTH halves of an
+    // authorization, so either half can be moved on its own and the only
+    // thing left in every other framed input is identical.
+    let granted_row = consumer_row_with_provider(Some("Provider/display"));
+    let granted = published_authorization_digest(graph_with_consumer(&spec, granted_row.clone())).await;
+
+    // The consumer row is RE-OWNED. Nothing else moves: the owning endpoint is
+    // the same row at the same generation.
+    let mut reowned = granted_row.clone();
+    reowned.owner_uid = Some([0x71; 16]);
+    assert_ne!(
+        granted,
+        published_authorization_digest(graph_with_consumer(&spec, reowned)).await,
+        "a consumer owner change is an authorization-only change, and it moves the published \
+         digest with the endpoint row generation sitting exactly where it was"
+    );
+
+    // The consumer row is RE-ASSIGNED to another Provider, and to none at all.
+    assert_ne!(
+        granted,
+        published_authorization_digest(graph_with_consumer(
+            &spec,
+            consumer_row_with_provider(Some("Provider/other")),
+        ))
+        .await,
+        "a provider reassignment moves it too"
+    );
+    let unassigned = consumer_row_with_provider(None);
+    assert_ne!(
+        granted,
+        published_authorization_digest(graph_with_consumer(&spec, unassigned.clone())).await,
+        "and withdrawing the Provider the consumer row is assigned to moves it as well"
+    );
+
+    // An unchanged graph publishes the unchanged digest: the digest is a
+    // function of the authorization, not of the pass that read it.
+    assert_eq!(
+        granted,
+        published_authorization_digest(graph_with_consumer(&spec, granted_row.clone())).await,
+        "an unchanged authorization keeps the same published digest across passes"
+    );
+
+    // A consumer row a pass CANNOT read is its own answer. It must never
+    // produce the digest of a readable relationship - least of all one that
+    // was read and carries nothing, which is the collision that would let an
+    // unreadable row authorize itself.
+    let mut unreadable = granted_row.clone();
+    unreadable.spec = b"not the committed row".to_vec();
+    let unread = published_authorization_digest(graph_with_consumer(&spec, unreadable)).await;
+    assert_ne!(
+        granted, unread,
+        "a consumer row whose authorization cannot be read never publishes a readable digest"
+    );
+    assert_ne!(
+        published_authorization_digest(graph_with_consumer(&spec, unassigned)).await,
+        unread,
+        "and it is not the digest of a row that WAS read and carries neither an owner nor a \
+         Provider either"
+    );
+
+    // A consumer row that is GONE is the same distinct answer, read through the
+    // same derivation - and it is the state the serving fence refuses, which is
+    // where the delivery stops.
+    let orphaned: Vec<StoredDesiredResource> =
+        graph_with_consumer(&spec, granted_row.clone())
+            .into_iter()
+            .filter(|row| row.key.type_name != "Process")
+            .collect();
+    assert_eq!(
+        unread,
+        published_authorization_digest(orphaned).await,
+        "a consumer row that is absent is reported as unread, never as authorized"
+    );
+
+    // The endpoint row generation is the same in every pass above: none of
+    // these is a source that changed its own spec.
+    assert_eq!(
+        committed_rows(&spec)[2].generation,
+        1,
+        "the endpoint row generation never moved, so every digest change above was \
+         authorization-only"
     );
 }

@@ -1,0 +1,31 @@
+{
+  "crate": "d2b-provider-credential-entra",
+  "family": "credential-entra",
+  "roles": ["product", "runtime"],
+  "nonBinary": false,
+  "product": {
+    "identity": "credential-entra",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-credential-entra/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "credential-entra",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "nixos-modules/options-zones-resources.nix",
+        "symbol": "requiredSubjects"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

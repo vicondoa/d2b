@@ -17,10 +17,18 @@ attachment.
 
 | Field | Value |
 | --- | --- |
-| Provider name | `execution-policy` |
+| Provider name | none - this crate declares no Provider identity on any surface |
 | ResourceType | `ExecutionPolicy` |
 | Package | `packages/d2b-provider-execution-policy/` |
 | Driver declaration | `execution_policy_descriptor` -> `DriverDescriptor` |
+
+There is no Provider identity to name here. The crate owns a ResourceType
+vocabulary and nothing else: its `provider-identity.json` states a null on
+all three identity surfaces with the reason `no-identity-owned`, because no
+production source names a Provider for it. A role row's `Provider/<name>`
+reference resolves against that same authority at generation, so a reference
+to an identity no crate declares is refused there rather than published as a
+dangling name.
 
 ## Config schema
 

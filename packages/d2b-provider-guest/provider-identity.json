@@ -1,0 +1,24 @@
+{
+  "crate": "d2b-provider-guest",
+  "family": "guest",
+  "roles": ["runtime"],
+  "nonBinary": false,
+  "product": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "runtime": {
+    "identity": "guest",
+    "evidence": [
+      {
+        "path": "packages/d2bd/src/resource_plane_v3.rs",
+        "symbol": "registered_drivers"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

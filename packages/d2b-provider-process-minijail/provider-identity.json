@@ -1,0 +1,28 @@
+{
+  "crate": "d2b-provider-process-minijail",
+  "family": "system-minijail",
+  "roles": ["product", "fixed-bootstrap"],
+  "nonBinary": false,
+  "product": {
+    "identity": "system-minijail",
+    "evidence": [
+      {
+        "path": "nixos-modules/providers/system-minijail.nix",
+        "symbol": "_systemMinijail"
+      },
+      {
+        "path": "packages/d2b-provider-process-minijail/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

@@ -12,14 +12,27 @@
 //! The family's driver effects (U6) are implemented by this crate itself
 //! ([`crate::effects_service`]): the purpose derivations classify one
 //! purpose onto the realization the plane owns from the declaring providers'
-//! own vocabularies, and the daemon-owned realization surfaces - the host
-//! socket effect for the binding-owned virtiofsd socket and the two
-//! row-evidence probes - cross the provider boundary as the declared
-//! [`crate::facets::EndpointEffectFacets`] the composition root supplies.
+//! own vocabularies, and the surfaces the daemon owns - the host socket
+//! effect for the binding-owned virtiofsd socket, the two row-evidence
+//! probes, the Provider vocabularies that admit a Provider-committed shape,
+//! and the daemon's private host observation - cross the provider boundary as
+//! the declared [`crate::facets::EndpointEffectFacets`] the composition root
+//! supplies.
 //! The daemon hosts the family's declared effects service
 //! ([`crate::effects_service::ENDPOINT_EFFECTS_SERVICE`]) per zone from the
 //! family's registered factory; no externally built port appears at any
 //! construction site (R2).
+//!
+//! A declaring Provider that realizes a shape this crate knows nothing about
+//! commits it through [`EndpointPurposeVocabulary::committed_endpoint_shape`]
+//! and owns every constant and every field of that match itself: this crate
+//! never names a Provider, a Provider type, or a Provider's vocabulary
+//! (KTD5). A shape committed that way is realized behind one of the two
+//! evidence kinds the shape names - the daemon's private observation of a
+//! host socket ([`crate::facets::HostSocketEvidenceSource`]) or the
+//! generation-fenced producer row the Endpoint itself declares - and the
+//! incarnation token it publishes is a digest over committed facts and the
+//! Provider's own reconnect generation, never over a locator (KTD8).
 
 #![deny(missing_docs)]
 
@@ -34,10 +47,12 @@ mod facets;
 pub mod test_support;
 
 pub use driver::{
-    EndpointDriver, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverError,
-    EndpointDriverFactory, EndpointDriverStatus, EndpointPurposeVocabulary, EndpointRealization,
-    GuestControlProducer, VIRTIOFSD_PURPOSE, endpoint_child_support_ceiling,
+    CommittedEndpointShape, EndpointConnectability, EndpointDriver, EndpointDriverArgs,
+    EndpointDriverEffects, EndpointDriverError, EndpointDriverFactory, EndpointDriverStatus,
+    EndpointPurposeVocabulary, EndpointRealization, GuestControlProducer,
+    ProviderRealizationEvidence, VIRTIOFSD_PURPOSE, endpoint_child_support_ceiling,
     endpoint_descriptor, endpoint_realization, endpoint_spec_decoder,
+    provider_committed_endpoint_shape,
 };
 pub use effects_service::{
     ENDPOINT_EFFECTS_SERVICE, EndpointEffectsService, EndpointEffectsServiceFactory,
@@ -45,13 +60,15 @@ pub use effects_service::{
     guest_control_purpose,
 };
 pub use facets::{
-    DeviceWorkerEvidenceSource, EndpointAccessDispatch, EndpointAccessDispatchError,
-    UnwiredEndpointAccess,
-    EndpointEffectFacets, EndpointSocketSource, GuestVmmEvidenceSource,
+    CommittedEndpointShapeSource, DeviceWorkerEvidenceSource, EndpointAccessDispatch,
+    EndpointAccessDispatchError, EndpointEffectFacets, EndpointSocketSource,
+    GuestVmmEvidenceSource, HostSocketEvidenceSource, MIN_REALIZATION_NONCE_CHARS,
+    RealizationHandle, UnwiredCommittedShapes, UnwiredEndpointAccess,
+    UnwiredHostSocketEvidence,
 };
 
 pub use binding::{
-    ENDPOINT_BINDING_TYPE_NAME, AdmittedEndpointBinding, BindingReadiness,
+    ENDPOINT_BINDING_TYPE_NAME, AdmittedEndpointBinding, BindingDeliveryProjection, BindingReadiness,
     DeclaredEndpointBinding, DeliveryFenceViolation, DeliveryForm, EndpointAccessObservation,
     EndpointBindingAdmission, EndpointBindingDriver, EndpointBindingDriverArgs,
     EndpointBindingDriverError, EndpointBindingDriverFactory, EndpointBindingDriverStatus,
@@ -62,8 +79,9 @@ pub use binding::{
     declared_endpoint_bindings, endpoint_access_request, endpoint_binding_descriptor,
     endpoint_binding_spec_decoder, endpoint_binding_support,
     endpoint_binding_support_ceiling, endpoint_delivery_slot, endpoint_grants_observe,
-    ensure_realizable, fence_delivery_environment, fence_delivery_environment_all,
-    fence_delivery_payload, fence_delivery_payload_all, required_right_bits,
+    ensure_realizable, expected_bindings_for_process, fence_delivery_environment,
+    fence_delivery_environment_all, fence_delivery_payload, fence_delivery_payload_all,
+    required_right_bits,
 };
 
 /// The Endpoint ResourceType spec and status shapes owned by this crate.

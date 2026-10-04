@@ -1,0 +1,36 @@
+{
+  "crate": "d2b-provider-shell-terminal",
+  "family": "shell-terminal",
+  "roles": ["product", "session"],
+  "nonBinary": false,
+  "product": {
+    "identity": "shell-terminal",
+    "sharesIdentityWith": ["session"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-shell-terminal/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": "shell-terminal",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-shell-terminal/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "blockers": [
+    {
+      "issue": "#631",
+      "summary": "the packaged shell artifact, its signature, its Nix row, and its launch are #631's work: this declaration names the product and session identities the packaging and the session catalog route to, and claims no launched shell"
+    }
+  ]
+}

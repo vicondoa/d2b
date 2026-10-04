@@ -1,0 +1,31 @@
+{
+  "crate": "d2b-provider-volume-virtiofs",
+  "family": "volume-virtiofs",
+  "roles": ["product", "runtime"],
+  "nonBinary": false,
+  "product": {
+    "identity": "volume-virtiofs",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "packages/d2b-core/src/bundle_resolver.rs",
+        "symbol": "SERVING_WORKER_PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "volume-virtiofs",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "packages/d2b-core/src/bundle_resolver.rs",
+        "symbol": "SERVING_WORKER_PROVIDER_REF"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

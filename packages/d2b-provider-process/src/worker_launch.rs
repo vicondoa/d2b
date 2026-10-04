@@ -151,3 +151,200 @@ pub struct VideoWorkerParams {
     /// argument names.
     pub socket_path: PathBuf,
 }
+
+// ---------------------------------------------------------------------------
+// Guest-target Process realization (R18, R29, KTD6)
+// ---------------------------------------------------------------------------
+
+/// One prepared `EndpointBinding` relationship a Guest-target Process
+/// realization delivers to the target-local process.
+///
+/// Every field is the fact the launch gate sealed into its
+/// [`crate::effects::BindingAuthorityLease`] for this exact consumer: the
+/// relationship row, the endpoint that published it, the canonical consumer
+/// slot, and the opaque realization-incarnation token the endpoint published.
+/// Nothing host-shaped travels here - no socket name, no path, no `(dev,
+/// ino)` pair - so a delivery can be compared, logged, and applied on the
+/// target without leaking anything about the host that prepared it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GuestBindingDelivery {
+    /// The canonical `EndpointBinding` row this relationship lives in.
+    binding_ref: String,
+    /// The canonical `Endpoint` row that published the realization.
+    endpoint_ref: String,
+    /// The canonical consumer slot the delivery applies at.
+    slot: String,
+    /// The opaque realization-incarnation token the endpoint published.
+    incarnation: String,
+}
+
+impl GuestBindingDelivery {
+    /// Record one prepared delivery for this consumer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestRealizationError::Incomplete`] when any field is
+    /// empty. A delivery assembled from an incomplete fact would compare
+    /// against evidence nothing can publish, so it is refused at the point
+    /// it is built rather than deferred forever on the target.
+    pub fn new(
+        binding_ref: impl Into<String>,
+        endpoint_ref: impl Into<String>,
+        slot: impl Into<String>,
+        incarnation: impl Into<String>,
+    ) -> Result<Self, GuestRealizationError> {
+        let delivery = Self {
+            binding_ref: binding_ref.into(),
+            endpoint_ref: endpoint_ref.into(),
+            slot: slot.into(),
+            incarnation: incarnation.into(),
+        };
+        if delivery.binding_ref.is_empty()
+            || delivery.endpoint_ref.is_empty()
+            || delivery.slot.is_empty()
+            || delivery.incarnation.is_empty()
+        {
+            return Err(GuestRealizationError::Incomplete);
+        }
+        Ok(delivery)
+    }
+
+    /// The canonical relationship row this delivery belongs to.
+    pub fn binding_ref(&self) -> &str {
+        &self.binding_ref
+    }
+
+    /// The canonical endpoint row that published the realization.
+    pub fn endpoint_ref(&self) -> &str {
+        &self.endpoint_ref
+    }
+
+    /// The canonical consumer slot.
+    pub fn slot(&self) -> &str {
+        &self.slot
+    }
+
+    /// The opaque realization-incarnation token.
+    pub fn incarnation(&self) -> &str {
+        &self.incarnation
+    }
+}
+
+/// Why one Guest-target realization could not be assembled or read back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestRealizationError {
+    /// A required fact was missing, so the realization is refused rather
+    /// than sent with a hole the target would have to guess at.
+    Incomplete,
+    /// The bytes carried are not a realization this Host wrote.
+    Unreadable,
+}
+
+impl GuestRealizationError {
+    /// The closed, host-free slug this refusal reports under.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Incomplete => "process-guest-realization-incomplete",
+            Self::Unreadable => "process-guest-realization-unreadable",
+        }
+    }
+}
+
+impl core::fmt::Display for GuestRealizationError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
+impl std::error::Error for GuestRealizationError {}
+
+/// The host-resolved target-local realization of one `Process` row that runs
+/// on a Guest target (R18, R29).
+///
+/// This is the exact byte sequence the Host sends as the realize frame's
+/// spec and the Guest applies verbatim. It has two halves and the Guest
+/// composes neither:
+///
+/// - the resolved `Process` spec, exactly as the Host decoded and
+///   re-serialized it for the target; and
+/// - the prepared `EndpointBinding` deliveries a sealed authority lease
+///   carried at the moment the launch was admitted (KTD6). The Host sends
+///   them only after that lease revalidated, so a stale or revoked lease
+///   reaches the Guest as no realization at all rather than as a process
+///   started over bindings that moved.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GuestProcessRealization {
+    /// The canonical Host-zone `Process` row this realization belongs to.
+    process_ref: String,
+    /// The exact resolved Process spec bytes the target applies.
+    spec: Vec<u8>,
+    /// The prepared endpoint relationships delivered with this realization.
+    deliveries: Vec<GuestBindingDelivery>,
+}
+
+impl GuestProcessRealization {
+    /// Assemble one target-local realization.
+    pub fn new(
+        process_ref: impl Into<String>,
+        spec: Vec<u8>,
+        deliveries: Vec<GuestBindingDelivery>,
+    ) -> Self {
+        Self { process_ref: process_ref.into(), spec, deliveries }
+    }
+
+    /// The canonical Host-zone `Process` row this realization belongs to.
+    pub fn process_ref(&self) -> &str {
+        &self.process_ref
+    }
+
+    /// The exact resolved Process spec bytes the target applies.
+    pub fn spec(&self) -> &[u8] {
+        &self.spec
+    }
+
+    /// The prepared endpoint relationships delivered with this realization.
+    pub fn deliveries(&self) -> &[GuestBindingDelivery] {
+        &self.deliveries
+    }
+
+    /// The wire bytes of this realization: the spec of the realize frame.
+    ///
+    /// The frame's commitment is [`Self::spec_digest`] over exactly these
+    /// bytes, so a substituted or truncated realization is refused on the
+    /// target before its effect code sees it.
+    pub fn encode(&self) -> Vec<u8> {
+        // Serialization of a struct whose fields are all owned strings, byte
+        // vectors, and strings cannot fail.
+        serde_json::to_vec(self).unwrap_or_default()
+    }
+
+    /// The commitment the Host attaches to [`Self::encode`].
+    pub fn spec_digest(&self) -> String {
+        d2b_resource_runtime::guest_target::target_local_spec_digest(&self.encode())
+    }
+
+    /// Read back a realization the Host wrote.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestRealizationError::Unreadable`] when the bytes are not
+    /// a realization this Host writes, or
+    /// [`GuestRealizationError::Incomplete`] when a required field is
+    /// empty.
+    pub fn decode(bytes: &[u8]) -> Result<Self, GuestRealizationError> {
+        let realization: Self =
+            serde_json::from_slice(bytes).map_err(|_| GuestRealizationError::Unreadable)?;
+        if realization.process_ref.is_empty() || realization.spec.is_empty() {
+            return Err(GuestRealizationError::Incomplete);
+        }
+        if realization.deliveries.iter().any(|delivery| {
+            delivery.binding_ref.is_empty()
+                || delivery.endpoint_ref.is_empty()
+                || delivery.slot.is_empty()
+                || delivery.incarnation.is_empty()
+        }) {
+            return Err(GuestRealizationError::Incomplete);
+        }
+        Ok(realization)
+    }
+}

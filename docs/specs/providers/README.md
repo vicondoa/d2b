@@ -35,6 +35,32 @@ workspace-policy paths:
 Each dossier's **Implementation work items** assign exact work items and files
 to each of those paths.
 
+## Provider identity
+
+Every Provider crate states its Provider identities in its own
+`provider-identity.json`, and no other file restates them. A crate declares up
+to three independent identities - one per surface:
+
+- **product** - the identity this crate ships as an artifact and publishes in
+  the Nix Provider catalog;
+- **runtime** - the identity the daemon's composition root registers through
+  the generated registration table;
+- **session** - the identity the session-plane service catalog routes to.
+
+Each surface is either an identity the crate owns or the closed reason it owns
+none, and every declared identity names the production sources that name it.
+The categories a crate falls into - product, runtime, session, fixed
+bootstrap, shared driver, blocked on an external issue, or owning no identity
+at all - are read from the declarations rather than counted here; the two
+fixed-bootstrap identities are named above because their handlers run outside
+ordinary Process projection, and no Provider in the catalog is a runtime
+registration without also shipping a product artifact unless it declares one
+surface and nulls the others. A declaration also states whether the artifact
+the crate packages contains a binary, so the one bootstrap Provider the
+deployment registers without materializing a process is the crate that says
+so, not a name a generator holds.
+
+
 ## Process placement, controllers, and state
 
 With the two bootstrap exceptions `Provider/system-core` and
@@ -65,7 +91,15 @@ qualified on `d2bus.org` (D080). The frozen semantic Service/Binding families us
 provider-neutral namespaces; implementation namespaces identify only strict
 Provider extensions.
 
-## Provider catalog (27)
+## Provider catalog
+
+The catalog below is the set of Providers that ship a product artifact. It is
+derived, not hand-maintained: each Provider crate states its identity in its
+own `provider-identity.json`, and the packaging matrix rows and the generated
+Provider catalog (`nixos-modules/generated/provider-catalog-shape.nix`) carry
+exactly the crates that declare a product identity. The live count is therefore
+read from that generated artifact rather than written here, so a Provider that
+arrives or leaves moves the census without a prose edit.
 
 "Service-only" Providers own no exported ResourceType and act through
 ComponentSession services and owned primitive resources; "transport-only"

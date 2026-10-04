@@ -1,5 +1,4 @@
 {
   "crate": "d2b-provider-guest-qemu-media",
-  "provider": "runtime-qemu-media",
   "services": []
 }

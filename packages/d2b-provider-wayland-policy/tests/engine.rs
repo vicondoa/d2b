@@ -382,7 +382,12 @@ async fn reconcile_ensures_children_then_runs_the_effect_and_requeues() {
     let outcome = ResourceDriver::reconcile(&mut driver, &mut fixture.ctx)
         .await
         .expect("reconcile");
-    assert_eq!(outcome, ReconcileOutcome::Satisfied);
+    // The scripted effect answers the not-ready phase, so the pass is the
+    // runtime's own "not realized, no effect in flight, requeue scheduled"
+    // verdict. `Satisfied` here would be the fail-open this test's own
+    // `status.ready` assertion below contradicts: it publishes `Ready` on the
+    // row over a realization nothing stands behind.
+    assert_eq!(outcome, ReconcileOutcome::RetryScheduled);
 
     // Every child rides the manager child API before the typed effect, and the
     // not-ready phase requeues on the type's preserved cadence.
@@ -403,7 +408,7 @@ async fn reconcile_ensures_children_then_runs_the_effect_and_requeues() {
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
-async fn reconcile_projects_ready_status_and_registers_each_watch_once() {
+async fn reconcile_projects_ready_status_and_arms_both_watch_conditions() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
     fixture.effects.make_ready();
 
@@ -424,9 +429,20 @@ async fn reconcile_projects_ready_status_and_registers_each_watch_once() {
             .cmp(&(right.type_name.as_str(), right.name.as_str()))
     });
     unique.dedup();
-    assert_eq!(unique.len(), watches.len(), "one watch per target: {watches:?}");
-    // The dependency plus the two children.
-    assert_eq!(watches.len(), 3);
+    // A target the driver can never re-drive is a target whose readiness it
+    // can never take back, so a target that has NOT yet reported `Ready` is
+    // armed for a status change AND for a projection change: one registration
+    // per condition, two per target. (A target that already reports `Ready` is
+    // armed for the projection condition alone - the runtime answers a
+    // readiness registration on arrival - which this fixture never reaches:
+    // its manager publishes no runtime status for any target.)
+    assert_eq!(
+        unique.len() * 2,
+        watches.len(),
+        "each target is armed once per watch condition: {watches:?}"
+    );
+    // The dependency plus the two children, each armed for both conditions.
+    assert_eq!(watches.len(), 6);
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

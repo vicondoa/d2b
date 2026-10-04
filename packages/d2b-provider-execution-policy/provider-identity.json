@@ -1,0 +1,19 @@
+{
+  "crate": "d2b-provider-execution-policy",
+  "family": "execution-policy",
+  "roles": ["no-identity", "resource-family"],
+  "nonBinary": false,
+  "product": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

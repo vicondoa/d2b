@@ -105,6 +105,7 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint_test_support",
         ":d2b_provider_display_wayland_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -141,6 +142,7 @@ filegroup(
             "nix/**/*",
             "README.md",
             "operations.json",
+            "provider-identity.json",
             "registrations.json",
             "resource-types.json",
             "service-catalog.json",

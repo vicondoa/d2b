@@ -55,6 +55,7 @@ mod production_closure;
 mod blocking_census;
 mod operation_row_authority;
 mod provider_crate_policy;
+mod provider_identity_authority;
 mod provider_registration_authority;
 mod resource_type_authority;
 mod service_catalog;

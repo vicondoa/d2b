@@ -25,7 +25,7 @@ use d2b_contracts_provider::v3::semantic_services::child_resources::BindingChild
 use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
 use d2b_core_controller::{OwnedChildIntent, materialize_child_create_payload};
 use d2b_resource_runtime::context::{
-    ChildEnsure, ResourceContext, SpecDecoder, WatchCondition, typed_spec_decoder,
+    ChildEnsure, ResourceContext, SpecDecoder, WatchCondition, WatchId, typed_spec_decoder,
 };
 use d2b_resource_runtime::driver::{
     DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
@@ -486,14 +486,103 @@ fn classify_interaction_error(error: &InteractionDriverError) -> DriverFailure {
     }
 }
 
+/// What arming one condition on one target did this pass.
+///
+/// A runtime registration is one-shot (AE2): the target actor satisfies it
+/// exactly once, removes it, and notifies this row, which reaches the actor as
+/// `DependencySatisfied` and stops reading as live through
+/// [`ResourceContext::watch_is_live`]. `placed` marks a registration THIS pass
+/// put out, which a pair that cannot be completed has to hand back.
+enum Arm {
+    /// This row holds `id`: still standing in the target's mailbox, or placed
+    /// by this pass.
+    Held { id: WatchId, placed: bool },
+    /// The manager would not route a registration for this target.
+    Refused,
+}
+
+impl Arm {
+    /// Whether the manager refused to place this registration.
+    fn refused(&self) -> bool {
+        matches!(self, Arm::Refused)
+    }
+
+    /// The registration this row holds for the condition, if any.
+    fn held(self) -> Option<WatchId> {
+        match self {
+            Arm::Held { id, .. } => Some(id),
+            Arm::Refused => None,
+        }
+    }
+}
+
+/// One armed internal watch: the target, and the registrations this row holds
+/// on it, one per condition.
+///
+/// The ids ARE the record, and no fingerprint of the target's evidence can
+/// stand in for them: a target pass that CHANGES its readiness or its layer
+/// satisfies every registration this row holds on it, and then republishes the
+/// very pair it published before, so a spent registration and a standing one
+/// read identically. (A pass that changes neither satisfies nothing - the
+/// in-flight marker is not a change - so the common case never disturbs a
+/// standing registration at all.)
+struct ArmedWatch {
+    target: ResourceKey,
+    readiness: Option<WatchId>,
+    evidence: Option<WatchId>,
+}
+
+/// Keep one registration for `condition` on `target` outstanding.
+///
+/// `held` is the registration this row remembers, if any. One the target has
+/// not notified on is still standing and is kept without a round trip; one it
+/// notified on is spent, and the re-arm is a fresh registration under a new
+/// id. That is the whole rule: the record of the spend is the runtime's, and
+/// it is complete - see [`ResourceContext::watch_is_live`].
+async fn arm_condition(
+    ctx: &mut ResourceContext,
+    target: &ResourceKey,
+    condition: WatchCondition,
+    held: Option<WatchId>,
+) -> Arm {
+    if let Some(id) = held.filter(|id| ctx.watch_is_live(*id)) {
+        return Arm::Held { id, placed: false };
+    }
+    match ctx.watch(target.clone(), condition).await {
+        Ok(id) => Arm::Held { id, placed: true },
+        Err(_) => Arm::Refused,
+    }
+}
+
+/// Hand back what this pass placed when the pair could not be completed, and
+/// report the registration this row still has to remember for the condition.
+///
+/// A placement is the one thing this row cannot remember: a manager refusal
+/// says nothing about what it will do next pass, and a placement this row
+/// forgets is a live registration it stacks a second of on the target. A
+/// registration this row ALREADY held is not handed back and not forgotten:
+/// it stands in the target whatever this pair did, and keeping it recorded is
+/// what lets a later pass release it.
+async fn rollback(ctx: &mut ResourceContext, arm: Arm) -> Option<WatchId> {
+    match arm {
+        Arm::Held { id, placed: true } => {
+            let _ = ctx.cancel_watch(id).await;
+            None
+        }
+        Arm::Held { id, placed: false } => Some(id),
+        Arm::Refused => None,
+    }
+}
+
 /// One desired interaction resource.
 pub struct InteractionDriver<T: InteractionType> {
     zone: ZoneId,
     controller_generation: ControllerGeneration,
     effects: Arc<dyn InteractionDriverEffects>,
     behavior: T,
-    /// Dependency/child keys already watched (exactly once per target).
-    watched: Vec<ResourceKey>,
+    /// Armed dependency and child watches: each target, and the
+    /// registrations this row holds on it (see [`Self::watch_target`]).
+    watched: Vec<ArmedWatch>,
 }
 
 impl<T: InteractionType> InteractionDriver<T> {
@@ -544,16 +633,101 @@ impl<T: InteractionType> InteractionDriver<T> {
         Ok(())
     }
 
-    /// Register one internal dependency/child watch exactly once per target.
+    /// Arm this row's internal watches on one dependency or child target.
+    ///
+    /// Two conditions, never one, and BOTH held unconditionally. A readiness
+    /// phase cannot express a delivery downgrade: the row that publishes
+    /// `Undelivered` over a withdrawn authorization keeps reporting `Ready`,
+    /// so an evidence-only subscription never wakes this row for a change it
+    /// has to re-read (R21, AE18, KTD7). And the evidence cannot express the
+    /// other half either: a target that STOPS being ready and publishes no
+    /// projection beside it - `AudioService`, `Process` and `ShellPool` all
+    /// publish `Ready` with none - moves no evidence at all, so an
+    /// evidence-only subscription is silent over exactly the case the second
+    /// condition exists for.
+    ///
+    /// The arming is per registration, and it reads the SPEND - not the
+    /// evidence, and not "I armed this before". An internal registration is
+    /// satisfied exactly once and then removed by the target actor, and a
+    /// target pass that CHANGES its readiness or its layer consumes every
+    /// registration this row holds on it. A target that then republishes the
+    /// pair it published before reads identically whether it spent this row's
+    /// registrations or not, so a latch - over the `(status, projection)`
+    /// pair or over anything else - places none after the first spend and
+    /// leaves this row subscribed to nothing. A pass that published `Ready`
+    /// without mutating anything requeues nothing to correct that. The
+    /// runtime's own answer is the record instead: an id this row still holds
+    /// is standing, and an id the target notified on is spent and is replaced.
+    ///
+    /// Nothing is decided here from what the target currently reports, and
+    /// that is the point. The record of the spend is the runtime's and it is
+    /// COMPLETE - a spend is the only thing that ends a registration besides
+    /// its target's actor going away, and the runtime invalidates the record
+    /// then too (see [`ResourceContext::watch_is_live`]) - so both arms can
+    /// stand without a condition this driver would have to guess. Neither can
+    /// be answered on arrival either: [`WatchCondition::Ready`] is spent the
+    /// moment it lands on a target that already reports ready (AE2), which is
+    /// why the readiness arm is [`WatchCondition::ReadyChanged`], an edge no
+    /// arrival moves. The read that PROVES readiness is
+    /// [`ResourceContext::get_view`], in the pass; the arms only say when to
+    /// make it again.
     ///
     /// Best-effort by design: a dependency that is not a manager actor yet
     /// cannot be watched, and the resync schedule re-evaluates it.
-    async fn watch_once(&mut self, ctx: &mut ResourceContext, target: ResourceKey) {
-        if self.watched.contains(&target) || target == *ctx.key() {
+    async fn watch_target(&mut self, ctx: &mut ResourceContext, target: ResourceKey) {
+        if target == *ctx.key() {
             return;
         }
-        if ctx.watch(target.clone(), WatchCondition::Ready).await.is_ok() {
-            self.watched.push(target);
+        let (held_readiness, held_evidence) =
+            match self.watched.iter().find(|armed| armed.target == target) {
+                Some(armed) => (armed.readiness, armed.evidence),
+                None => (None, None),
+            };
+        let readiness =
+            arm_condition(ctx, &target, WatchCondition::ReadyChanged, held_readiness).await;
+        let evidence =
+            arm_condition(ctx, &target, WatchCondition::ProjectionChanged, held_evidence).await;
+
+        // Both or neither: a half-placed pair would leave one condition
+        // unsubscribed until the target moved again, which is exactly the gap
+        // this method exists to close. A refusal hands back what THIS pass
+        // placed, and keeps naming what the row already held - a registration
+        // standing in the target is not this pair's to drop, and forgetting
+        // it here is the leak the hand-back exists to avoid.
+        let (readiness, evidence) = if readiness.refused() || evidence.refused() {
+            (rollback(ctx, readiness).await, rollback(ctx, evidence).await)
+        } else {
+            (readiness.held(), evidence.held())
+        };
+        self.watched.retain(|held| held.target != target);
+        self.watched.push(ArmedWatch { target, readiness, evidence });
+    }
+
+    /// Release every arming this pass no longer watches, so a retired child
+    /// leaves nothing standing in the target's mailbox for this row to keep
+    /// re-reading.
+    ///
+    /// A registration that could not be handed back stays recorded: it still
+    /// stands in the target, and a later pass releases it.
+    async fn forget_unwatched(&mut self, ctx: &mut ResourceContext, targets: &[ResourceKey]) {
+        let mut index = 0;
+        while index < self.watched.len() {
+            let armed = &self.watched[index];
+            if targets.contains(&armed.target) {
+                index += 1;
+                continue;
+            }
+            let mut released = true;
+            for watch in [armed.readiness, armed.evidence].into_iter().flatten() {
+                if ctx.watch_is_live(watch) && ctx.cancel_watch(watch).await.is_err() {
+                    released = false;
+                }
+            }
+            if released {
+                self.watched.remove(index);
+            } else {
+                index += 1;
+            }
         }
     }
 
@@ -563,15 +737,6 @@ impl<T: InteractionType> InteractionDriver<T> {
             target.resource_type().as_str(),
             target.name().as_str(),
         )
-    }
-
-    /// Register one dependency reference as a readiness watch.
-    async fn watch_dependency(
-        &mut self,
-        ctx: &mut ResourceContext,
-        target: &ResourceRef,
-    ) {
-        self.watch_once(ctx, self.child_key(target)).await;
     }
 
     /// The row facts one type's child derivation reads.
@@ -808,13 +973,17 @@ impl<T: InteractionType> ResourceDriver for InteractionDriver<T> {
         self.check_row(ctx, &envelope, op)?;
 
         // Dependency edges: the resources this type's effects read are
-        // watched so their readiness or death wakes this actor.
+        // watched on readiness AND on projection change, so their readiness,
+        // their evidence, or their death wakes this actor.
         let dependencies = self
             .behavior
             .dependencies(&envelope)
             .map_err(|_| self.error(InteractionDriverErrorKind::SpecInvalid, op))?;
+        let mut watched = Vec::with_capacity(dependencies.len());
         for dependency in dependencies {
-            self.watch_dependency(ctx, &dependency).await;
+            let target = self.child_key(&dependency);
+            self.watch_target(ctx, target.clone()).await;
+            watched.push(target);
         }
 
         // Desired child set through the manager child API: every row is
@@ -832,12 +1001,15 @@ impl<T: InteractionType> ResourceDriver for InteractionDriver<T> {
         }
         mutated |= self.retire_obsolete_children(ctx, &desired, op).await?;
         for child in &desired {
-            self.watch_once(
-                ctx,
-                ResourceKey::new(self.zone.as_str(), child.type_name.as_str(), child.name.as_str()),
-            )
-            .await;
+            let target = ResourceKey::new(
+                self.zone.as_str(),
+                child.type_name.as_str(),
+                child.name.as_str(),
+            );
+            self.watch_target(ctx, target.clone()).await;
+            watched.push(target);
         }
+        self.forget_unwatched(ctx, &watched).await;
 
         let children = self.realized_children(ctx, &desired, op).await?;
         let request = self.request(ctx, &envelope, &children, op)?;
@@ -847,14 +1019,35 @@ impl<T: InteractionType> ResourceDriver for InteractionDriver<T> {
             .await
             .map_err(|error| self.effect_error(error, op))?;
 
-        ctx.set_status(InteractionDriverStatus {
-            ready: outcome.phase == InteractionEffectPhase::Ready,
-            resource: outcome.resource,
-        });
-        if mutated || outcome.phase != InteractionEffectPhase::Ready {
+        let InteractionEffectOutcome { phase, resource } = outcome;
+        let ready = phase == InteractionEffectPhase::Ready;
+        // The Provider's own projection is this row's wire layer as well as
+        // its typed status: holding it only in the in-memory slot published an
+        // empty `status.resource` on every row, so no reader could see what
+        // the pass proved. The projection belongs to this pass - the actor
+        // takes it after the pass that set it - so it is published as the
+        // effect produced it, never a later or synthesized one.
+        if let Some(projection) = resource.clone() {
+            ctx.set_status_projection(projection);
+        }
+        ctx.set_status(InteractionDriverStatus { ready, resource });
+        if mutated || !ready {
             ctx.requeue_after(self.behavior.resync());
         }
-        Ok(ReconcileOutcome::Satisfied)
+        // `Satisfied` is the runtime's "the desired state is realized, the
+        // actor may publish `Ready`" verdict; `RetryScheduled` is its "not
+        // realized, no effect in flight, publish `Pending`". An interaction
+        // row owns its whole realization - the children it committed and the
+        // relationships those children publish - so the Provider's phase IS
+        // the row's readiness. Answering `Satisfied` over a `Pending` phase
+        // published `Ready` over children that had not converged, waking
+        // every watcher on a claim nothing backed. The requeue above is this
+        // pass's own, which is exactly what `RetryScheduled` reports.
+        Ok(if ready {
+            ReconcileOutcome::Satisfied
+        } else {
+            ReconcileOutcome::RetryScheduled
+        })
     }
 
     /// Drain step: every owned child finalizes before this resource's own
@@ -987,4 +1180,1259 @@ pub fn binding_child_ensure(
         metadata: serde_json::to_vec(&metadata)
             .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Tests: the readiness verdict a session publishes, over the real effects
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
+    use d2b_core_controller::OwnedChildIntent;
+    use d2b_provider_display_wayland::{
+        DisplayIdentity, EndpointSpec, WaylandSessionSpec, session_children,
+    };
+    use d2b_provider_toolkit::testing::fakes::RecordingRequeue;
+    use d2b_resource_runtime::ResourceStatus;
+    use d2b_resource_runtime::context::{
+        ChildEnsure, EffectCompleted, ManagerEndpoint, RequeueScheduler, ResourceContext,
+        WatchCondition, WatchId, WatchRegistration, WatchSatisfied,
+    };
+    use d2b_resource_runtime::driver::{ReconcileOutcome, ResourceDriver};
+    use d2b_resource_runtime::error::ResourceError;
+    use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
+    use d2b_resource_runtime::manager::ResourceView;
+    use d2b_resource_runtime::spec_store::EnsureOutcome;
+    use serde_json::{Value, json};
+    use tokio::sync::Mutex;
+
+    use super::{
+        InteractionChildContext, InteractionDriver, InteractionDriverArgs, InteractionDriverStatus,
+        InteractionEffectError, InteractionKind, InteractionSpecEnvelope, InteractionType, key_ref,
+        owned_child_ensure, resource_uid, spec_decoder,
+    };
+    use crate::InteractionPlaneRead;
+    use crate::effects_service::InteractionEffectsService;
+    use crate::test_support::{ScriptedPlane, scripted_facets_over_plane, scripted_identity};
+
+    /// The Zone every fixture row lives in.
+    fn zone() -> ZoneId {
+        ZoneId::parse("work").expect("fixture Zone")
+    }
+
+    /// The canonical `WaylandSession` ResourceType name.
+    const SESSION_TYPE: &str = "display-wayland.d2bus.org.WaylandSession";
+
+    /// The session row's durable uid, the exact bytes of the scripted
+    /// admission fence's `33333333-3333-4333-8333-333333333333`. The fixture
+    /// asserts the two agree, so a drifting script fails here rather than
+    /// quietly reading a different identity than production would.
+    const SESSION_UID: [u8; 16] = [
+        0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x43, 0x33, 0x83, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
+    ];
+
+    /// The row generation the fixture drives every pass at.
+    const SESSION_GENERATION: u64 = 4;
+
+    /// The realization token every `Endpoint` row and every delivered
+    /// relationship in the fixture plane names: the exact shape
+    /// `RealizationIncarnation::derive` produces (a bounded token, 192 bits of
+    /// digest), so the fixture is graded by the production comparison and not
+    /// by a value the parser would reject.
+    const FIXTURE_INCARNATION: &str =
+        "incarnation-0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn session_uid() -> ResourceUid {
+        assert_eq!(
+            resource_uid(&SESSION_UID),
+            Some(scripted_identity().wayland_session_uid),
+            "the fixture row uid is the one the scripted admission fence answers"
+        );
+        resource_uid(&SESSION_UID).expect("the fixture row uid is a closed resource uid")
+    }
+
+    fn session_ref() -> ResourceRef {
+        ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
+            .expect("the session row reference")
+    }
+
+    /// The stored session spec document, naming the exact cross-domain rows the
+    /// scripted admission fence answers for.
+    fn session_spec() -> WaylandSessionSpec {
+        WaylandSessionSpec::new(
+            ResourceRef::parse("Guest/work").expect("guest"),
+            ResourceRef::parse("Host/host-system").expect("host"),
+            ResourceRef::parse("User/alice").expect("user"),
+            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/policy").expect("policy"),
+            DisplayIdentity::new("display", "#112233", "#223344", "#334455").expect("identity"),
+            true,
+        )
+        .expect("the session spec")
+    }
+
+    fn key_of(reference: &ResourceRef) -> ResourceKey {
+        ResourceKey::new(
+            zone().as_str(),
+            reference.resource_type().as_str(),
+            reference.name().as_str(),
+        )
+    }
+
+    fn committed_intents() -> Vec<OwnedChildIntent> {
+        session_children::display_owned_child_intents(
+            &zone(),
+            &session_ref(),
+            &session_uid(),
+            &session_spec(),
+            SESSION_GENERATION,
+        )
+        .expect("the production child derivation")
+    }
+
+    // -- the declaration the driver is served over ---------------------------
+
+    /// The display session's row vocabulary, over the production child
+    /// derivation. Nothing here decides readiness: that is the effects
+    /// service's aggregate and the engine's verdict, both under test.
+    #[derive(Clone)]
+    struct DisplaySession;
+
+    impl InteractionType for DisplaySession {
+        const KIND: InteractionKind = InteractionKind::DisplayWaylandSession;
+        const RESOURCE_TYPE: &'static str = SESSION_TYPE;
+        const PROVIDER_REF: &'static str = d2b_provider_display_wayland::PROVIDER_REF;
+        const SPEC_PROVIDER_SELECTOR: bool = false;
+
+        fn resync(&self) -> Duration {
+            Duration::from_millis(300)
+        }
+
+        fn validate(
+            &self,
+            envelope: &InteractionSpecEnvelope,
+        ) -> Result<(), InteractionEffectError> {
+            envelope.base_spec::<WaylandSessionSpec>().map(|_| ())
+        }
+
+        fn dependencies(
+            &self,
+            envelope: &InteractionSpecEnvelope,
+        ) -> Result<Vec<ResourceRef>, InteractionEffectError> {
+            let spec = envelope.base_spec::<WaylandSessionSpec>()?;
+            Ok(vec![
+                spec.guest_ref().clone(),
+                spec.host_ref().clone(),
+                spec.user_ref().clone(),
+                spec.policy_ref().clone(),
+            ])
+        }
+
+        fn desired_children(
+            &self,
+            children: &InteractionChildContext<'_>,
+            envelope: &InteractionSpecEnvelope,
+        ) -> Result<Vec<ChildEnsure>, InteractionEffectError> {
+            let spec = envelope.base_spec::<WaylandSessionSpec>()?;
+            let session_ref = key_ref(children.key).map_err(|_| InteractionEffectError::InvalidResource)?;
+            let session_uid =
+                resource_uid(children.uid).ok_or(InteractionEffectError::InvalidResource)?;
+            let intents = session_children::display_owned_child_intents(
+                children.zone,
+                &session_ref,
+                &session_uid,
+                &spec,
+                children.generation,
+            )
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
+            intents.iter().map(owned_child_ensure).collect()
+        }
+    }
+
+    // -- the manager boundary -----------------------------------------------
+
+    /// The manager boundary, recording every committed owned child, every
+    /// internal watch the driver registers, and serving the scripted runtime
+    /// plane. This is the one surface the driver reaches the plane through; it
+    /// commits what the child derivation asked for and reads it back as owned
+    /// rows.
+    struct ChildManager {
+        rows: Arc<Mutex<Vec<StoredDesiredResource>>>,
+        parent_uid: [u8; 16],
+        /// The same scripted plane the effects read: in production the
+        /// driver's `get_view` and the effects' plane read are one in-memory
+        /// store (KTD12), so the boundary serves the very rows the pass will
+        /// be judged against.
+        plane: ScriptedPlane,
+        /// The registrations standing in the target actors' mailboxes. One
+        /// leaves this set exactly as it leaves production: the target actor
+        /// satisfies it once and REMOVES it (AE2), or this row releases it
+        /// through [`ManagerEndpoint::cancel_watch`]. Counting what is left is
+        /// therefore counting what production would have standing, which is
+        /// the only honest way to assert a subscription neither stacks nor
+        /// disappears.
+        watches: Arc<Mutex<Vec<LiveWatch>>>,
+        /// Every `(target, condition)` the driver placed, in order, including
+        /// the ones later spent or released.
+        placed: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>>,
+        /// Registrations this row released, in order: the ids a test asserts
+        /// were handed back rather than dropped on the floor.
+        released: Arc<Mutex<Vec<WatchId>>>,
+        /// Registrations the manager refuses to route, so a test can place
+        /// one half of a pair and observe the other half's fate.
+        refused: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>>,
+        /// The manager-allocated id the next registration receives.
+        next_watch: Arc<AtomicU64>,
+    }
+
+    /// One internal-watch registration the driver placed, held by the target
+    /// actor it was routed to.
+    struct LiveWatch {
+        id: WatchId,
+        target: ResourceKey,
+        condition: WatchCondition,
+        /// The channel the target actor notifies on, exactly as the runtime
+        /// hands it: a satisfaction travels back over the subscriber's own
+        /// notify channel, never a side channel the test invented.
+        notify: tokio::sync::mpsc::UnboundedSender<WatchSatisfied>,
+     }
+
+    #[async_trait]
+    impl ManagerEndpoint for ChildManager {
+        async fn ensure_child(
+            &self,
+            _parent: &ResourceKey,
+            child: ChildEnsure,
+        ) -> Result<EnsureOutcome, ResourceError> {
+            let key = ResourceKey::new(zone().as_str(), child.type_name.as_str(), child.name.clone());
+            let mut rows = self.rows.lock().await;
+            match rows.iter_mut().find(|row| row.key == key) {
+                Some(row) => {
+                    // The real manager answers `Unchanged` for a row the
+                    // derivation already committed, so a converged pass can
+                    // report that it mutated nothing - which is what stops it
+                    // from requeueing itself.
+                    if row.spec == child.spec && row.metadata == child.metadata {
+                        return Ok(EnsureOutcome::Unchanged(row.clone()));
+                    }
+                    row.spec = child.spec;
+                    row.metadata = child.metadata;
+                    Ok(EnsureOutcome::Updated(row.clone()))
+                }
+                None => {
+                    rows.push(StoredDesiredResource {
+                        key,
+                        uid: [0x77; 16],
+                        generation: SESSION_GENERATION,
+                        owner_uid: Some(self.parent_uid),
+                        provenance: ResourceProvenance::Resource,
+                        deleting: false,
+                        spec: child.spec,
+                        metadata: child.metadata,
+                        created_at: 0,
+                    });
+                    Ok(EnsureOutcome::Created(rows.last().expect("pushed").clone()))
+                }
+            }
+        }
+
+        async fn get(
+            &self,
+            key: &ResourceKey,
+        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
+            Ok(self.rows.lock().await.iter().find(|row| row.key == *key).cloned())
+        }
+
+        async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+            // The runtime plane is the scripted store the effects read their
+            // rows from too, so a pass reads one world through both seams.
+            self.plane
+                .get(key)
+                .await
+                .map_err(|()| ResourceError::ManagerRejected {
+                    reason: "scripted plane".into(),
+                })
+        }
+
+        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
+            if let Some(row) = self.rows.lock().await.iter_mut().find(|row| row.key == *key) {
+                row.deleting = true;
+            }
+            Ok(())
+        }
+
+        async fn list_owned(
+            &self,
+            owner_uid: [u8; 16],
+        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            Ok(self
+                .rows
+                .lock()
+                .await
+                .iter()
+                .filter(|row| row.owner_uid == Some(owner_uid))
+                .cloned()
+                .collect())
+        }
+
+        async fn register_watch(
+            &self,
+            _subscriber: &ResourceKey,
+            registration: WatchRegistration,
+        ) -> Result<WatchId, ResourceError> {
+            if self
+                .refused
+                .lock()
+                .await
+                .iter()
+                .any(|(target, condition)| {
+                    target == &registration.target && *condition == registration.condition
+                })
+            {
+                // The runtime refuses exactly this way when the target has no
+                // running actor to route the registration to.
+                return Err(ResourceError::ManagerRejected {
+                    reason: "watch target has no running actor".into(),
+                });
+            }
+            let id = WatchId(self.next_watch.fetch_add(1, Ordering::SeqCst));
+            self.placed
+                .lock()
+                .await
+                .push((registration.target.clone(), registration.condition.clone()));
+            self.watches.lock().await.push(LiveWatch {
+                id,
+                target: registration.target,
+                condition: registration.condition,
+                notify: registration.notify,
+            });
+            Ok(id)
+        }
+
+        async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError> {
+            self.watches.lock().await.retain(|live| live.id != watch);
+            self.released.lock().await.push(watch);
+            Ok(())
+        }
+    }
+
+    // -- the zone plane the effects read -------------------------------------
+
+    fn plane_view(
+        key: ResourceKey,
+        generation: u64,
+        status: ResourceStatus,
+        spec: Vec<u8>,
+        projection: Option<Value>,
+    ) -> ResourceView {
+        ResourceView {
+            key,
+            uid: [0x99; 16],
+            generation,
+            deleting: false,
+            provenance: ResourceProvenance::Resource,
+            spec,
+            metadata: Vec::new(),
+            owner_key: None,
+            status: Some(status),
+            status_generation: Some(generation),
+            status_projection: projection,
+        }
+    }
+
+    /// One committed child row's stored spec column: the `spec` member of the
+    /// envelope the intent body carries, which is exactly what the manager
+    /// commits for the row and what the delivery gate reads back.
+    fn intent_spec_bytes(intent: &OwnedChildIntent) -> Vec<u8> {
+        let envelope: Value =
+            serde_json::from_slice(intent.canonical_resource()).expect("the committed envelope");
+        serde_json::to_vec(envelope.get("spec").expect("the envelope spec")).expect("spec bytes")
+    }
+
+    /// The zone plane one session pass reads: the four rows the session reads,
+    /// its own committed children, and the canonical relationship rows its
+    /// `Endpoint` children publish. Every name is derived by the production
+    /// derivations, so the fixture cannot drift from the vocabulary the gate
+    /// reads.
+    fn plane(children_ready: bool, delivered: bool) -> Vec<ResourceView> {
+        let spec = session_spec();
+        let mut rows = Vec::new();
+        for reference in [
+            spec.guest_ref().clone(),
+            spec.host_ref().clone(),
+            spec.user_ref().clone(),
+            spec.policy_ref().clone(),
+        ] {
+            rows.push(plane_view(
+                key_of(&reference),
+                1,
+                ResourceStatus::Ready,
+                b"{}".to_vec(),
+                Some(json!({"scripted": {"incarnation": FIXTURE_INCARNATION}})),
+            ));
+        }
+        for intent in committed_intents() {
+            let target = intent.target();
+            // Every `Endpoint` row publishes the realization token its own
+            // current generation stands for, and every relationship granted
+            // over it carries that same token (KTD8): the fixture publishes
+            // one token for the delivered graph and a different one for a
+            // replaced realization, which is the downgrade the gate reads.
+            let endpoint = target.resource_type().as_str() == "Endpoint";
+            // Every row publishes a `status.resource` layer, as every real row
+            // of this family does. A row that published NONE could never be
+            // heard from through the evidence condition - which is a fact
+            // about the runtime, and one the fixture must not paper over by
+            // handing out rows no Provider would publish.
+            let layer = if endpoint {
+                json!({"endpoint": {"incarnation": FIXTURE_INCARNATION}})
+            } else {
+                json!({"scripted": {"incarnation": FIXTURE_INCARNATION}})
+            };
+            rows.push(plane_view(
+                key_of(target),
+                SESSION_GENERATION,
+                if children_ready {
+                    ResourceStatus::Ready
+                } else {
+                    ResourceStatus::Pending
+                },
+                intent_spec_bytes(&intent),
+                Some(layer),
+            ));
+            if !endpoint {
+                continue;
+            }
+            let endpoint_spec: EndpointSpec =
+                serde_json::from_slice(&intent_spec_bytes(&intent)).expect("endpoint spec");
+            for relationship in session_children::display_canonical_bindings(
+                &zone(),
+                target,
+                &endpoint_spec,
+            )
+            .expect("the canonical binding rows") {
+                let generation = 1;
+                let layer = if delivered {
+                    json!({
+                        "binding": {
+                            "state": "delivered",
+                            "generation": generation,
+                            "incarnation": FIXTURE_INCARNATION,
+                        }
+                    })
+                } else {
+                    json!({
+                        "binding": {
+                            "state": "undelivered",
+                            "reason": "endpoint-access-dispatch-unavailable",
+                        }
+                    })
+                };
+                rows.push(plane_view(
+                    key_of(&relationship),
+                    generation,
+                    ResourceStatus::Ready,
+                    b"{}".to_vec(),
+                    Some(layer),
+                ));
+            }
+        }
+        rows
+    }
+
+    // -- the fixture ---------------------------------------------------------
+
+    struct Fixture {
+        ctx: ResourceContext,
+        requeue: Arc<RecordingRequeue>,
+        /// The scripted runtime plane both the driver's `get_view` and the
+        /// effects read, so a test can move the evidence between two passes of
+        /// one driver.
+        plane: ScriptedPlane,
+        /// The registrations still standing in their target actors' mailboxes.
+        watches: Arc<Mutex<Vec<LiveWatch>>>,
+        /// Every `(target, condition)` the driver placed, spent or not.
+        placed: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>>,
+        /// Every registration the driver handed back.
+        released: Arc<Mutex<Vec<WatchId>>>,
+        /// The channel the runtime forwards a satisfaction into; the receiver
+        /// stands in for this row's mailbox.
+        watch_rx: tokio::sync::mpsc::UnboundedReceiver<WatchSatisfied>,
+        /// The manager's routing refusals, which a test arms before a pass.
+        refused: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>>,
+    }
+
+    impl Fixture {
+        /// How many registrations of one condition this row still HOLDS on one
+        /// target. One live registration per condition is the whole contract:
+        /// two is a stack (one target change would then wake this row twice),
+        /// and zero is the miss this fixture exists to catch.
+        async fn armed(&self, target: &ResourceKey, condition: &WatchCondition) -> usize {
+            self.watches
+                .lock()
+                .await
+                .iter()
+                .filter(|live| &live.target == target && &live.condition == condition)
+                .count()
+        }
+
+        /// The ids of one target's live registrations, in placement order.
+        async fn armed_ids(&self, target: &ResourceKey) -> Vec<WatchId> {
+            self.watches
+                .lock()
+                .await
+                .iter()
+                .filter(|live| &live.target == target)
+                .map(|live| live.id)
+                .collect()
+        }
+
+        /// How many registrations of one condition the driver ever placed,
+        /// spent ones included.
+        async fn placements(&self, target: &ResourceKey, condition: &WatchCondition) -> usize {
+            self.placed
+                .lock()
+                .await
+                .iter()
+                .filter(|(key, armed)| key == target && armed == condition)
+                .count()
+        }
+
+        /// Every registration this driver placed, so a test can assert the
+        /// whole armed set rather than one row of it.
+        async fn armed_targets(&self) -> Vec<ResourceKey> {
+            let mut targets = self
+                .watches
+                .lock()
+                .await
+                .iter()
+                .map(|live| live.target.clone())
+                .collect::<Vec<_>>();
+            targets.sort_by(|left, right| {
+                (&left.type_name, &left.name).cmp(&(&right.type_name, &right.name))
+            });
+            targets.dedup();
+            targets
+        }
+
+        /// One published transition of `target`, as the runtime plays it: the
+        /// registrations whose condition FIRES across it are satisfied once
+        /// and REMOVED (AE2), and the target actor notifies this row over the
+        /// channel the registration carried.
+        ///
+        /// `before` is what the target had published until now - the plane is
+        /// the record of that, which is why the two are read together. A
+        /// double that satisfied EVERY registration would be more generous
+        /// than the runtime and would hide the exact gap this fixture exists
+        /// to show: a readiness phase that moves while the evidence layer
+        /// does not move at all.
+        async fn target_transition(
+            &self,
+            target: &ResourceKey,
+            status: ResourceStatus,
+            projection: Option<Value>,
+        ) -> Vec<WatchId> {
+            let published = self.plane.get(target).await.expect("a scripted row");
+            let before = published.as_ref().and_then(|view| view.status.clone());
+            let before_projection = published.as_ref().and_then(|view| view.status_projection.clone());
+            let ready = status == ResourceStatus::Ready;
+            let was_ready = before == Some(ResourceStatus::Ready);
+            let mut spent = Vec::new();
+            let mut live = self.watches.lock().await;
+            let mut index = 0;
+            while index < live.len() {
+                let fires = match &live[index].condition {
+                    WatchCondition::Ready => ready,
+                    WatchCondition::ReadyChanged => was_ready != ready,
+                    WatchCondition::ProjectionChanged => projection != before_projection,
+                    WatchCondition::Custom(_) => false,
+                };
+                if &live[index].target == target && fires {
+                    let satisfied = live.remove(index);
+                    let _ = satisfied.notify.send(WatchSatisfied {
+                        watch: satisfied.id,
+                        target: satisfied.target.clone(),
+                    });
+                    spent.push(satisfied.id);
+                    continue;
+                }
+                index += 1;
+            }
+            spent
+        }
+
+        /// One pass of `target`, as the runtime plays it: the pass publishes
+        /// `Reconciling` with no projection and then the status it settles on,
+        /// and each of those transitions satisfies the registrations whose
+        /// condition fires across it.
+        ///
+        /// The plane is untouched, so the target's `(status, projection)` pair
+        /// reads back exactly as it did before - which is the case a
+        /// fingerprint cannot tell from "nothing was spent".
+        async fn target_pass(&self, target: &ResourceKey) -> Vec<WatchId> {
+            let settled = self.plane.get(target).await.expect("a scripted row");
+            let status = settled.as_ref().and_then(|view| view.status.clone());
+            let projection = settled.as_ref().and_then(|view| view.status_projection.clone());
+            let mut spent = self.target_transition(target, ResourceStatus::Reconciling, None).await;
+            if let Some(status) = status {
+                spent.extend(self.target_transition(target, status, projection).await);
+            }
+            spent
+        }
+
+        /// The satisfactions the runtime's pump forwarded into this row's
+        /// mailbox, in arrival order.
+        async fn delivered(&mut self) -> Vec<(ResourceKey, WatchId)> {
+            let mut notifications = Vec::new();
+            while let Ok(satisfied) = self.watch_rx.try_recv() {
+                notifications.push((satisfied.target, satisfied.watch));
+            }
+            notifications
+        }
+    }
+
+    /// The real interaction driver over the real effects service, reading the
+    /// scripted zone plane: the production path end to end, short only of the
+    /// manager actor that would publish the verdict onto the row.
+    fn fixture(rows: Vec<ResourceView>) -> (Fixture, InteractionDriver<DisplaySession>) {
+        let spec = session_spec();
+        let row = StoredDesiredResource {
+            key: key_of(&session_ref()),
+            uid: SESSION_UID,
+            generation: SESSION_GENERATION,
+            owner_uid: None,
+            provenance: ResourceProvenance::Nix,
+            deleting: false,
+            spec: serde_json::to_vec(&spec).expect("session spec bytes"),
+            metadata: b"{}".to_vec(),
+            created_at: 0,
+        };
+        let plane = ScriptedPlane::new(rows);
+        let watches: Arc<Mutex<Vec<LiveWatch>>> = Arc::new(Mutex::new(Vec::new()));
+        let placed: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>> = Arc::new(Mutex::new(Vec::new()));
+        let released: Arc<Mutex<Vec<WatchId>>> = Arc::new(Mutex::new(Vec::new()));
+        let refused: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>> = Arc::new(Mutex::new(Vec::new()));
+        let manager = Arc::new(ChildManager {
+            rows: Arc::new(Mutex::new(Vec::new())),
+            parent_uid: row.uid,
+            plane: plane.clone(),
+            watches: Arc::clone(&watches),
+            placed: Arc::clone(&placed),
+            released: Arc::clone(&released),
+            refused: Arc::clone(&refused),
+            next_watch: Arc::new(AtomicU64::new(1)),
+        });
+        let requeue = Arc::new(RecordingRequeue::default());
+        let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel::<EffectCompleted>();
+        let (watch_tx, watch_rx) = tokio::sync::mpsc::unbounded_channel::<WatchSatisfied>();
+        let ctx = ResourceContext::new(
+            row,
+            spec_decoder(),
+            manager,
+            Arc::clone(&requeue) as Arc<dyn RequeueScheduler>,
+            effects_tx,
+            watch_tx,
+        );
+        let effects =
+            InteractionEffectsService::new(scripted_facets_over_plane(zone(), plane.clone()));
+        let driver = InteractionDriver::new(InteractionDriverArgs {
+            zone: zone(),
+            controller_generation: ControllerGeneration::new(3).expect("controller generation"),
+            effects: Arc::new(effects),
+            behavior: DisplaySession,
+        });
+        let fixture = Fixture {
+            ctx,
+            requeue,
+            plane,
+            watches,
+            placed,
+            released,
+            watch_rx,
+            refused,
+        };
+        (fixture, driver)
+    }
+
+    // -- reconcile -----------------------------------------------------------
+
+    /// A session whose children have not converged must not claim readiness.
+    /// `Satisfied` is the runtime's "publish `Ready`" verdict and
+    /// `RetryScheduled` its "publish `Pending`" verdict, so answering
+    /// `Satisfied` over pending children woke every watcher on a session
+    /// nothing stood behind.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_session_with_pending_children_does_not_publish_ready() {
+        let (mut fixture, mut driver) = fixture(plane(false, true));
+        let outcome = driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
+
+        assert_eq!(
+            outcome,
+            ReconcileOutcome::RetryScheduled,
+            "a session whose children are not Ready publishes `Pending`, never `Ready`"
+        );
+        let status = fixture
+            .ctx
+            .status::<InteractionDriverStatus>()
+            .expect("the typed status is published");
+        assert!(!status.ready, "the typed status agrees with the verdict");
+        assert_eq!(
+            fixture.ctx.take_status_projection(),
+            None,
+            "a pending aggregate publishes no projection: nothing is realized to name"
+        );
+        assert_eq!(
+            fixture.requeue.scheduled().len(),
+            1,
+            "the pass requeues on the type's cadence, so the row is re-driven"
+        );
+    }
+
+    /// The second half of the aggregate: children that are all Ready but a
+    /// relationship that has not been delivered is not a realized session
+    /// either - the workers exist, but no admitted carriage stands behind them.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_session_with_an_undelivered_binding_does_not_publish_ready() {
+        let (mut fixture, mut driver) = fixture(plane(true, false));
+        let outcome = driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
+
+        assert_eq!(
+            outcome,
+            ReconcileOutcome::RetryScheduled,
+            "an undelivered canonical binding holds the session at `Pending`"
+        );
+        let status = fixture
+            .ctx
+            .status::<InteractionDriverStatus>()
+            .expect("the typed status is published");
+        assert!(!status.ready);
+        assert_eq!(fixture.ctx.take_status_projection(), None);
+    }
+
+    /// Readiness is published exactly when the aggregate holds, and the row's
+    /// `status.resource` carries the typed projection the pass proved rather
+    /// than the empty layer a driver that only held it in memory publishes.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_session_publishes_ready_and_its_projection_once_the_aggregate_holds() {
+        let (mut fixture, mut driver) = fixture(plane(true, true));
+        let outcome = driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
+
+        assert_eq!(
+            outcome,
+            ReconcileOutcome::Satisfied,
+            "every child Ready and every canonical binding delivered is the whole aggregate"
+        );
+        let status = fixture
+            .ctx
+            .status::<InteractionDriverStatus>()
+            .expect("the typed status is published")
+            .clone();
+        assert!(status.ready);
+        let projection = fixture
+            .ctx
+            .take_status_projection()
+            .expect("the row's `status.resource` carries the Provider projection, not `{}`");
+        assert_eq!(
+            &projection,
+            status.resource.as_ref().expect("the typed status carries it too"),
+            "the wire layer and the typed status are one projection"
+        );
+
+        let intents = committed_intents();
+        let processes = intents
+            .iter()
+            .filter(|intent| intent.target().resource_type().as_str() == "Process")
+            .map(|intent| intent.target().to_canonical_string())
+            .collect::<Vec<_>>();
+        // R23: the session's own Endpoint is the GuestFrontend-produced row,
+        // derived from the session's uid by the display Provider's durable
+        // vocabulary - NOT the first `Endpoint` child a list yields, which is
+        // the host compositor socket, and not the host proxy's carriage. This
+        // assertion names that derivation on purpose: picking the row
+        // positionally here would ratify whatever the projection happens to
+        // select, which is the mistake the assertion exists to catch.
+        let wayland = d2b_provider_display_wayland::durable_wayland_endpoint_ref(&session_uid())
+            .expect("the durable guest frontend Endpoint row")
+            .to_canonical_string();
+        let compositor =
+            d2b_provider_display_wayland::durable_compositor_endpoint_ref(&session_uid())
+                .expect("the durable host compositor Endpoint row")
+                .to_canonical_string();
+        assert_ne!(wayland, compositor, "two different rows");
+        let projected = projection
+            .pointer("/waylandEndpointRef")
+            .and_then(Value::as_str);
+        assert_ne!(
+            projected,
+            Some(compositor.as_str()),
+            "the session's endpoint is never the host compositor socket: selecting the first \
+             `Endpoint` child a list yields is what put that row here"
+        );
+        assert_eq!(
+            projection.pointer("/proxyProcessRef").and_then(Value::as_str),
+            processes.first().map(String::as_str),
+            "the projection names the host proxy worker"
+        );
+        assert_eq!(
+            projection
+                .pointer("/guestFrontendProcessRef")
+                .and_then(Value::as_str),
+            processes.get(1).map(String::as_str),
+            "the projection names the guest frontend worker"
+        );
+        assert_eq!(
+            projected,
+            Some(wayland.as_str()),
+            "the projection names the GuestFrontend-produced Endpoint row, at the durable \
+             derivation the display Provider owns"
+        );
+        assert_eq!(
+            projection
+                .pointer("/waylandEndpointGeneration")
+                .and_then(Value::as_u64),
+            Some(SESSION_GENERATION),
+            "at the Endpoint row's own committed generation"
+        );
+    }
+
+    /// A target that STOPS being ready and publishes no projection beside it
+    /// still wakes the row that watches it (R21, AE18, KTD7).
+    ///
+    /// `AudioService` publishes `Ready` with NO projection, and so do
+    /// `Process` and `ShellPool`. A row holding only the evidence arm then has
+    /// nothing to wake it: leaving `Ready` publishes the identical pair, the
+    /// evidence condition does not fire, and a converged row schedules no
+    /// requeue of its own (`mutated || !ready`). So it goes on publishing
+    /// `Ready` over a dependency that is gone - an `AudioBinding` that gates
+    /// its own readiness on that service row keeps publishing `Ready` over a
+    /// dead one, for as long as the row lives.
+    ///
+    /// The readiness arm therefore has to be held for a target that IS ready,
+    /// and a [`WatchCondition::Ready`] registration cannot do that: a
+    /// registration whose condition already holds is answered on arrival
+    /// (AE2), so it is spent before it can stand. The edge-triggered
+    /// readiness condition can, because no arrival satisfies it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_target_that_leaves_ready_without_touching_its_projection_wakes_this_row() {
+        let worker = key_of(
+            committed_intents()
+                .iter()
+                .map(|intent| intent.target())
+                .find(|target| target.resource_type().as_str() == "Process")
+                .expect("a derived worker process"),
+        );
+        let mut rows = plane(true, true);
+        rows.iter_mut()
+            .find(|view| view.key == worker)
+            .expect("the worker row")
+            .status_projection = None;
+        let (mut fixture, mut driver) = fixture(rows);
+        assert_eq!(
+            fixture.ctx.get_view(&worker).await.expect("the scripted plane answers")
+                .and_then(|view| view.status_projection),
+            None,
+            "this row publishes `Ready` with no projection at all, exactly as `AudioService`, \
+             `Process` and `ShellPool` do"
+        );
+
+        assert_eq!(
+            driver.reconcile(&mut fixture.ctx).await.expect("the converged pass"),
+            ReconcileOutcome::Satisfied,
+            "the aggregate holds"
+        );
+        assert_eq!(
+            fixture.armed(&worker, &WatchCondition::ReadyChanged).await,
+            1,
+            "so the readiness arm is held for a target that ALREADY reports ready - a `Ready` \
+             registration would be answered on arrival and stand for nothing"
+        );
+
+        // The target stops being ready and publishes no projection beside it.
+        let spent = fixture.target_transition(&worker, ResourceStatus::Pending, None).await;
+        assert_eq!(
+            spent.len(),
+            1,
+            "exactly one registration fires, and it is the readiness edge: the evidence layer \
+             did not move, so nothing else could have"
+        );
+        assert_eq!(
+            fixture.delivered().await,
+            vec![(worker.clone(), spent[0])],
+            "and it wakes this row - the one wake-up a converged row with no requeue of its \
+             own has"
+        );
+        // The runtime turns that notification into `DependencySatisfied`, which
+        // records the spend on the context before the pass it triggers.
+        for watch in &spent {
+            fixture.ctx.mark_watch_spent(*watch);
+        }
+        fixture.plane.publish(plane(false, false)).await;
+
+        assert_eq!(
+            driver.reconcile(&mut fixture.ctx).await.expect("the woken pass"),
+            ReconcileOutcome::RetryScheduled,
+            "which re-reads the aggregate over a withdrawn worker and publishes `Pending` \
+             rather than `Ready` over a dead target"
+        );
+        assert_eq!(
+            fixture.armed(&worker, &WatchCondition::ReadyChanged).await,
+            1,
+            "and re-arms, so a second withdrawal is observed too"
+        );
+    }
+
+    /// The subscription is the only thing that makes a post-ready downgrade
+    /// observable (R21, AE18, KTD7).
+    ///
+    /// A pass that published `Ready` without mutating anything requeues
+    /// nothing, and an internal registration is satisfied once and then
+    /// removed by the target actor - so a driver that armed each target once
+    /// and never again is unsubscribed at exactly the moment it needs to be
+    /// woken, and keeps publishing `Ready` over a child that withdrew.
+    ///
+    /// Both arms are held for every target, and both are spent when a target
+    /// pass CHANGES something: a target that leaves `Ready` fires the
+    /// readiness edge, and a target that publishes a different layer fires the
+    /// evidence edge. So this drives one driver across three passes and spends
+    /// every target's registrations the way the runtime does.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_downgraded_child_is_re_armed_and_leaves_the_session_pending() {
+        let spec = session_spec();
+        let mut expected = vec![
+            key_of(spec.guest_ref()),
+            key_of(spec.host_ref()),
+            key_of(spec.user_ref()),
+            key_of(spec.policy_ref()),
+        ];
+        expected.extend(
+            committed_intents()
+                .iter()
+                .map(|intent| key_of(intent.target())),
+        );
+        let (mut fixture, mut driver) = fixture(plane(true, true));
+
+        let first = driver.reconcile(&mut fixture.ctx).await;
+        assert_eq!(
+            first.expect("the first pass"),
+            ReconcileOutcome::Satisfied,
+            "the aggregate holds, so this pass publishes `Ready`"
+        );
+        let creating = fixture.requeue.scheduled().len();
+
+        for target in &expected {
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::ProjectionChanged).await,
+                1,
+                "the first pass arms the evidence condition on {target:?}, so an evidence \
+                 change under a phase that never moves still wakes this row"
+            );
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::ReadyChanged).await,
+                1,
+                "{target:?} already reports ready, and the readiness arm is held anyway: it \
+                 is the only wake-up for a target that later stops being ready without \
+                 publishing anything new"
+            );
+        }
+
+        // A second pass over evidence that stood: the registrations are still
+        // live on their targets, so a converged pass places none, and it
+        // schedules nothing either - which is exactly why the subscription is
+        // the only thing left that can re-drive this row.
+        let second = driver.reconcile(&mut fixture.ctx).await;
+        assert_eq!(
+            second.expect("the second pass"),
+            ReconcileOutcome::Satisfied,
+            "an unchanged converged pass still publishes `Ready`"
+        );
+        assert_eq!(
+            fixture.requeue.scheduled().len(),
+            creating,
+            "only the pass that committed its children requeued; a ready pass that mutated \
+             nothing schedules nothing, so only a subscription re-drives this row"
+        );
+        for target in &expected {
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::ProjectionChanged).await,
+                1,
+                "a standing registration keeps {target:?} subscribed without stacking a second"
+            );
+        }
+
+        // Every target runs a pass, so every registration this row holds is
+        // satisfied and gone, and the children withdraw while the session
+        // stood `Ready`: the plane moves, the row does not, and the third pass
+        // has to see it.
+        for target in &expected {
+            for watch in fixture.target_pass(target).await {
+                fixture.ctx.mark_watch_spent(watch);
+            }
+        }
+        fixture.plane.publish(plane(false, false)).await;
+        let third = driver.reconcile(&mut fixture.ctx).await;
+        assert_eq!(
+            third.expect("the third pass"),
+            ReconcileOutcome::RetryScheduled,
+            "a session whose children withdrew publishes `Pending` again"
+        );
+        let status = fixture
+            .ctx
+            .status::<InteractionDriverStatus>()
+            .expect("the typed status is published")
+            .clone();
+        assert!(
+            !status.ready,
+            "aggregate readiness is withdrawn with the child"
+        );
+        let children = committed_intents()
+            .iter()
+            .map(|intent| key_of(intent.target()))
+            .collect::<Vec<_>>();
+        for target in &children {
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::ProjectionChanged).await,
+                1,
+                "the registration the child already satisfied is armed again on {target:?}, \
+                 so a second downgrade is observed too"
+            );
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::ReadyChanged).await,
+                1,
+                "{target:?} no longer reports ready, so the readiness arm this row needs to \
+                 be woken by is armed - and it was armed for it before the withdrawal too"
+            );
+        }
+        for target in expected.iter().filter(|target| !children.contains(target)) {
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::ProjectionChanged).await,
+                1,
+                "a dependency whose registration was satisfied is armed again on {target:?}"
+            );
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::ReadyChanged).await,
+                1,
+                "a dependency that still reports ready is subscribed for the moment it stops: \
+                 holding nothing there is what left this row silent over the downgrade"
+            );
+        }
+        assert_eq!(
+            fixture.armed_targets().await,
+            {
+                let mut targets = expected.clone();
+                targets.sort_by(|left, right| {
+                    (&left.type_name, &left.name).cmp(&(&right.type_name, &right.name))
+                });
+                targets.dedup();
+                targets
+            },
+            "every watched row is a child or a dependency this pass derived, and nothing else"
+        );
+    }
+
+    /// The re-arm reads the SPEND, not the evidence (R21, AE18, KTD7).
+    ///
+    /// A target pass that changes its readiness or its layer consumes every
+    /// registration this row holds on it, and then lands on the very pair
+    /// those registrations were armed against. It therefore cannot tell
+    /// "spent" from "standing" by comparing evidence - and placing nothing
+    /// leaves a `Ready` row subscribed to nothing. It is never woken again, and
+    /// `mutated || !ready` schedules no requeue for it either, so it keeps
+    /// publishing `Ready` over a target that moves.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_woken_row_re_arms_the_registration_its_target_spent() {
+        let (mut fixture, mut driver) = fixture(plane(true, true));
+        let target = key_of(session_spec().policy_ref());
+
+        driver.reconcile(&mut fixture.ctx).await.expect("the first pass");
+        assert_eq!(
+            fixture.armed(&target, &WatchCondition::ProjectionChanged).await,
+            1,
+            "the first pass subscribes to {target:?}"
+        );
+
+        // The target runs a pass and the plane ends exactly where it started,
+        // so the row is woken and re-reads the pair it already read.
+        let spent = fixture.target_pass(&target).await;
+        for watch in &spent {
+            fixture.ctx.mark_watch_spent(*watch);
+        }
+        assert_eq!(
+            fixture.delivered().await,
+            spent.iter().map(|watch| (target.clone(), *watch)).collect::<Vec<_>>(),
+            "the target's pass notified this row, which is what the runtime turns into the \
+             pass below"
+        );
+
+        driver.reconcile(&mut fixture.ctx).await.expect("the woken pass");
+        assert_eq!(
+            fixture.armed(&target, &WatchCondition::ProjectionChanged).await,
+            1,
+            "the woken pass re-armed on evidence that reads back unchanged: the spend is what \
+ told it to, not the fingerprint"
+        );
+        assert_eq!(
+            fixture.placements(&target, &WatchCondition::ProjectionChanged).await,
+            2,
+            "the re-arm placed a fresh registration rather than leaving the spent id behind"
+        );
+
+        // And it is a standing subscription: the target's next pass satisfies
+        // exactly that registration and notifies this row again.
+        let armed = fixture.armed_ids(&target).await;
+        assert_eq!(armed.len(), 2, "one live registration per condition on {target:?}");
+        assert_eq!(
+            fixture.target_pass(&target).await,
+            armed,
+            "the target's next pass satisfies exactly the registrations this row placed"
+        );
+        assert_eq!(
+            fixture.delivered().await,
+            armed.iter().map(|watch| (target.clone(), *watch)).collect::<Vec<_>>(),
+            "so a later change under a phase that never moves still wakes this row, and so \
+             does the target leaving `Ready` with no projection beside it"
+        );
+    }
+
+    /// One live registration per condition, however many passes go by: the
+    /// re-arm replaces a spent registration, it never stacks a second one on
+    /// a target whose evidence stands.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn repeated_passes_over_an_unchanged_target_hold_one_registration() {
+        let (mut fixture, mut driver) = fixture(plane(true, true));
+        let target = key_of(session_spec().guest_ref());
+        let mut standing: Option<Vec<WatchId>> = None;
+
+        for round in 1..=4 {
+            driver.reconcile(&mut fixture.ctx).await.expect("a converged pass");
+            assert_eq!(
+                fixture.armed(&target, &WatchCondition::ProjectionChanged).await,
+                1,
+                "round {round}: one live registration on {target:?}, never a stack"
+            );
+            assert_eq!(
+                fixture.armed(&target, &WatchCondition::ReadyChanged).await,
+                1,
+                "round {round}: one readiness registration on {target:?} however ready it \
+                 already is"
+            );
+            let armed = fixture.armed_ids(&target).await;
+            if let Some(previous) = standing.clone() {
+                assert_ne!(
+                    armed, previous,
+                    "round {round}: the spent registration was replaced, not stacked beside"
+                );
+            }
+            standing = Some(armed);
+            for watch in fixture.target_pass(&target).await {
+                fixture.ctx.mark_watch_spent(watch);
+            }
+        }
+
+        assert_eq!(
+            fixture.placements(&target, &WatchCondition::ProjectionChanged).await,
+            4,
+            "one placement per spend and no placement at all while a registration stands"
+        );
+    }
+
+    /// A pair this row could only half place is handed back whole.
+    ///
+    /// The readiness arm went out and the evidence arm did not; a registration
+    /// that is not remembered cannot be re-armed, so holding it would stack a
+    /// second readiness arm on every later pass while the target changes
+    /// nothing. Releasing it leaves the pair unplaced, which every pass
+    /// retries.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_half_placed_pair_is_released_rather_than_left_standing() {
+        let (mut fixture, mut driver) = fixture(plane(false, true));
+        let child = key_of(committed_intents().first().expect("a derived child").target());
+        // The manager cannot route the evidence arm to this target.
+        fixture
+            .refused
+            .lock()
+            .await
+            .push((child.clone(), WatchCondition::ProjectionChanged));
+
+        driver.reconcile(&mut fixture.ctx).await.expect("the first pass");
+        assert_eq!(
+            fixture.armed(&child, &WatchCondition::ReadyChanged).await,
+            0,
+            "the readiness arm that did place was handed back with the pair it could not \
+             complete, so nothing stands unremembered"
+        );
+        assert_eq!(
+            fixture.released.lock().await.len(),
+            fixture.placements(&child, &WatchCondition::ReadyChanged).await,
+            "every arm this pass placed was released, not dropped"
+        );
+
+        driver.reconcile(&mut fixture.ctx).await.expect("the second pass");
+        assert_eq!(
+            fixture.armed(&child, &WatchCondition::ReadyChanged).await,
+            0,
+            "a still-refused pair leaves nothing standing, so no pass can stack an arm"
+        );
+        assert_eq!(
+            fixture.placements(&child, &WatchCondition::ReadyChanged).await,
+            2,
+            "each pass re-attempts the pair, and releases what it placed"
+        );
+    }
+
+    /// A refused pair must not FORGET a registration the row already held.
+    ///
+    /// The evidence arm is refused on the second pass, so the pair is rolled
+    /// back and this pass placed nothing to remember. The readiness arm was
+    /// placed by the FIRST pass and still stands in the target: an entry
+    /// emptied here is a live registration this row can no longer name,
+    /// release, or re-arm, and the next pass stacks a second one beside it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_refused_pair_keeps_naming_the_registration_it_already_held() {
+        let (mut fixture, mut driver) = fixture(plane(true, true));
+        let child = key_of(committed_intents().first().expect("a derived child").target());
+        driver.reconcile(&mut fixture.ctx).await.expect("the first pass");
+        let held = fixture.armed_ids(&child).await;
+        assert_eq!(held.len(), 2, "one registration per condition on {child:?}");
+
+        fixture
+            .refused
+            .lock()
+            .await
+            .push((child.clone(), WatchCondition::ProjectionChanged));
+        driver.reconcile(&mut fixture.ctx).await.expect("the refused pass");
+        assert_eq!(
+            fixture.armed_ids(&child).await,
+            held,
+            "the readiness arm this row already held is still named and still standing: the \
+             rollback hands back what THIS pass placed, and nothing else"
+        );
+
+        fixture.refused.lock().await.retain(|(key, _)| key != &child);
+        driver.reconcile(&mut fixture.ctx).await.expect("the accepted pass");
+        assert_eq!(
+            fixture.placements(&child, &WatchCondition::ReadyChanged).await,
+            1,
+            "so the accepted pair reuses the registration that was still standing instead of \
+             placing a second one beside it"
+        );
+        assert_eq!(
+            fixture.armed(&child, &WatchCondition::ProjectionChanged).await,
+            1,
+            "and the row is subscribed to the evidence condition again"
+        );
+    }
 }

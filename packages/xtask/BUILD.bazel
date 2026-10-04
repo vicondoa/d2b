@@ -155,10 +155,19 @@ generated_artifact_check(
     data = ["//:generated_zone_nix_options"],
 )
 
+# The packaging generator projects the provider catalog, the providerIds set,
+# and the fixed-bootstrap rows from the per-crate identity authority, so its
+# drift target stages every crate's declaration beside the artifact it
+# compares. Several identities are named by the Nix module that admits or
+# refuses their row, so those sources ride along as evidence too.
 generated_artifact_check(
     name = "gen_provider_packaging_drift",
     command = "gen-provider-packaging",
-    data = ["//:generated_provider_packaging"],
+    data = [
+        "//:generated_provider_packaging",
+        "//:packages_workspace_sources",
+        "//:nixos_modules_workspace_sources",
+    ],
 )
 
 generated_artifact_check(
@@ -172,7 +181,9 @@ generated_artifact_check(
 # declaration (U4), and the role parity surface is the declaring crate's
 # descriptor sources plus the well-known type vocabulary they name, so the
 # drift target reads the declaration and those sources beside the artifacts
-# it compares.
+# it compares. Every emitted `Provider/<name>` is also checked against the
+# per-crate identity authority, so the whole workspace's declarations ride
+# along too.
 generated_artifact_check(
     name = "gen_nix_inventories_drift",
     command = "gen-nix-inventories",
@@ -180,6 +191,8 @@ generated_artifact_check(
         "//:committed_v3_schema_artifacts",
         "//:docs/reference/policy/principal-allocation.json",
         "//:generated_nix_inventories",
+        "//:nixos_modules_workspace_sources",
+        "//:packages_workspace_sources",
         "//packages/d2b-provider-process:cargo_workspace_sources",
         "//packages/d2b-provider-process:resource-types.json",
         "//packages/d2b-resource-types:cargo_workspace_sources",
@@ -222,6 +235,7 @@ generated_artifact_check(
     command = "gen-new-graph",
     data = [
         "//:generated_new_graph",
+        "//:nixos_modules_workspace_sources",
         "//:packages_workspace_sources",
     ],
 )

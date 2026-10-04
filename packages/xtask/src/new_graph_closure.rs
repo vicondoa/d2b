@@ -1,10 +1,12 @@
 //! The new-graph build composition.
 //!
-//! Four independent declaration sources describe every provider: the
-//! resource types it owns, the operation rows it serves, the provider and
-//! service identities it registers, and the semantic services it publishes.
-//! Three committed generated artifacts are derived from them, and the closure
-//! manifest beside them names the production file that compiles each byte.
+//! Five independent declaration sources describe every provider: the
+//! resource types it owns, the operation rows it serves, the Provider
+//! identities it owns on each of the three identity surfaces, the effect
+//! services its runtime identity registers, and the semantic services its
+//! session identity publishes. Three committed generated artifacts are
+//! derived from them, and the closure manifest beside them names the
+//! production file that compiles each byte.
 //!
 //! `gen-new-graph` is one step of the `make generate` aggregate, so these
 //! projections are production generation outputs: they are committed under
@@ -28,10 +30,10 @@
 //! Before it writes anything, the composition cross-checks the declarations
 //! against the provider crates' own compiled sources: a handler a crate
 //! compiles with no declaration behind it, a declared method nothing
-//! compiles, a Provider identity two crates declare, and a service package a
-//! crate declares but never spells all fail `make generate`. That check reads
-//! [`DeclaredProviders`] rather than this module's rendered bytes, so its two
-//! sides are independent sources.
+//! compiles, a shared driver that also registers itself as a runtime
+//! Provider, and a service package a crate declares but never spells all
+//! fail `make generate`. That check reads [`DeclaredProviders`] rather than
+//! this module's rendered bytes, so its two sides are independent sources.
 //!
 //! # What this generator does not read
 //!
@@ -67,6 +69,7 @@ use std::{
 };
 
 use crate::authority_common::{declaration_paths, provider_crates, Declaration};
+use crate::provider_identity_authority::{ProviderIdentities, Surface};
 
 use d2b_contracts_provider::v3::projection::GRAPH_PROJECTION_CONTRACT_VERSION;
 use d2b_contracts_resource::v3::canonical_digest;
@@ -90,6 +93,7 @@ const CLOSURE_DIGEST_DOMAIN: &str = "d2b:v3:new-graph-build-closure";
 /// authoring form the new graph keeps.
 pub(crate) const NEW_GRAPH_DECLARATION_INPUTS: &[&str] = &[
     "packages/d2b-provider-*/operations.json",
+    "packages/d2b-provider-*/provider-identity.json",
     "packages/d2b-provider-*/registrations.json",
     "packages/d2b-provider-*/resource-types.json",
     "packages/d2b-provider-*/service-catalog.json",
@@ -118,7 +122,7 @@ pub(crate) fn contract_version() -> &'static str {
 }
 
 /// One staged artifact: the file this module renders, the production file
-/// that compiles it, and the declaration that produces it.
+/// that compiles it, and the declarations that produce it.
 ///
 /// `staged` is the artifact's file name inside the closure directory, so its
 /// committed path is [`staged`]. `compiled_into` is the production source
@@ -129,7 +133,11 @@ pub(crate) fn contract_version() -> &'static str {
 struct Replacement {
     staged: &'static str,
     compiled_into: &'static str,
-    declaration: &'static str,
+    /// Every declaration whose facts the staged bytes are built from. The
+    /// identity authority is one of them wherever the artifact carries a
+    /// Provider identity, because the identity a row registers or routes to
+    /// is declared there rather than restated in the artifact's own input.
+    declarations: &'static [&'static str],
 }
 
 /// The committed artifacts the declarations project into, and the production
@@ -142,17 +150,23 @@ const REPLACEMENTS: &[Replacement] = &[
     Replacement {
         staged: "provider_registrations.rs",
         compiled_into: "packages/d2bd/src/resource_plane_v3.rs",
-        declaration: "packages/d2b-provider-*/registrations.json",
+        declarations: &[
+            "packages/d2b-provider-*/registrations.json",
+            "packages/d2b-provider-*/provider-identity.json",
+        ],
     },
     Replacement {
         staged: "service_provider_catalog.rs",
         compiled_into: "packages/d2b-contracts-zone-session/src/v3/mod.rs",
-        declaration: "packages/d2b-provider-*/service-catalog.json",
+        declarations: &[
+            "packages/d2b-provider-*/service-catalog.json",
+            "packages/d2b-provider-*/provider-identity.json",
+        ],
     },
     Replacement {
         staged: "v3_converted_resource_types.rs",
         compiled_into: "packages/d2b-contracts/src/identity.rs",
-        declaration: "packages/d2b-provider-*/resource-types.json",
+        declarations: &["packages/d2b-provider-*/resource-types.json"],
     },
 ];
 
@@ -219,7 +233,7 @@ struct ContractCrate {
 struct ClosureArtifact {
     staged: String,
     compiled_into: String,
-    declaration: &'static str,
+    declarations: &'static [&'static str],
     digest: String,
 }
 
@@ -316,7 +330,7 @@ fn render_manifest(artifacts: &[(String, String)]) -> Result<String, String> {
         rows.push(ClosureArtifact {
             staged: path,
             compiled_into: replacement.compiled_into.to_owned(),
-            declaration: replacement.declaration,
+            declarations: replacement.declarations,
             digest: digest_of(contents.as_bytes()),
         });
     }
@@ -351,8 +365,8 @@ fn render_json<T: Serialize>(value: &T) -> Result<String, String> {
     serde_json::to_string_pretty(value).map_err(|error| format!("cannot render JSON: {error}"))
 }
 
-/// Every provider crate's operation, registration and catalog declarations,
-/// keyed by crate name.
+/// Every provider crate's operation, registration, catalog and identity
+/// declarations, keyed by crate name.
 ///
 /// This is the composition's own reader. It does not reuse the merge-capable
 /// authority loaders, so the declaration-only claim is a property of this
@@ -365,6 +379,9 @@ struct DeclaredProviders {
     operations: BTreeMap<String, OperationDeclarationFile>,
     registrations: BTreeMap<String, RegistrationDeclarationFile>,
     catalogs: BTreeMap<String, ServiceCatalogFile>,
+    /// Every provider crate's identity declaration: the closed authority the
+    /// registration and catalog rows resolve their Provider identities from.
+    identities: ProviderIdentities,
 }
 
 /// One `resource-types.json`.
@@ -473,27 +490,34 @@ struct OperationRow {
 }
 
 /// One `registrations.json`.
+///
+/// The effect-service ids a crate's runtime identity registers. The
+/// identity itself is the crate's own runtime identity in the identity
+/// authority, joined below.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RegistrationDeclarationFile {
     #[serde(rename = "crate")]
     #[allow(dead_code, reason = "the file self-binds to its directory name")]
     crate_name: String,
-    provider: String,
     services: Vec<String>,
 }
 
 /// One `service-catalog.json`.
+///
+/// The closed service packages a crate's session identity answers, and the
+/// fixed bootstrap resource UID when the row is the deployment's bootstrap
+/// row. The identity those rows route to is the crate's own session identity
+/// in the identity authority, joined below.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ServiceCatalogFile {
-    provider: String,
-    provider_ref: String,
     #[serde(default)]
     services: Vec<String>,
-    /// The fixed bootstrap identity only `system-core` may carry.
+    /// The fixed bootstrap resource UID the deployment's bootstrap Provider
+    /// row is committed under.
     #[serde(default)]
-    #[allow(dead_code, reason = "the fixed identity projects through the catalog authority")]
+    #[allow(dead_code, reason = "the fixed UID projects through the catalog authority")]
     provider_uid: Option<String>,
 }
 
@@ -522,6 +546,7 @@ impl DeclaredProviders {
             operations: load_kind(repo_root, Declaration::Operations)?,
             registrations: load_kind(repo_root, Declaration::Registrations)?,
             catalogs: load_kind(repo_root, Declaration::ServiceCatalog)?,
+            identities: ProviderIdentities::load(repo_root)?,
         })
     }
 
@@ -544,50 +569,78 @@ impl DeclaredProviders {
     /// declarations name is a service the provider publishes once), and serves
     /// one declared method per operation row.
     ///
-    /// The provider reference is the one a declaration named, never a string
-    /// composed here. Nothing infers an identity from the crate's directory
-    /// name, because that name is not the identity: the committed Provider
-    /// matrix gives `d2b-provider-guest-qemu-media` the identity
-    /// `runtime-qemu-media` and `d2b-provider-process-minijail` the identity
+    /// The Provider reference is resolved from the identity authority through
+    /// the declaration kind that speaks: a registration row is a runtime
+    /// registration, so its crate must own a runtime identity, and a session
+    /// catalog is session routing, so its crate must own a session identity.
+    /// Nothing infers an identity from the crate's directory name, because
+    /// that name is not the identity: `d2b-provider-guest-qemu-media` owns
+    /// `runtime-qemu-media` and `d2b-provider-process-minijail` owns
     /// `system-minijail`, so a directory-name convention both published
     /// references the product does not have and rejected the ones it does.
-    /// A crate whose registration and catalog disagree about which Provider
-    /// it is is refused naming both, and a crate that declares neither states
-    /// no reference at all.
+    /// A crate that declares neither a registration nor a catalog states no
+    /// reference at all.
     fn provider(&self, crate_name: &str) -> Result<DeclaredProvider, String> {
         let registration = self.registrations.get(crate_name);
         let catalog = self.catalogs.get(crate_name);
-        if let (Some(registration), Some(catalog)) = (registration, catalog)
-            && registration.provider != catalog.provider
-        {
-            return Err(format!(
-                "provider-identity-mismatch: crate {crate_name} declares provider {} in registrations.json and provider {} in service-catalog.json",
-                registration.provider, catalog.provider
-            ));
+        let identity = match (registration.is_some(), catalog.is_some()) {
+            (true, true) => {
+                // A crate that speaks on both surfaces owns an identity on
+                // both: its registration registers a runtime Provider and its
+                // catalog routes the session plane, so a missing identity on
+                // either side is a declaration whose row resolves to nothing.
+                // The graph carries one Provider row for the crate, and the
+                // runtime registration is the one that starts it.
+                for surface in [Surface::Runtime, Surface::Session] {
+                    if self.identities.identity(crate_name, surface).is_none() {
+                        return Err(format!(
+                            "{}-identity-missing: crate {crate_name} declares a provider registration and a session service catalog but owns no {surface} Provider identity",
+                            surface.key()
+                        ));
+                    }
+                }
+                self.identities.identity(crate_name, Surface::Runtime)
+            }
+            (true, false) => self.identities.identity(crate_name, Surface::Runtime),
+            (false, true) => self.identities.identity(crate_name, Surface::Session),
+            (false, false) => {
+                // A crate that declares no registration and no catalog still
+                // declares its operation rows, and it registers no Provider
+                // in the graph.
+                return Ok(DeclaredProvider {
+                    provider_ref: None,
+                    crate_name: crate_name.to_owned(),
+                    effect_services: Vec::new(),
+                    service_packages: Vec::new(),
+                    methods: self.methods(crate_name),
+                });
+            }
         }
-        let provider_ref = match (registration, catalog) {
-            (Some(_), Some(file)) => Some(file.provider_ref.clone()),
-            (Some(file), None) => Some(format!("Provider/{}", file.provider)),
-            (None, Some(file)) => Some(file.provider_ref.clone()),
-            (None, None) => None,
-        };
+        .ok_or_else(|| {
+            format!("declared-provider-without-identity: crate {crate_name} declares a registration and a service catalog but owns no Provider identity on either surface")
+        })?;
+        let provider_ref = ProviderIdentities::provider_ref(identity);
         let effect_services: BTreeSet<String> = registration.map_or_else(BTreeSet::new, |file| {
             file.services.iter().cloned().collect()
         });
         let service_packages: BTreeSet<String> =
             catalog.map_or_else(BTreeSet::new, |file| file.services.iter().cloned().collect());
-        let methods = self
-            .operations
-            .get(crate_name)
-            .map(|file| file.operations.iter().map(|row| row.method.clone()).collect())
-            .unwrap_or_default();
+        let methods = self.methods(crate_name);
         Ok(DeclaredProvider {
-            provider_ref,
+            provider_ref: Some(provider_ref),
             crate_name: crate_name.to_owned(),
             effect_services: effect_services.into_iter().collect(),
             service_packages: service_packages.into_iter().collect(),
             methods,
         })
+    }
+
+    /// The operation methods one crate declares, in declaration order.
+    fn methods(&self, crate_name: &str) -> Vec<String> {
+        self.operations
+            .get(crate_name)
+            .map(|file| file.operations.iter().map(|row| row.method.clone()).collect())
+            .unwrap_or_default()
     }
 }
 
@@ -779,6 +832,17 @@ fn undeclared_compiled_handlers(repo_root: &Path) -> Result<Vec<String>, String>
         if !crate_dir.is_dir() {
             errors.push(format!(
                 "registered-provider-without-crate: crate {crate_name} registers provider {identity}, which is not a crate in this tree"
+            ));
+        }
+    }
+    // A shared driver is run by another family's registration, so the crate
+    // that declares it registers no Provider of its own: a registration row
+    // beside one would put the same identity into the graph twice, once as
+    // the driver another family serves and once as a family that starts.
+    for crate_name in providers.identities.shared_driver_crates() {
+        if providers.registrations.contains_key(crate_name) {
+            errors.push(format!(
+                "shared-driver-registering-itself: crate {crate_name} declares a shared driver another family's registration runs, and also declares a provider registration of its own"
             ));
         }
     }
@@ -985,11 +1049,15 @@ mod tests {
             );
             self.write(
                 "packages/d2b-provider-system-core/service-catalog.json",
-                "{\n  \"provider\": \"system-core\",\n  \"providerRef\": \"Provider/system-core\",\n  \"providerUid\": \"11111111-1111-4111-8111-111111111111\"\n}\n",
+                "{\n  \"providerUid\": \"11111111-1111-4111-8111-111111111111\"\n}\n",
             );
             self.write(
                 "packages/d2b-provider-system-core/src/lib.rs",
-                "pub fn noop() {}\n",
+                "pub const PROVIDER_NAME: &str = \"system-core\";\n\npub fn noop() {}\n",
+            );
+            self.write(
+                "packages/d2b-provider-system-core/provider-identity.json",
+                "{\n  \"crate\": \"d2b-provider-system-core\",\n  \"family\": \"system-core\",\n  \"roles\": [\"product\", \"session\", \"fixed-bootstrap\"],\n  \"nonBinary\": false,\n  \"product\": {\n    \"identity\": \"system-core\",\n    \"sharesIdentityWith\": [\"session\"],\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-system-core/src/lib.rs\",\n        \"symbol\": \"PROVIDER_NAME\"\n      }\n    ]\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"session\": {\n    \"identity\": \"system-core\",\n    \"sharesIdentityWith\": [\"product\"],\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-system-core/src/lib.rs\",\n        \"symbol\": \"PROVIDER_NAME\"\n      }\n    ]\n  },\n  \"blockers\": []\n}\n",
             );
         }
 
@@ -1020,13 +1088,26 @@ mod tests {
             self.write(
                 &format!("packages/{crate_name}/registrations.json"),
                 &format!(
-                    "{{\n  \"crate\": \"{crate_name}\",\n  \"provider\": \"{family}\",\n  \"services\": [\"{service}\"]\n}}\n"
+                    "{{\n  \"crate\": \"{crate_name}\",\n  \"services\": [\"{service}\"]\n}}\n"
                 ),
             );
             self.write(
                 &format!("packages/{crate_name}/service-catalog.json"),
+                &format!("{{\n  \"services\": [\"d2b.{family}.v3\"]\n}}\n"),
+            );
+            // The crate owns one identity on each of the two declaration
+            // surfaces it speaks: the runtime identity its registration row
+            // registers under, and the session identity its catalog routes
+            // to. The evidence anchor names the crate's own identity module,
+            // which no negative fixture overwrites.
+            self.write(
+                &format!("packages/{crate_name}/src/identity.rs"),
+                &format!("pub const PROVIDER_IDENTITY: &str = \"{family}\";\n"),
+            );
+            self.write(
+                &format!("packages/{crate_name}/provider-identity.json"),
                 &format!(
-                    "{{\n  \"provider\": \"{family}\",\n  \"providerRef\": \"Provider/{family}\",\n  \"services\": [\"d2b.{family}.v3\"]\n}}\n"
+                    "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{family}\",\n  \"roles\": [\"runtime\", \"session\"],\n  \"nonBinary\": false,\n  \"product\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"runtime\": {{\n    \"identity\": \"{family}\",\n    \"sharesIdentityWith\": [\"session\"],\n    \"evidence\": [\n      {{\n        \"path\": \"packages/{crate_name}/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }}\n    ]\n  }},\n  \"session\": {{\n    \"identity\": \"{family}\",\n    \"sharesIdentityWith\": [\"runtime\"],\n    \"evidence\": [\n      {{\n        \"path\": \"packages/{crate_name}/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }}\n    ]\n  }},\n  \"blockers\": []\n}}\n"
                 ),
             );
             self.write(
@@ -1271,7 +1352,7 @@ mod tests {
         fixture.write_crate("d2b-provider-fixture", "export", "fixture.d2bus.org/export");
         fixture.write(
             "packages/d2b-provider-fixture/service-catalog.json",
-            "{\n  \"provider\": \"fixture\",\n  \"providerRef\": \"Provider/fixture\",\n  \"services\": [\"d2b.fixture.absent.v3\"]\n}\n",
+            "{\n  \"services\": [\"d2b.fixture.absent.v3\"]\n}\n",
         );
         let undeclared =
             undeclared_compiled_handlers(&fixture.root).expect("the cross-check runs");
@@ -1284,27 +1365,46 @@ mod tests {
         );
     }
 
-    /// A crate whose registration and service catalog name different
-    /// Providers is refused rather than resolved to one of them.
+    /// A session catalog whose crate owns no session identity is refused
+    /// rather than routed to an identity no declaration made.
     ///
-    /// The identity a crate states has to be the one its own declaration
-    /// named, and a crate naming two of them names none a caller could route
-    /// to. Picking either would publish an identity no declaration made.
+    /// The routing row resolves through the crate's session identity, and a
+    /// row that resolves to nothing names no Provider a caller could route
+    /// to. Guessing one from the crate's directory name is exactly the
+    /// convention the identity authority replaced.
     #[test]
-    fn a_crate_naming_two_provider_identities_is_refused() {
-        let fixture = Fixture::new("identity-mismatch");
+    fn a_session_catalog_with_no_session_identity_is_refused() {
+        let fixture = Fixture::new("session-identity-missing");
         fixture.write_bootstrap_provider();
         fixture.write_crate("d2b-provider-fixture", "export", "fixture.d2bus.org/export");
         fixture.write(
-            "packages/d2b-provider-fixture/service-catalog.json",
-            "{\n  \"provider\": \"other\",\n  \"providerRef\": \"Provider/other\",\n  \"services\": []\n}\n",
+            "packages/d2b-provider-fixture/provider-identity.json",
+            "{\n  \"crate\": \"d2b-provider-fixture\",\n  \"family\": \"fixture\",\n  \"roles\": [\"runtime\"],\n  \"nonBinary\": false,\n  \"product\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"runtime\": {\n    \"identity\": \"fixture\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-fixture/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }\n    ]\n  },\n  \"session\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"blockers\": []\n}\n",
         );
         let error = undeclared_compiled_handlers(&fixture.root)
-            .expect_err("a crate naming two Provider identities is refused");
+            .expect_err("a catalog with no session identity is refused");
         assert!(
-            error.starts_with("provider-identity-mismatch")
-                && error.contains("d2b-provider-fixture"),
-            "the refusal names the crate and both identities: {error}"
+            error.contains("session-identity-missing") && error.contains("d2b-provider-fixture"),
+            "the refusal names the crate and the surface it is missing: {error}"
+        );
+    }
+
+    /// The runtime side of the same join: a registration whose crate owns no
+    /// runtime identity is refused by name.
+    #[test]
+    fn a_registration_with_no_runtime_identity_is_refused() {
+        let fixture = Fixture::new("runtime-identity-missing");
+        fixture.write_bootstrap_provider();
+        fixture.write_crate("d2b-provider-fixture", "export", "fixture.d2bus.org/export");
+        fixture.write(
+            "packages/d2b-provider-fixture/provider-identity.json",
+            "{\n  \"crate\": \"d2b-provider-fixture\",\n  \"family\": \"fixture\",\n  \"roles\": [\"session\"],\n  \"nonBinary\": false,\n  \"product\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"composition-hosted\"\n  },\n  \"session\": {\n    \"identity\": \"fixture\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-fixture/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }\n    ]\n  },\n  \"blockers\": []\n}\n",
+        );
+        let error = undeclared_compiled_handlers(&fixture.root)
+            .expect_err("a registration with no runtime identity is refused");
+        assert!(
+            error.contains("runtime-identity-missing") && error.contains("d2b-provider-fixture"),
+            "the refusal names the crate and the surface it is missing: {error}"
         );
     }
 

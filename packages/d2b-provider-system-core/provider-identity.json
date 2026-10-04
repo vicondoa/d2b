@@ -1,0 +1,39 @@
+{
+  "crate": "d2b-provider-system-core",
+  "family": "system-core",
+  "roles": ["product", "session", "fixed-bootstrap"],
+  "nonBinary": true,
+  "product": {
+    "identity": "system-core",
+    "sharesIdentityWith": ["session"],
+    "evidence": [
+      {
+        "path": "packages/d2b-contracts-resource/src/v3/host.rs",
+        "symbol": "HOST_PROVIDER_REF"
+      },
+      {
+        "path": "packages/d2b-provider-system-core/src/lib.rs",
+        "symbol": "PROVIDER_NAME"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": "system-core",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-system-core/src/lib.rs",
+        "symbol": "PROVIDER_NAME"
+      },
+      {
+        "path": "nixos-modules/options-zones.nix",
+        "symbol": "providerRef"
+      }
+    ]
+  },
+  "blockers": []
+}

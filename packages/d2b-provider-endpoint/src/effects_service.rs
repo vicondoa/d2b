@@ -19,10 +19,14 @@
 //!   vocabulary and realization inventory - the same derivations the driver
 //!   effects classify against, served from inside the owning crate.
 //!
-//! Everything the effects read crosses the provider boundary as declared
-//! facets ([`crate::facets`]): the host socket surface and the two
-//! row-evidence probes the daemon supplies. Nothing here names a daemon
-//! state type.
+//! Everything the effects read and every admission they answer crosses the
+//! provider boundary as declared facets ([`crate::facets`]): the host socket
+//! surface and the two row-evidence probes the daemon supplies, the Provider
+//! vocabularies that admit a Provider-committed shape, and the daemon's
+//! private host observation. The last two default to their closed answers, so
+//! a composition that injects neither admits nothing and observes nothing -
+//! which is what a plane built without them does. Nothing here names a daemon
+//! state type or a Provider type.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,8 +39,10 @@ use d2b_provider_toolkit::{
 };
 use d2b_resource_types::{ServiceDecl, ServiceMethod};
 
-use crate::driver::{EndpointDriverEffects, EndpointPurposeVocabulary, GuestControlProducer};
-use crate::endpoint::EndpointClass;
+use crate::driver::{
+    CommittedEndpointShape, EndpointDriverEffects, EndpointPurposeVocabulary, GuestControlProducer,
+};
+use crate::endpoint::{EndpointClass, EndpointSpec};
 use crate::facets::EndpointEffectFacets;
 
 /// The bounded budget one endpoint realization waits for its evidence
@@ -171,16 +177,23 @@ pub struct EndpointEffectsService {
     socket: Arc<dyn crate::facets::EndpointSocketSource>,
     guest_vmm: Arc<dyn crate::facets::GuestVmmEvidenceSource>,
     device_worker: Arc<dyn crate::facets::DeviceWorkerEvidenceSource>,
+    committed: Arc<dyn crate::facets::CommittedEndpointShapeSource>,
+    host_socket: Arc<dyn crate::facets::HostSocketEvidenceSource>,
 }
 
 impl EndpointEffectsService {
     /// Build the effects from one zone's daemon-supplied facet set (R2):
     /// every daemon-structural read rides the facets, never a daemon handle.
+    /// The driver's typed seam and the declared hosted service are built from
+    /// the same set, so both observe the same realization, the same Provider
+    /// vocabularies, and the same private host observation.
     pub fn new(facets: EndpointEffectFacets) -> Self {
         Self {
             socket: facets.socket,
             guest_vmm: facets.guest_vmm,
             device_worker: facets.device_worker,
+            committed: facets.committed,
+            host_socket: facets.host_socket,
         }
     }
 
@@ -204,6 +217,16 @@ impl EndpointPurposeVocabulary for EndpointEffectsService {
 
     fn device_worker_endpoint_class(&self, purpose: &str) -> Option<EndpointClass> {
         device_worker_endpoint_class(purpose)
+    }
+
+    fn committed_endpoint_shape(&self, spec: &EndpointSpec) -> Option<CommittedEndpointShape> {
+        // The whole provider seam: this crate asks the question and a
+        // declaring Provider's own vocabulary answers with one exact verdict
+        // over the shape it committed (KTD5). A composition that installed no
+        // vocabulary gets the closed answer from the unwired source, which is
+        // the same answer a Provider that commits no shape of this crate's
+        // families gives.
+        self.committed.committed_endpoint_shape(spec)
     }
 }
 
@@ -255,6 +278,21 @@ impl EndpointDriverEffects for EndpointEffectsService {
             return Ok(());
         }
         self.socket.remove(producer_ref, purpose).await
+    }
+
+    async fn observe_host_socket(
+        &self,
+        endpoint_ref: &ResourceRef,
+        purpose: &str,
+    ) -> Option<crate::facets::RealizationHandle> {
+        // The private host observation rides the daemon's own facet: it
+        // resolves the locator the endpoint owner committed, compares the
+        // exact socket standing there, and mints a handle only for an
+        // observation that proved it (KTD5, KTD8). Absent, unconnectable and
+        // replaced-at-the-same-locator are ONE answer here, so a
+        // Provider-committed host socket shape stays unrealized rather than
+        // reporting a readiness no observation proved.
+        self.host_socket.observe(endpoint_ref, purpose).await
     }
 }
 

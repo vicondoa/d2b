@@ -1,0 +1,35 @@
+{
+  "crate": "d2b-provider-activation-nixos",
+  "family": "activation-nixos",
+  "roles": ["product", "runtime"],
+  "nonBinary": false,
+  "product": {
+    "identity": "activation-nixos",
+    "sharesIdentityWith": ["runtime"],
+    "evidence": [
+      {
+        "path": "packages/d2b-contracts-resource/src/v3/activation_nixos.rs",
+        "symbol": "ACTIVATION_PROVIDER_REF"
+      },
+      {
+        "path": "packages/d2bd/src/resource_plane_v3.rs",
+        "symbol": "registered_drivers"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": "activation-nixos",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "packages/d2bd/src/resource_plane_v3.rs",
+        "symbol": "registered_drivers"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

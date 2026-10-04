@@ -1,0 +1,29 @@
+{
+  "crate": "d2b-provider-shell-pool",
+  "family": "shell-pool",
+  "roles": ["runtime"],
+  "nonBinary": false,
+  "product": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "runtime": {
+    "identity": "shell-pool",
+    "evidence": [
+      {
+        "path": "packages/d2bd/src/resource_plane_v3.rs",
+        "symbol": "registered_drivers"
+      }
+    ]
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": [
+    {
+      "issue": "#631",
+      "summary": "the shell artifact, signature, Nix row, and launch are #631's work: this declaration names the runtime identity the composition root dispatches, and claims no launched shell"
+    }
+  ]
+}

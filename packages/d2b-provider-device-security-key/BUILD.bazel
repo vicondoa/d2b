@@ -150,6 +150,7 @@ filegroup(
             "README.md",
             "integration/provider_lifecycle.rs",
             "operations.json",
+            "provider-identity.json",
             "registrations.json",
             "resource-types.json",
             "service-catalog.json",

@@ -1,0 +1,31 @@
+{
+  "crate": "d2b-provider-display-wayland",
+  "family": "display-wayland",
+  "roles": ["product", "session"],
+  "nonBinary": false,
+  "product": {
+    "identity": "display-wayland",
+    "sharesIdentityWith": ["session"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-display-wayland/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": "display-wayland",
+    "sharesIdentityWith": ["product"],
+    "evidence": [
+      {
+        "path": "packages/d2b-provider-display-wayland/src/lib.rs",
+        "symbol": "PROVIDER_REF"
+      }
+    ]
+  },
+  "blockers": []
+}

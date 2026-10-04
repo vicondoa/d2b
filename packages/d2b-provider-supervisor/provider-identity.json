@@ -1,0 +1,19 @@
+{
+  "crate": "d2b-provider-supervisor",
+  "family": "supervisor",
+  "roles": ["support"],
+  "nonBinary": false,
+  "product": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "runtime": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "session": {
+    "identity": null,
+    "reason": "no-identity-owned"
+  },
+  "blockers": []
+}

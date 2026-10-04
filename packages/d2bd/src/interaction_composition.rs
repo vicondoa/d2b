@@ -6,7 +6,7 @@
 //! retain a persistent service unit.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     future::Future,
     os::fd::AsFd,
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
@@ -18,7 +18,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::process_resource_runtime::PROCESS_RESTART_ANNOTATION;
 use crate::resource_runtime::{
     CommittedClipboardProviderConfiguration, CommittedInteractionIdentity,
     CommittedInteractionProviderConfiguration, CommittedNotificationProviderConfiguration,
@@ -30,9 +29,11 @@ use d2b_bus::{
 };
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::identity::{EvidenceClass, ServiceName};
-use d2b_contracts_resource::v3::{ CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourcePhase, ResourceRef, ResourceUid, ZoneId, ZoneRevision, canonical_digest, execution_policy::{BoundedText, BoundedToken}, process::{ExecutionSpec, ProcessClass, ProcessSpec} };
-use d2b_provider_endpoint::endpoint::{ EndpointClass, EndpointConsumerPolicy, EndpointLifecyclePolicy, EndpointLocality,
-        EndpointOperation, EndpointSpec, EndpointTransport, EndpointVisibility, };
+use d2b_contracts_resource::v3::{
+    CanonicalJsonValue, ResourceEnvelope, ResourcePhase, ResourceRef, ResourceUid, ZoneId,
+    ZoneRevision, process::ProcessSpec,
+};
+use d2b_provider_endpoint::endpoint::EndpointSpec;
 use d2b_contracts_zone_session::v3::component_session::{
     AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, EndpointPolicy,
     EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
@@ -2713,20 +2714,27 @@ impl ProcessLaunchEffectPort for NonLaunchingProcessEffectPort {
     }
 }
 
-/// One daemon-owned effect adapter for display workers.
+/// One daemon-owned read-only adapter over the display child graph.
 ///
-/// Production reconciliation materializes and observes the Host and Guest
-/// Process children through the Resource API. The process effect port is
-/// retained only for hermetic tests; no Provider receives a launch-capable
-/// adapter in the production composition.
+/// The display Provider owns two worker Process rows, the session's host
+/// compositor Endpoint, and each worker's private Endpoint, and the actor
+/// graph owns their create, launch, delete, and status (R19). This adapter
+/// therefore owns no durable child mutation and no status: it reads the
+/// current manager views so the display aggregation reflects what the actors
+/// actually published, and it answers the runtime's launch and stop questions
+/// from that same evidence rather than from a create or a delete it issued
+/// itself.
+///
+/// The one row it still writes is the session's own finalizer, and that row is
+/// not a child: the display teardown contract stays with the daemon because
+/// only the daemon knows what "the display stack has drained" means.
 pub struct DisplaySupervisorEffects<S> {
     _supervisor: S,
     resource_client: Option<Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>>,
     resource_zone: Option<ZoneId>,
     wayland_session_ref: Option<ResourceRef>,
     wayland_session_uid: Option<ResourceUid>,
-    resource_processes: BTreeMap<DisplayProcessRole, DurableDisplayProcess>,
-    resource_endpoints: BTreeMap<DisplayProcessRole, DurableDisplayEndpoint>,
+    observed_processes: BTreeSet<DisplayProcessRole>,
     guest_subject: Option<ResourceRef>,
     host_execution_ref: Option<ResourceRef>,
     #[cfg(test)]
@@ -2750,23 +2758,19 @@ struct LiveWorker {
     session_digest: [u8; 32],
 }
 
-#[derive(Clone)]
-struct DurableDisplayProcess {
-    resource_ref: ResourceRef,
-    resource_uid: ResourceUid,
-    generation: u64,
-    revision: u64,
-    restart_count: u64,
-    deletion_requested: bool,
-}
-
-#[derive(Clone)]
+/// One display worker Endpoint row as the manager currently holds it.
 struct DurableDisplayEndpoint {
     resource_ref: ResourceRef,
-    resource_uid: ResourceUid,
-    revision: u64,
+    /// The row's committed METADATA generation.
+    ///
+    /// This is the generation the `Endpoint` actor published its readiness
+    /// for. It is not a counter any display path stamps: the daemon no longer
+    /// writes endpoint status, so there is nothing here for it to advance
+    /// (R13, R23).
     generation: u64,
     deletion_requested: bool,
+    /// Whether the `Endpoint` actor published `Ready` for this row.
+    ready: bool,
 }
 
 impl<S> DisplaySupervisorEffects<S>
@@ -2786,8 +2790,7 @@ where
             resource_zone: None,
             wayland_session_ref: None,
             wayland_session_uid: None,
-            resource_processes: BTreeMap::new(),
-            resource_endpoints: BTreeMap::new(),
+            observed_processes: BTreeSet::new(),
             guest_subject: None,
             host_execution_ref: None,
             #[cfg(test)]
@@ -2803,8 +2806,8 @@ where
         }
     }
 
-    /// Construct an effect adapter whose worker lifecycle is owned by the
-    /// generic durable Process runtime.
+    /// Construct an effect adapter that observes the actor-owned display
+    /// children through the Zone's Resource API.
     pub fn new_with_resource_client(
         supervisor: S,
         resource_client: Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>,
@@ -2820,7 +2823,7 @@ where
         effects
     }
 
-    /// Return the number of locally tracked display workers.
+    /// Return the number of display worker rows this adapter has observed.
     pub fn live_worker_count(&self) -> usize {
         #[cfg(test)]
         {
@@ -2828,7 +2831,7 @@ where
         }
         #[cfg(not(test))]
         {
-            self.resource_processes.len()
+            self.observed_processes.len()
         }
     }
 
@@ -2839,256 +2842,54 @@ where
             && self.wayland_session_uid.is_some()
     }
 
+    fn session_uid(&self) -> Result<&ResourceUid, WorkerEffectError> {
+        self.wayland_session_uid
+            .as_ref()
+            .ok_or(WorkerEffectError::WorkerUnavailable)
+    }
+
+    /// The Process row one worker role owns, named by the display Provider's
+    /// own durable derivation.
+    ///
+    /// The name is not re-derived here: the display Provider owns the child
+    /// names, and a second derivation in the daemon could name a row the
+    /// session never committed.
     fn durable_process_ref(
         &self,
         role: DisplayProcessRole,
     ) -> Result<ResourceRef, WorkerEffectError> {
-        let name = match role {
-            DisplayProcessRole::HostProxy => "display-host-proxy",
-            DisplayProcessRole::GuestFrontend => "display-guest-frontend",
-        };
-        let rendered = format!(
-            "Process/{name}-{}",
-            durable_display_suffix(
-                self.wayland_session_uid
-                    .as_ref()
-                    .ok_or(WorkerEffectError::LaunchRejected)?,
-                role,
-            )
-        );
-        ResourceRef::parse(&rendered).map_err(|_| WorkerEffectError::LaunchRejected)
+        match role {
+            DisplayProcessRole::HostProxy => d2b_provider_display_wayland::
+                durable_host_proxy_process_ref(self.session_uid()?),
+            DisplayProcessRole::GuestFrontend => d2b_provider_display_wayland::
+                durable_guest_frontend_process_ref(self.session_uid()?),
+        }
     }
 
+    /// The private Endpoint row one worker role owns, named by the display
+    /// Provider's own durable derivation.
     fn durable_endpoint_ref(
         &self,
         role: DisplayProcessRole,
     ) -> Result<ResourceRef, WorkerEffectError> {
-        let rendered = format!(
-            "Endpoint/display-endpoint-{}",
-            durable_display_suffix(
-                self.wayland_session_uid
-                    .as_ref()
-                    .ok_or(WorkerEffectError::LaunchRejected)?,
-                role,
-            )
-        );
-        ResourceRef::parse(&rendered).map_err(|_| WorkerEffectError::LaunchRejected)
-    }
-
-    fn durable_endpoint_payload(
-        &self,
-        role: DisplayProcessRole,
-        producer_ref: &ResourceRef,
-        generation: u64,
-    ) -> Result<Vec<u8>, WorkerEffectError> {
-        let zone = self
-            .resource_zone
-            .as_ref()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
-        let owner_ref = self
-            .wayland_session_ref
-            .as_ref()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
-        let provider_ref = ResourceRef::parse("Provider/display-wayland")
-            .map_err(|_| WorkerEffectError::LaunchRejected)?;
-        let (endpoint_class, transport, purpose, fingerprint) = match role {
-            DisplayProcessRole::HostProxy => (
-                EndpointClass::Data,
-                EndpointTransport::FdAttachment,
-                "wayland-cross-domain",
-                "display-wayland-data-v3",
-            ),
-            DisplayProcessRole::GuestFrontend => (
-                EndpointClass::Transport,
-                EndpointTransport::Vsock,
-                "guest-cross-domain",
-                "guest-frontend-v3",
-            ),
-        };
-        let endpoint_spec = EndpointSpec::new(
-            provider_ref,
-            producer_ref.clone(),
-            endpoint_class,
-            transport,
-            BoundedToken::parse(purpose).map_err(|_| WorkerEffectError::LaunchRejected)?,
-            Some(BoundedText::parse(fingerprint).map_err(|_| WorkerEffectError::LaunchRejected)?),
-            EndpointLocality::CrossDomain,
-            EndpointVisibility::Zone,
-            d2b_provider_endpoint::endpoint::EndpointAttachmentPolicy::new(
-                matches!(role, DisplayProcessRole::HostProxy),
-                u16::from(matches!(role, DisplayProcessRole::HostProxy)),
-            )
-            .map_err(|_| WorkerEffectError::LaunchRejected)?,
-            EndpointConsumerPolicy::new(Vec::new(), Vec::new(), vec![EndpointOperation::Resolve])
-                .map_err(|_| WorkerEffectError::LaunchRejected)?,
-            EndpointLifecyclePolicy::RecycleWithProducer,
-        )
-        .map_err(|_| WorkerEffectError::LaunchRejected)?;
-        let endpoint_ref = self.durable_endpoint_ref(role)?;
-        let payload = serde_json::json!({
-        "apiVersion": "resources.d2bus.org/v3",
-        "type": "Endpoint",
-        "metadata": {
-            "name": endpoint_ref.name().as_str(),
-            "zone": zone.as_str(),
-            "ownerRef": owner_ref.to_canonical_string(),
-            "finalizers": [],
-            "deletionRequestedAt": null,
-            "createdAt": "1970-01-01T00:00:00.000Z",
-            "updatedAt": "1970-01-01T00:00:00.000Z",
-            "managedBy": "controller",
-            "generation": generation.max(1),
-            "revision": 1
-        },
-        "spec": endpoint_spec,
-        "status": {
-            "completedAt": null,
-            "conditions": [],
-            "lastReconciledAt": null,
-            "observedGeneration": 0,
-            "outcome": null,
-            "phase": "Pending",
-            "resource": {
-                "readiness": "Pending",
-                "observedProducerGeneration": 0,
-                "observedResourceGeneration": generation.max(1),
-                "endpointGeneration": 0,
-                "connectionAvailability": "unavailable",
-                "leaseAvailability": "lease-required"
-            },
-            "startedAt": null,
-            "update": {
-                "dependencies": {"count": 0, "refs": []},
-                "disruption": "None",
-                "lastAssessedAt": null,
-                "observedGeneration": 0,
-                "operationId": null,
-                "owned": {"count": 0, "refs": []},
-                "preserveState": true,
-                "reasons": [],
-                "state": "Unknown",
-                "targetGeneration": generation.max(1)
-            }
+        match role {
+            DisplayProcessRole::HostProxy => d2b_provider_display_wayland::
+                durable_host_proxy_endpoint_ref(self.session_uid()?),
+            DisplayProcessRole::GuestFrontend => d2b_provider_display_wayland::
+                durable_wayland_endpoint_ref(self.session_uid()?),
         }
-        });
-        let bytes = serde_json::to_vec(&payload).map_err(|_| WorkerEffectError::LaunchRejected)?;
-        Ok(CanonicalJsonValue::parse(&bytes)
-            .map_err(|_| WorkerEffectError::LaunchRejected)?
-            .to_canonical_bytes())
     }
 
-    fn durable_process_payload(
-        &self,
-        role: DisplayProcessRole,
-        binding: &DisplayLaunchBinding,
-    ) -> Result<Vec<u8>, WorkerEffectError> {
-        self.durable_process_payload_for_generation(role, binding.policy_generation())
-    }
-
-    fn durable_process_payload_for_generation(
-        &self,
-        role: DisplayProcessRole,
-        process_generation: u64,
-    ) -> Result<Vec<u8>, WorkerEffectError> {
-        let execution_ref = match role {
-            DisplayProcessRole::HostProxy => self
-                .host_execution_ref
-                .as_ref()
-                .ok_or(WorkerEffectError::LaunchRejected)?,
-            DisplayProcessRole::GuestFrontend => self
-                .guest_subject
-                .as_ref()
-                .ok_or(WorkerEffectError::LaunchRejected)?,
-        }
-        .clone();
-        let template = match role {
-            DisplayProcessRole::HostProxy => "wayland-proxy-worker",
-            DisplayProcessRole::GuestFrontend => "wayland-frontend-worker",
-        };
-        let provider = match role {
-            DisplayProcessRole::HostProxy => "Provider/system-minijail",
-            DisplayProcessRole::GuestFrontend => "Provider/system-systemd",
-        };
-        let process = ProcessSpec::minimal(
-            ExecutionSpec::minimal(
-                execution_ref,
-                ProcessClass::Worker,
-                BoundedToken::parse(template).map_err(|_| WorkerEffectError::LaunchRejected)?,
-            )
-            .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        );
-        let mut spec =
-            serde_json::to_value(process).map_err(|_| WorkerEffectError::LaunchRejected)?;
-        let spec_object = spec
-            .as_object_mut()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
-        spec_object.insert("providerRef".to_owned(), serde_json::json!(provider));
-        spec_object.insert(
-            "updatePolicy".to_owned(),
-            serde_json::json!({
-                "disruptive": "manual",
-                "nonDisruptive": "automatic"
-            }),
-        );
-        let process_ref = self.durable_process_ref(role)?;
-        let owner_ref = self
-            .wayland_session_ref
-            .as_ref()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
-        let generation = process_generation.max(1);
-        let payload = serde_json::json!({
-            "apiVersion": "resources.d2bus.org/v3",
-            "type": "Process",
-            "metadata": {
-                "name": process_ref.name().as_str(),
-                "zone": self.resource_zone.as_ref()
-                    .ok_or(WorkerEffectError::LaunchRejected)?.as_str(),
-                "ownerRef": owner_ref.to_canonical_string(),
-                "annotations": {
-                    PROCESS_RESTART_ANNOTATION: generation.to_string()
-                },
-                "finalizers": [],
-                "deletionRequestedAt": null,
-                "createdAt": "1970-01-01T00:00:00.000Z",
-                "updatedAt": "1970-01-01T00:00:00.000Z",
-                "managedBy": "controller",
-                "generation": generation,
-                "revision": 1
-            },
-            "spec": spec,
-            "status": {
-                "completedAt": null,
-                "conditions": [],
-                "lastReconciledAt": null,
-                "observedGeneration": 0,
-                "outcome": null,
-                "phase": "Pending",
-                "resource": {},
-                "startedAt": null,
-                "update": {
-                    "dependencies": {"count": 0, "refs": []},
-                    "disruption": "None",
-                    "lastAssessedAt": null,
-                    "observedGeneration": 0,
-                    "operationId": null,
-                    "owned": {"count": 0, "refs": []},
-                    "preserveState": true,
-                    "reasons": [],
-                    "state": "Unknown",
-                    "targetGeneration": generation
-                }
-            }
-        });
-        let bytes = serde_json::to_vec(&payload).map_err(|_| WorkerEffectError::LaunchRejected)?;
-        CanonicalJsonValue::parse(&bytes)
-            .map(|value| value.to_canonical_bytes())
-            .map_err(|_| WorkerEffectError::LaunchRejected)
-    }
-
+    /// Read one worker role's current Process row from the manager.
+    ///
+    /// This is a read and nothing else: the row's identity, its owning
+    /// session, and its execution target are validated so a row that is not
+    /// this session's worker is refused rather than projected, and the state
+    /// is the `Endpoint`/`Process` actor's own generation-fenced status.
     fn durable_state(
         &self,
         role: DisplayProcessRole,
-    ) -> Result<Option<(WorkerState, DurableDisplayProcess)>, WorkerEffectError> {
+    ) -> Result<Option<WorkerState>, WorkerEffectError> {
         let Some(client) = self.resource_client.clone() else {
             return Ok(None);
         };
@@ -3101,10 +2902,7 @@ where
             .wayland_session_ref
             .clone()
             .ok_or(WorkerEffectError::WorkerUnavailable)?;
-        let owner_uid = self
-            .wayland_session_uid
-            .clone()
-            .ok_or(WorkerEffectError::WorkerUnavailable)?;
+        let owner_uid = self.session_uid()?.clone();
         let expected_execution_ref = match role {
             DisplayProcessRole::HostProxy => self
                 .host_execution_ref
@@ -3115,13 +2913,12 @@ where
                 .clone()
                 .ok_or(WorkerEffectError::WorkerUnavailable)?,
         };
-        let expected_generation = self.policy_generation.max(1);
         run_effect(move || async move {
             let response = client
                 .get(resource_get_request(
                     &zone,
                     &process_ref,
-                    "display-process-get",
+                    "display-process-read",
                 ))
                 .await;
             if let Some(error) = response.error.as_ref() {
@@ -3139,7 +2936,7 @@ where
             let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
                 .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
             let owner_response = client
-                .get(resource_get_request(&zone, &owner_ref, "display-owner-get"))
+                .get(resource_get_request(&zone, &owner_ref, "display-owner-read"))
                 .await;
             let owner_resource = owner_response
                 .resource
@@ -3148,7 +2945,6 @@ where
             if owner_resource.identity.uid.as_deref() != Some(owner_uid.as_str()) {
                 return Err(WorkerEffectError::LaunchRejected);
             }
-            let state = project_process_state(&envelope)?;
             if !durable_envelope_matches(
                 &envelope,
                 role,
@@ -3160,151 +2956,78 @@ where
             ) {
                 return Err(WorkerEffectError::LaunchRejected);
             }
-            let state = if display_policy_generation(&resource.canonical_json)
-                == Some(expected_generation)
-            {
-                state
-            } else {
-                WorkerState::Starting
-            };
-            let record = DurableDisplayProcess {
-                resource_ref: process_ref,
-                resource_uid: envelope.metadata().uid().clone(),
-                generation: envelope.metadata().generation().get(),
-                revision: envelope.metadata().revision().get(),
-                restart_count: process_restart_count(&resource.canonical_json),
-                deletion_requested: metadata_deletion_requested(&resource.canonical_json),
-            };
-            Ok(Some((state, record)))
+            Ok(Some(project_process_state(&envelope)?))
         })
     }
 
-    fn ensure_durable_endpoint(
-        &mut self,
+    /// Read one worker role's current Endpoint row from the manager.
+    ///
+    /// The row's shape is the display Provider's own vocabulary and the
+    /// `Endpoint` actor admits it there; what this read proves is identity -
+    /// that the row the manager holds is this session's row, produced by the
+    /// worker this session owns - so a socket, producer, or owner from
+    /// elsewhere cannot be projected as this session's wayland endpoint.
+    fn durable_endpoint(
+        &self,
         role: DisplayProcessRole,
-        producer: &DurableDisplayProcess,
-    ) -> Result<DurableDisplayEndpoint, WorkerEffectError> {
-        let client = self
-            .resource_client
-            .clone()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
+    ) -> Result<Option<DurableDisplayEndpoint>, WorkerEffectError> {
+        let Some(client) = self.resource_client.clone() else {
+            return Ok(None);
+        };
         let zone = self
             .resource_zone
             .clone()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
+            .ok_or(WorkerEffectError::WorkerUnavailable)?;
         let endpoint_ref = self.durable_endpoint_ref(role)?;
-        let payload =
-            self.durable_endpoint_payload(role, &producer.resource_ref, producer.generation)?;
         let owner_ref = self
             .wayland_session_ref
             .clone()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
-        let owner_uid = self
-            .wayland_session_uid
-            .clone()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
-        let producer_ref = producer.resource_ref.clone();
-        let result = run_effect(move || async move {
-            let owner = client
+            .ok_or(WorkerEffectError::WorkerUnavailable)?;
+        let producer_ref = self.durable_process_ref(role)?;
+        run_effect(move || async move {
+            let response = client
                 .get(resource_get_request(
                     &zone,
-                    &owner_ref,
-                    "display-endpoint-owner-get",
+                    &endpoint_ref,
+                    "display-endpoint-read",
                 ))
                 .await;
-            let owner_resource = owner
+            if let Some(error) = response.error.as_ref() {
+                if error.kind.enum_value_or_default()
+                    == d2b_contracts_resource::resource_proto::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND
+                {
+                    return Ok(None);
+                }
+                return Err(WorkerEffectError::WorkerUnavailable);
+            }
+            let resource = response
                 .resource
                 .0
                 .ok_or(WorkerEffectError::WorkerUnavailable)?;
-            if owner_resource.identity.uid.as_deref() != Some(owner_uid.as_str()) {
+            let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
+                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
+            if !durable_endpoint_matches(&envelope, &endpoint_ref, &zone, &owner_ref, &producer_ref)
+            {
                 return Err(WorkerEffectError::LaunchRejected);
             }
-            let get = client
-                .get(resource_get_request(
-                    &zone,
-                    &endpoint_ref,
-                    "display-endpoint-get",
-                ))
-                .await;
-            if let Some(resource) = get.resource.0 {
-                return endpoint_record_from_response(
-                    endpoint_ref,
-                    *resource,
-                    role,
-                    &zone,
-                    &owner_ref,
-                    &owner_uid,
-                    &producer_ref,
-                );
-            }
-            if let Some(error) = get.error.as_ref()
-                && error.kind.enum_value_or_default()
-                    != d2b_contracts_resource::resource_proto::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND
-            {
-                return Err(WorkerEffectError::WorkerUnavailable);
-            }
-            let target = resource_wire_identity(&zone, &endpoint_ref, None, None);
-            let owner = resource_wire_identity(&zone, &owner_ref, Some(&owner_uid), None);
-            let mut body = wire::ResourceEnvelopeBytes::new();
-            body.identity = protobuf::MessageField::some(target.clone());
-            body.canonical_json = payload.clone();
-            body.payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &payload);
-            let mut precondition = wire::Precondition::new();
-            precondition.kind = protobuf::EnumOrUnknown::new(
-                wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT,
-            );
-            let mut mutation = wire::Mutation::new();
-            mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_CREATE);
-            mutation.target = protobuf::MessageField::some(target);
-            mutation.precondition = protobuf::MessageField::some(precondition);
-            mutation.resource = protobuf::MessageField::some(body);
-            mutation.owner = protobuf::MessageField::some(owner);
-            let mut request = wire::CreateRequest::new();
-            request.meta = protobuf::MessageField::some(resource_request_meta(
-                &resource_operation_id_with_key(
-                    "display-endpoint-create",
-                    &zone,
-                    &endpoint_ref,
-                    &payload,
-                ),
-            ));
-            request.mutation = protobuf::MessageField::some(mutation);
-            let created = client.create(request).await;
-            if let Some(resource) = created.resource.0 {
-                return endpoint_record_from_response(
-                    endpoint_ref,
-                    *resource,
-                    role,
-                    &zone,
-                    &owner_ref,
-                    &owner_uid,
-                    &producer_ref,
-                );
-            }
-            if created.error.is_some() {
-                let adopted = client
-                    .get(resource_get_request(
-                        &zone,
-                        &endpoint_ref,
-                        "display-endpoint-adopt-get",
-                    ))
-                    .await;
-                if let Some(resource) = adopted.resource.0 {
-                    return endpoint_record_from_response(
-                        endpoint_ref,
-                        *resource,
-                        role,
-                        &zone,
-                        &owner_ref,
-                        &owner_uid,
-                        &producer_ref,
-                    );
-                }
-            }
-            Err(WorkerEffectError::WorkerUnavailable)
-        })?;
-        self.resource_endpoints.insert(role, result.clone());
-        Ok(result)
+            Ok(Some(DurableDisplayEndpoint {
+                resource_ref: endpoint_ref,
+                generation: envelope.metadata().generation().get(),
+                deletion_requested: metadata_deletion_requested(&resource.canonical_json),
+                ready: matches!(envelope.status().phase(), ResourcePhase::Ready),
+            }))
+        })
+    }
+
+    /// Whether one worker role's private Endpoint row currently stands: the
+    /// row is committed, undeleting, and reports `Ready` from its own actor.
+    ///
+    /// A row that is not committed yet reads the same as "not standing" for
+    /// every caller that orders one child behind another.
+    fn child_standing(&self, role: DisplayProcessRole) -> Result<bool, WorkerEffectError> {
+        Ok(self
+            .durable_endpoint(role)?
+            .is_some_and(|endpoint| endpoint.ready && !endpoint.deletion_requested))
     }
 
     fn ensure_wayland_session_finalizer(&self) -> Result<(), WorkerEffectError> {
@@ -3395,766 +3118,6 @@ where
         })
         .map_err(|_| WorkerEffectError::WorkerUnavailable)
     }
-
-    fn update_durable_endpoint_status(
-        &mut self,
-        role: DisplayProcessRole,
-        producer: &DurableDisplayProcess,
-        state: WorkerState,
-    ) -> Result<(), WorkerEffectError> {
-        let endpoint = self.ensure_durable_endpoint(role, producer)?;
-        if endpoint.deletion_requested {
-            return Err(WorkerEffectError::CleanupIncomplete);
-        }
-        let client = self
-            .resource_client
-            .clone()
-            .ok_or(WorkerEffectError::WorkerUnavailable)?;
-        let zone = self
-            .resource_zone
-            .clone()
-            .ok_or(WorkerEffectError::WorkerUnavailable)?;
-        let endpoint_ref = endpoint.resource_ref.clone();
-        let endpoint_uid = endpoint.resource_uid.clone();
-        let status_endpoint_ref = endpoint_ref.clone();
-        let status_endpoint_uid = endpoint_uid.clone();
-        let endpoint_revision = endpoint.revision;
-        let endpoint_generation = producer.restart_count.saturating_add(1).max(1);
-        let desired_phase = match state {
-            WorkerState::Ready { .. } => "Ready",
-            WorkerState::Failed { .. } => "Failed",
-            WorkerState::Terminal { deleted: true } => "Deleted",
-            WorkerState::Terminal { deleted: false } => "Succeeded",
-            WorkerState::Starting => "Pending",
-        };
-        let readiness = match state {
-            WorkerState::Ready { .. } => "Ready",
-            WorkerState::Failed { .. } => "Failed",
-            WorkerState::Terminal { deleted: true } => "Deleted",
-            WorkerState::Terminal { deleted: false } => "Unavailable",
-            WorkerState::Starting => "Pending",
-        };
-        let connection = matches!(state, WorkerState::Ready { .. });
-        let producer_ref = producer.resource_ref.clone();
-        let producer_generation = producer.generation;
-        let owner_ref = self
-            .wayland_session_ref
-            .clone()
-            .ok_or(WorkerEffectError::WorkerUnavailable)?;
-        let owner_uid = self
-            .wayland_session_uid
-            .clone()
-            .ok_or(WorkerEffectError::WorkerUnavailable)?;
-        let updated = run_effect(move || async move {
-            let current = client
-                .get(resource_get_request(
-                    &zone,
-                    &status_endpoint_ref,
-                    "display-endpoint-status-get",
-                ))
-                .await;
-            let current_resource = current
-                .resource
-                .0
-                .ok_or(WorkerEffectError::WorkerUnavailable)?;
-            let current_envelope = ResourceEnvelope::from_json(&current_resource.canonical_json)
-                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-            if !durable_endpoint_matches(
-                &current_envelope,
-                role,
-                &status_endpoint_ref,
-                &zone,
-                &owner_ref,
-                &owner_uid,
-                &producer_ref,
-            ) {
-                return Err(WorkerEffectError::LaunchRejected);
-            }
-            let mut value = CanonicalJsonValue::parse(&current_resource.canonical_json)
-                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-            let CanonicalJsonValue::Object(root) = &mut value else {
-                return Err(WorkerEffectError::WorkerUnavailable);
-            };
-            let Some(CanonicalJsonValue::Object(status)) = root.get_mut("status") else {
-                return Err(WorkerEffectError::WorkerUnavailable);
-            };
-            let current_phase = status.get("phase").cloned();
-            let current_generation = status
-                .get("resource")
-                .and_then(|resource| match resource {
-                    CanonicalJsonValue::Object(resource_status) => {
-                        resource_status.get("endpointGeneration")
-                    }
-                    _ => None,
-                })
-                .cloned();
-            if matches!(current_phase, Some(CanonicalJsonValue::String(value)) if value == desired_phase)
-                && matches!(current_generation, Some(CanonicalJsonValue::Integer(value)) if value == endpoint_generation as i64)
-            {
-                return Ok(current_resource);
-            }
-            status.insert(
-                "phase".to_owned(),
-                CanonicalJsonValue::String(desired_phase.to_owned()),
-            );
-            status.insert(
-                "observedGeneration".to_owned(),
-                CanonicalJsonValue::Integer(current_envelope.metadata().generation().get() as i64),
-            );
-            {
-                let Some(CanonicalJsonValue::Object(resource_status)) = status.get_mut("resource")
-                else {
-                    return Err(WorkerEffectError::WorkerUnavailable);
-                };
-                resource_status.insert(
-                    "readiness".to_owned(),
-                    CanonicalJsonValue::String(readiness.to_owned()),
-                );
-                resource_status.insert(
-                    "observedProducerGeneration".to_owned(),
-                    CanonicalJsonValue::Integer(producer_generation as i64),
-                );
-                resource_status.insert(
-                    "observedResourceGeneration".to_owned(),
-                    CanonicalJsonValue::Integer(
-                        current_envelope.metadata().generation().get() as i64
-                    ),
-                );
-                resource_status.insert(
-                    "endpointGeneration".to_owned(),
-                    CanonicalJsonValue::Integer(endpoint_generation as i64),
-                );
-                resource_status.insert(
-                    "connectionAvailability".to_owned(),
-                    CanonicalJsonValue::String(
-                        if connection {
-                            "available"
-                        } else {
-                            "unavailable"
-                        }
-                        .to_owned(),
-                    ),
-                );
-            }
-            if let Some(CanonicalJsonValue::Object(update)) = status.get_mut("update") {
-                update.insert(
-                    "observedGeneration".to_owned(),
-                    CanonicalJsonValue::Integer(
-                        current_envelope.metadata().generation().get() as i64
-                    ),
-                );
-            }
-            let canonical = value.to_canonical_bytes();
-            let mut operation_key =
-                format!("{}:{}:", status_endpoint_uid.as_str(), endpoint_revision).into_bytes();
-            operation_key.extend_from_slice(&canonical);
-            let operation_id = resource_operation_id_with_key(
-                "display-endpoint-status",
-                &zone,
-                &status_endpoint_ref,
-                &operation_key,
-            );
-            let envelope = ResourceEnvelope::from_json(&canonical)
-                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-            let mut resource = wire::ResourceEnvelopeBytes::new();
-            resource.identity = protobuf::MessageField::some(resource_wire_identity(
-                &zone,
-                &status_endpoint_ref,
-                Some(&status_endpoint_uid),
-                Some(endpoint_revision),
-            ));
-            resource.canonical_json = canonical;
-            resource.payload_digest = envelope
-                .digest()
-                .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-            let mut mutation = wire::Mutation::new();
-            mutation.kind =
-                protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_STATUS);
-            mutation.target = protobuf::MessageField::some(resource_wire_identity(
-                &zone,
-                &status_endpoint_ref,
-                Some(&status_endpoint_uid),
-                Some(endpoint_revision),
-            ));
-            let mut precondition = wire::Precondition::new();
-            precondition.kind = protobuf::EnumOrUnknown::new(
-                wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
-            );
-            precondition.expected_revision = Some(endpoint_revision);
-            precondition.expected_uid = Some(status_endpoint_uid.as_str().to_owned());
-            mutation.precondition = protobuf::MessageField::some(precondition);
-            mutation.resource = protobuf::MessageField::some(resource);
-            // A status write re-states the row; it never moves ownership, and
-            // the Resource API refuses an owner on any mutation other than
-            // Create or UpdateMetadata.
-            let mut request = wire::UpdateStatusRequest::new();
-            request.meta = protobuf::MessageField::some(resource_request_meta(&operation_id));
-            request.mutation = protobuf::MessageField::some(mutation);
-            let response = client.update_status(request).await;
-            if response.error.is_some() {
-                return Err(WorkerEffectError::WorkerUnavailable);
-            }
-            response
-                .resource
-                .0
-                .ok_or(WorkerEffectError::WorkerUnavailable)
-        })?;
-        let envelope = ResourceEnvelope::from_json(&updated.canonical_json)
-            .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-        let endpoint_generation = envelope
-            .status()
-            .resource()
-            .get("endpointGeneration")
-            .and_then(|value| match value {
-                CanonicalJsonValue::Integer(value) => u64::try_from(*value).ok(),
-                _ => None,
-            })
-            .unwrap_or(endpoint_generation);
-        self.resource_endpoints.insert(
-            role,
-            DurableDisplayEndpoint {
-                resource_ref: endpoint_ref,
-                resource_uid: endpoint_uid,
-                revision: updated
-                    .identity
-                    .as_ref()
-                    .and_then(|identity| identity.revision)
-                    .unwrap_or(endpoint_revision),
-                generation: endpoint_generation,
-                deletion_requested: metadata_deletion_requested(&updated.canonical_json),
-            },
-        );
-        Ok(())
-    }
-
-    fn stop_durable_endpoint(&mut self, role: DisplayProcessRole) -> Result<(), WorkerEffectError> {
-        let endpoint_ref = self.durable_endpoint_ref(role)?;
-        let owner_ref = self
-            .wayland_session_ref
-            .clone()
-            .ok_or(WorkerEffectError::CleanupIncomplete)?;
-        let owner_uid = self
-            .wayland_session_uid
-            .clone()
-            .ok_or(WorkerEffectError::CleanupIncomplete)?;
-        let producer_ref = self.durable_process_ref(role)?;
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            let client = self
-                .resource_client
-                .clone()
-                .ok_or(WorkerEffectError::CleanupIncomplete)?;
-            let zone = self
-                .resource_zone
-                .clone()
-                .ok_or(WorkerEffectError::CleanupIncomplete)?;
-            let current_endpoint_ref = endpoint_ref.clone();
-            let current_zone = zone.clone();
-            let current = run_effect(move || async move {
-                Ok(client
-                    .get(resource_get_request(
-                        &current_zone,
-                        &current_endpoint_ref,
-                        "display-endpoint-delete-reread",
-                    ))
-                    .await)
-            })?;
-            if current.resource.0.is_none() {
-                let is_not_found = current.error.as_ref().is_some_and(|error| {
-                    error.kind.enum_value_or_default()
-                        == d2b_contracts_resource::resource_proto::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND
-                });
-                if is_not_found {
-                    self.resource_endpoints.remove(&role);
-                    return Ok(());
-                }
-                return Err(WorkerEffectError::CleanupIncomplete);
-            }
-            if current.error.is_some() {
-                return Err(WorkerEffectError::CleanupIncomplete);
-            }
-            let current_record = endpoint_record_from_response(
-                endpoint_ref.clone(),
-                *current
-                    .resource
-                    .0
-                    .ok_or(WorkerEffectError::CleanupIncomplete)?,
-                role,
-                &zone,
-                &owner_ref,
-                &owner_uid,
-                &producer_ref,
-            )?;
-            self.resource_endpoints.insert(role, current_record.clone());
-            if !current_record.deletion_requested {
-                let uid = current_record.resource_uid.clone();
-                let revision = current_record.revision;
-                let target = current_record.resource_ref.clone();
-                let delete_key = format!("{}:{}", uid.as_str(), revision);
-                let client = self
-                    .resource_client
-                    .clone()
-                    .ok_or(WorkerEffectError::CleanupIncomplete)?;
-                let zone = self
-                    .resource_zone
-                    .clone()
-                    .ok_or(WorkerEffectError::CleanupIncomplete)?;
-                run_effect(move || async move {
-                    let mut mutation = wire::Mutation::new();
-                    mutation.kind =
-                        protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
-                    mutation.target = protobuf::MessageField::some(resource_wire_identity(
-                        &zone,
-                        &target,
-                        Some(&uid),
-                        Some(revision),
-                    ));
-                    let mut precondition = wire::Precondition::new();
-                    precondition.kind = protobuf::EnumOrUnknown::new(
-                        wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
-                    );
-                    precondition.expected_revision = Some(revision);
-                    precondition.expected_uid = Some(uid.as_str().to_owned());
-                    mutation.precondition = protobuf::MessageField::some(precondition);
-                    let mut request = wire::DeleteRequest::new();
-                    request.meta = protobuf::MessageField::some(resource_request_meta(
-                        &resource_operation_id_with_key(
-                            "display-endpoint-delete",
-                            &zone,
-                            &target,
-                            delete_key.as_bytes(),
-                        ),
-                    ));
-                    request.mutation = protobuf::MessageField::some(mutation);
-                    if client.delete(request).await.error.is_some() {
-                        return Err(WorkerEffectError::CleanupIncomplete);
-                    }
-                    Ok(())
-                })?;
-                continue;
-            }
-            if Instant::now() >= deadline {
-                return Err(WorkerEffectError::CleanupIncomplete);
-            }
-            // U13: async-timer poll through the effect bridge.
-            effect_poll();
-        }
-    }
-
-    fn ensure_durable_process(
-        &mut self,
-        role: DisplayProcessRole,
-        binding: &DisplayLaunchBinding,
-    ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
-        self.ensure_wayland_session_finalizer()?;
-        let client = self
-            .resource_client
-            .clone()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
-        let zone = self
-            .resource_zone
-            .clone()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
-        let process_ref = self.durable_process_ref(role)?;
-        let payload = self.durable_process_payload(role, binding)?;
-        let owner_uid = self
-            .wayland_session_uid
-            .clone()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
-        let owner_ref = self
-            .wayland_session_ref
-            .clone()
-            .ok_or(WorkerEffectError::LaunchRejected)?;
-        let expected_execution_ref = match role {
-            DisplayProcessRole::HostProxy => self
-                .host_execution_ref
-                .clone()
-                .ok_or(WorkerEffectError::LaunchRejected)?,
-            DisplayProcessRole::GuestFrontend => self
-                .guest_subject
-                .clone()
-                .ok_or(WorkerEffectError::LaunchRejected)?,
-        };
-        let expected_generation = binding.policy_generation().max(1);
-        let result = run_effect(move || async move {
-            let owner = client
-                .get(resource_get_request(&zone, &owner_ref, "display-owner-get"))
-                .await;
-            let owner_resource = owner
-                .resource
-                .0
-                .ok_or(WorkerEffectError::WorkerUnavailable)?;
-            if owner_resource.identity.uid.as_deref() != Some(owner_uid.as_str()) {
-                return Err(WorkerEffectError::LaunchRejected);
-            }
-            let get = client
-                .get(resource_get_request(
-                    &zone,
-                    &process_ref,
-                    "display-process-get",
-                ))
-                .await;
-            if let Some(resource) = get.resource.0 {
-                let resource = *resource;
-                let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-                    .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-                if !durable_envelope_matches(
-                    &envelope,
-                    role,
-                    &process_ref,
-                    &zone,
-                    &owner_ref,
-                    &owner_uid,
-                    &expected_execution_ref,
-                ) {
-                    return Err(WorkerEffectError::LaunchRejected);
-                }
-                let (resource, policy_replaced) =
-                    if display_policy_generation(&resource.canonical_json)
-                        == Some(expected_generation)
-                    {
-                        (resource, false)
-                    } else {
-                        let canonical_json = update_display_policy_annotation(
-                            &resource.canonical_json,
-                            expected_generation,
-                        )?;
-                        let uid = envelope.metadata().uid().clone();
-                        let revision = envelope.metadata().revision().get();
-                        let target =
-                            resource_wire_identity(&zone, &process_ref, Some(&uid), Some(revision));
-                        let mut body = wire::ResourceEnvelopeBytes::new();
-                        body.identity = protobuf::MessageField::some(target.clone());
-                        body.canonical_json = canonical_json.clone();
-                        body.payload_digest = ResourceEnvelope::from_json(&body.canonical_json)
-                            .map_err(|_| WorkerEffectError::WorkerUnavailable)?
-                            .digest()
-                            .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-                        let mut precondition = wire::Precondition::new();
-                        precondition.kind = protobuf::EnumOrUnknown::new(
-                            wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
-                        );
-                        precondition.expected_revision = Some(revision);
-                        precondition.expected_uid = Some(uid.as_str().to_owned());
-                        let mut mutation = wire::Mutation::new();
-                        mutation.kind = protobuf::EnumOrUnknown::new(
-                            wire::MutationKind::MUTATION_KIND_UPDATE_METADATA,
-                        );
-                        mutation.target = protobuf::MessageField::some(target);
-                        mutation.precondition = protobuf::MessageField::some(precondition);
-                        mutation.owner = protobuf::MessageField::some(resource_wire_identity(
-                            &zone,
-                            &owner_ref,
-                            Some(&owner_uid),
-                            None,
-                        ));
-                        mutation.resource = protobuf::MessageField::some(body);
-                        let mut operation_key =
-                            format!("{}:{}:", uid.as_str(), revision).into_bytes();
-                        operation_key.extend_from_slice(&canonical_json);
-                        let mut request = wire::UpdateMetadataRequest::new();
-                        request.meta = protobuf::MessageField::some(resource_request_meta(
-                            &resource_operation_id_with_key(
-                                "display-process-policy-update",
-                                &zone,
-                                &process_ref,
-                                &operation_key,
-                            ),
-                        ));
-                        request.mutation = protobuf::MessageField::some(mutation);
-                        let updated = client.update_metadata(request).await;
-                        if updated.error.is_some() {
-                            return Err(WorkerEffectError::WorkerUnavailable);
-                        }
-                        (
-                            *updated
-                                .resource
-                                .0
-                                .ok_or(WorkerEffectError::WorkerUnavailable)?,
-                            true,
-                        )
-                    };
-                let identity = DurableProcessRecordContext {
-                    zone: &zone,
-                    owner_ref: &owner_ref,
-                    owner_uid: &owner_uid,
-                    expected_execution_ref: &expected_execution_ref,
-                };
-                let (state, record) = durable_record_from_response(
-                    process_ref,
-                    resource,
-                    role,
-                    expected_generation,
-                    &identity,
-                )?;
-                return Ok((
-                    if policy_replaced {
-                        WorkerState::Starting
-                    } else {
-                        state
-                    },
-                    record,
-                ));
-            }
-            if let Some(error) = get.error.as_ref()
-                && error.kind.enum_value_or_default()
-                    != d2b_contracts_resource::resource_proto::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND
-            {
-                return Err(WorkerEffectError::WorkerUnavailable);
-            }
-            let target = resource_wire_identity(&zone, &process_ref, None, None);
-            let owner = resource_wire_identity(&zone, &owner_ref, Some(&owner_uid), None);
-            let mut body = wire::ResourceEnvelopeBytes::new();
-            body.identity = protobuf::MessageField::some(target.clone());
-            body.canonical_json = payload.clone();
-            body.payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &payload);
-            let mut precondition = wire::Precondition::new();
-            precondition.kind = protobuf::EnumOrUnknown::new(
-                wire::PreconditionKind::PRECONDITION_KIND_CREATE_ABSENT,
-            );
-            let mut mutation = wire::Mutation::new();
-            mutation.kind = protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_CREATE);
-            mutation.target = protobuf::MessageField::some(target);
-            mutation.precondition = protobuf::MessageField::some(precondition);
-            mutation.resource = protobuf::MessageField::some(body);
-            mutation.owner = protobuf::MessageField::some(owner);
-            let mut request = wire::CreateRequest::new();
-            request.meta = protobuf::MessageField::some(resource_request_meta(
-                &resource_operation_id_with_key(
-                    "display-process-create",
-                    &zone,
-                    &process_ref,
-                    &payload,
-                ),
-            ));
-            request.mutation = protobuf::MessageField::some(mutation);
-            let created = client.create(request).await;
-            if let Some(resource) = created.resource.0 {
-                let identity = DurableProcessRecordContext {
-                    zone: &zone,
-                    owner_ref: &owner_ref,
-                    owner_uid: &owner_uid,
-                    expected_execution_ref: &expected_execution_ref,
-                };
-                return durable_record_from_response(
-                    process_ref,
-                    *resource,
-                    role,
-                    expected_generation,
-                    &identity,
-                );
-            }
-            if created.error.is_some() {
-                let adopted = client
-                    .get(resource_get_request(
-                        &zone,
-                        &process_ref,
-                        "display-process-adopt-get",
-                    ))
-                    .await;
-                if let Some(resource) = adopted.resource.0 {
-                    let identity = DurableProcessRecordContext {
-                        zone: &zone,
-                        owner_ref: &owner_ref,
-                        owner_uid: &owner_uid,
-                        expected_execution_ref: &expected_execution_ref,
-                    };
-                    return durable_record_from_response(
-                        process_ref,
-                        *resource,
-                        role,
-                        expected_generation,
-                        &identity,
-                    );
-                }
-                return Err(WorkerEffectError::WorkerUnavailable);
-            }
-            Err(WorkerEffectError::WorkerUnavailable)
-        })?;
-        self.resource_processes.insert(role, result.1.clone());
-        self.ensure_durable_endpoint(role, &result.1)?;
-        self.update_durable_endpoint_status(role, &result.1, result.0)?;
-        Ok(WorkerLaunchReceipt::from_supervisor(
-            role,
-            result.0,
-            binding.policy_generation(),
-            binding.teardown_generation(),
-            self.session_digest,
-        ))
-    }
-
-    fn stop_durable_process(
-        &mut self,
-        role: DisplayProcessRole,
-    ) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
-        let state = self.durable_state(role)?;
-        let Some((worker_state, record)) = state else {
-            self.stop_durable_endpoint(role)?;
-            self.resource_processes.remove(&role);
-            return Ok(WorkerLaunchReceipt::from_supervisor(
-                role,
-                WorkerState::Terminal { deleted: true },
-                self.policy_generation,
-                self.teardown_generation,
-                self.session_digest,
-            ));
-        };
-        self.resource_processes.insert(role, record.clone());
-        if !matches!(worker_state, WorkerState::Terminal { deleted: true })
-            && !record.deletion_requested
-        {
-            let client = self
-                .resource_client
-                .clone()
-                .ok_or(WorkerEffectError::CleanupIncomplete)?;
-            let zone = self
-                .resource_zone
-                .clone()
-                .ok_or(WorkerEffectError::CleanupIncomplete)?;
-            let process_ref = record.resource_ref.clone();
-            let uid = record.resource_uid.clone();
-            let revision = record.revision;
-            let delete_key = format!("{}:{}", uid.as_str(), revision);
-            run_effect(move || async move {
-                let mut mutation = wire::Mutation::new();
-                mutation.kind =
-                    protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
-                mutation.target = protobuf::MessageField::some(resource_wire_identity(
-                    &zone,
-                    &process_ref,
-                    Some(&uid),
-                    Some(revision),
-                ));
-                let mut precondition = wire::Precondition::new();
-                precondition.kind = protobuf::EnumOrUnknown::new(
-                    wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
-                );
-                precondition.expected_revision = Some(revision);
-                precondition.expected_uid = Some(uid.as_str().to_owned());
-                mutation.precondition = protobuf::MessageField::some(precondition);
-                let mut request = wire::DeleteRequest::new();
-                request.meta = protobuf::MessageField::some(resource_request_meta(
-                    &resource_operation_id_with_key(
-                        "display-process-delete",
-                        &zone,
-                        &process_ref,
-                        delete_key.as_bytes(),
-                    ),
-                ));
-                request.mutation = protobuf::MessageField::some(mutation);
-                let response = client.delete(request).await;
-                if response.error.is_some() {
-                    return Err(WorkerEffectError::CleanupIncomplete);
-                }
-                Ok(())
-            })?;
-        }
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let state = loop {
-            let observed_state = match self.durable_state(role)? {
-                None => {
-                    self.resource_processes.remove(&role);
-                    break WorkerState::Terminal { deleted: true };
-                }
-                Some((observed, current)) => {
-                    self.resource_processes.insert(role, current);
-                    observed
-                }
-            };
-            if observed_state.is_terminal() && observed_state.is_deleted() {
-                self.resource_processes.remove(&role);
-                break observed_state;
-            }
-            if Instant::now() >= deadline {
-                break observed_state;
-            }
-            // U13: async-timer poll through the effect bridge.
-            effect_poll();
-        };
-        let mut process_deleted = false;
-        if state.is_terminal() {
-            self.stop_durable_endpoint(role)?;
-            if let Some(record) = self.resource_processes.get(&role).cloned() {
-                let client = self
-                    .resource_client
-                    .clone()
-                    .ok_or(WorkerEffectError::CleanupIncomplete)?;
-                let zone = self
-                    .resource_zone
-                    .clone()
-                    .ok_or(WorkerEffectError::CleanupIncomplete)?;
-                let process_ref = record.resource_ref.clone();
-                let uid = record.resource_uid.clone();
-                let revision = record.revision;
-                let delete_key = format!("{}:{}", uid.as_str(), revision);
-                run_effect(move || async move {
-                    let mut mutation = wire::Mutation::new();
-                    mutation.kind =
-                        protobuf::EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_DELETE);
-                    mutation.target = protobuf::MessageField::some(resource_wire_identity(
-                        &zone,
-                        &process_ref,
-                        Some(&uid),
-                        Some(revision),
-                    ));
-                    let mut precondition = wire::Precondition::new();
-                    precondition.kind = protobuf::EnumOrUnknown::new(
-                        wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION,
-                    );
-                    precondition.expected_revision = Some(revision);
-                    precondition.expected_uid = Some(uid.as_str().to_owned());
-                    mutation.precondition = protobuf::MessageField::some(precondition);
-                    let mut request = wire::DeleteRequest::new();
-                    request.meta = protobuf::MessageField::some(resource_request_meta(
-                        &resource_operation_id_with_key(
-                            "display-process-drain",
-                            &zone,
-                            &process_ref,
-                            delete_key.as_bytes(),
-                        ),
-                    ));
-                    request.mutation = protobuf::MessageField::some(mutation);
-                    let _ = client.delete(request).await;
-                    Ok(())
-                })?;
-                let deadline = Instant::now() + Duration::from_secs(2);
-                loop {
-                    match self.durable_state(role)? {
-                        None => {
-                            self.resource_processes.remove(&role);
-                            process_deleted = true;
-                            break;
-                        }
-                        Some((_, current)) => {
-                            self.resource_processes.insert(role, current);
-                        }
-                    }
-                    if Instant::now() >= deadline {
-                        break;
-                    }
-                    // U13: async-timer poll through the effect bridge.
-                    effect_poll();
-                }
-            }
-        }
-        if process_deleted {
-            self.resource_processes.remove(&role);
-            return Ok(WorkerLaunchReceipt::from_supervisor(
-                role,
-                WorkerState::Terminal { deleted: true },
-                self.policy_generation,
-                self.teardown_generation,
-                self.session_digest,
-            ));
-        }
-        Ok(WorkerLaunchReceipt::from_supervisor(
-            role,
-            state,
-            self.policy_generation,
-            self.teardown_generation,
-            self.session_digest,
-        ))
-    }
 }
 
 impl<S> DisplayProcessEffectPort for DisplaySupervisorEffects<S>
@@ -4174,12 +3137,19 @@ where
         self.reconnect_generation = session.reconnect_generation();
         self.policy_generation = policy_generation;
         self.teardown_generation = teardown_generation;
+        // The display teardown contract is the daemon's to keep: the finalizer
+        // is stamped on the session row, never on a child, and the children
+        // themselves are created, drained, and retired by the actor graph.
+        if self.uses_durable_processes() {
+            self.ensure_wayland_session_finalizer()?;
+        }
         Ok(())
     }
 
     fn current_observation(
         &mut self,
-    ) -> Result<Option<d2b_provider_display_wayland::ProcessObservation>, WorkerEffectError> {
+    ) -> Result<Option<d2b_provider_display_wayland::ProcessObservation>, WorkerEffectError>
+    {
         if !self.uses_durable_processes() {
             return Ok(None);
         }
@@ -4189,14 +3159,8 @@ where
             DisplayProcessRole::GuestFrontend,
         ] {
             match self.durable_state(role) {
-                Ok(Some((state, record))) => {
-                    self.resource_processes.insert(role, record);
-                    let producer = self
-                        .resource_processes
-                        .get(&role)
-                        .cloned()
-                        .ok_or(WorkerEffectError::WorkerUnavailable)?;
-                    self.update_durable_endpoint_status(role, &producer, state)?;
+                Ok(Some(state)) => {
+                    self.observed_processes.insert(role);
                     states.insert(role, state);
                 }
                 Ok(None) => {
@@ -4204,6 +3168,20 @@ where
                 }
                 Err(error) => return Err(error),
             }
+        }
+        // R20: the guest frontend is ordered BEHIND the host proxy by the
+        // proxy's own current child evidence, never by a launch this adapter
+        // issued. A committed frontend row is not proof that the carriage it
+        // attaches to is standing, so the frontend reads `Starting` until the
+        // proxy's Process row and the proxy's cross-domain Endpoint both
+        // report `Ready` for their own committed generations.
+        let proxy_standing =
+            matches!(states.get(&DisplayProcessRole::HostProxy), Some(WorkerState::Ready { .. }))
+                && self.child_standing(DisplayProcessRole::HostProxy)?;
+        if !proxy_standing
+            && matches!(states.get(&DisplayProcessRole::GuestFrontend), Some(WorkerState::Ready { .. }))
+        {
+            states.insert(DisplayProcessRole::GuestFrontend, WorkerState::Starting);
         }
         Ok(Some(
             d2b_provider_display_wayland::ProcessObservation::from_daemon(
@@ -4230,23 +3208,31 @@ where
         if !self.uses_durable_processes() {
             return Ok(None);
         }
+        // R23: the projected wayland endpoint is the guest frontend's OWN
+        // Endpoint, named by the display Provider's durable derivation, and
+        // the generation it carries is that row's committed METADATA
+        // generation - the generation the `Endpoint` actor published its
+        // readiness for. It is not the first `Endpoint` child a list yields,
+        // not the host proxy's private carriage, and not a status-stamped
+        // counter this adapter used to advance.
+        let endpoint = self.durable_endpoint(DisplayProcessRole::GuestFrontend)?;
         Ok(Some(
             d2b_provider_display_wayland::WaylandSessionResourceStatus {
-                proxy_process_ref: self
-                    .resource_processes
-                    .get(&DisplayProcessRole::HostProxy)
-                    .map(|process| process.resource_ref.clone()),
-                guest_frontend_process_ref: self
-                    .resource_processes
-                    .get(&DisplayProcessRole::GuestFrontend)
-                    .map(|process| process.resource_ref.clone()),
-                wayland_endpoint_ref: self
-                    .resource_endpoints
-                    .get(&DisplayProcessRole::HostProxy)
+                proxy_process_ref: Some(
+                    d2b_provider_display_wayland::durable_host_proxy_process_ref(
+                        self.session_uid()?,
+                    )?,
+                ),
+                guest_frontend_process_ref: Some(
+                    d2b_provider_display_wayland::durable_guest_frontend_process_ref(
+                        self.session_uid()?,
+                    )?,
+                ),
+                wayland_endpoint_ref: endpoint
+                    .as_ref()
                     .map(|endpoint| endpoint.resource_ref.clone()),
-                wayland_endpoint_generation: self
-                    .resource_endpoints
-                    .get(&DisplayProcessRole::HostProxy)
+                wayland_endpoint_generation: endpoint
+                    .as_ref()
                     .map(|endpoint| endpoint.generation),
                 policy_digest: String::new(),
             },
@@ -4263,19 +3249,19 @@ where
             ] {
                 let previous_failure = self.last_failures.get(&role).copied();
                 let failure = match self.durable_state(role) {
-                    Ok(Some((WorkerState::Failed { .. }, record))) => {
-                        self.resource_processes.insert(role, record);
+                    Ok(Some(WorkerState::Failed { .. })) => {
+                        self.observed_processes.insert(role);
                         Some(previous_failure.unwrap_or(observed_at_ms))
                     }
-                    Ok(Some((state, record))) => {
-                        self.resource_processes.insert(role, record);
+                    Ok(Some(state)) => {
+                        self.observed_processes.insert(role);
                         if state.is_terminal() && !state.is_deleted() {
                             Some(previous_failure.unwrap_or(observed_at_ms))
                         } else {
                             None
                         }
                     }
-                    Ok(None) if self.resource_processes.contains_key(&role) => {
+                    Ok(None) if self.observed_processes.contains(&role) => {
                         Some(previous_failure.unwrap_or(observed_at_ms))
                     }
                     Ok(None) => None,
@@ -4397,10 +3383,26 @@ where
             return Err(WorkerEffectError::GrantUnavailable);
         }
         if self.uses_durable_processes() {
-            let receipt = self.ensure_durable_process(binding.role(), &binding)?;
+            // The launch belongs to the `Process` actor, and its gate decides
+            // whether the worker may start at all (R18). This adapter creates
+            // and adopts nothing; it answers with the state the actor's
+            // current child evidence reports for the row this ticket names.
+            let state = match self.durable_state(binding.role())? {
+                Some(state) => {
+                    self.observed_processes.insert(binding.role());
+                    state
+                }
+                None => WorkerState::Starting,
+            };
             self.consumed_grants
                 .insert(binding.attachment_digest(), binding.teardown_generation());
-            return Ok(receipt);
+            return Ok(WorkerLaunchReceipt::from_supervisor(
+                binding.role(),
+                state,
+                binding.policy_generation(),
+                binding.teardown_generation(),
+                self.session_digest,
+            ));
         }
         #[cfg(test)]
         {
@@ -4478,7 +3480,24 @@ where
 
     fn stop(&mut self, role: DisplayProcessRole) -> Result<WorkerLaunchReceipt, WorkerEffectError> {
         if self.uses_durable_processes() {
-            return self.stop_durable_process(role);
+            // The teardown belongs to the actors: the session actor retires
+            // the children it derived and the `Endpoint` actor drains the
+            // relationships. This adapter deletes nothing and reports what
+            // the actor-owned rows currently say.
+            let state = match self.durable_state(role)? {
+                Some(state) => {
+                    self.observed_processes.insert(role);
+                    state
+                }
+                None => WorkerState::Terminal { deleted: true },
+            };
+            return Ok(WorkerLaunchReceipt::from_supervisor(
+                role,
+                state,
+                self.policy_generation,
+                self.teardown_generation,
+                self.session_digest,
+            ));
         }
         #[cfg(test)]
         if let Some(worker) = self.identities.get(&role).copied() {
@@ -5842,19 +4861,6 @@ fn session_resource_uid(
     ResourceUid::from_bytes(&bytes).expect("uuid bytes are canonical")
 }
 
-fn durable_display_suffix(owner_uid: &ResourceUid, role: DisplayProcessRole) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"d2bd-durable-display-process-v1");
-    digest.update(owner_uid.as_str().as_bytes());
-    digest.update([role as u8]);
-    let digest = digest.finalize();
-    let mut suffix = String::with_capacity(40);
-    for byte in digest.iter().take(20) {
-        suffix.push_str(&format!("{byte:02x}"));
-    }
-    suffix
-}
-
 fn resource_wire_identity(
     zone: &ZoneId,
     resource_ref: &ResourceRef,
@@ -6011,13 +5017,20 @@ fn durable_envelope_matches(
         && !owner_uid.as_str().is_empty()
 }
 
+/// Whether a committed `Endpoint` row is this session's private endpoint for
+/// the worker it names.
+///
+/// The display Provider owns the row's SHAPE and the `Endpoint` actor admits
+/// it there against that Provider's own vocabulary; what this read proves is
+/// IDENTITY - that the row the manager holds is this session's row, in this
+/// Zone, under this owner, produced by the worker this session owns - so a
+/// socket, producer, or owner from elsewhere can never be projected as this
+/// session's wayland endpoint.
 fn durable_endpoint_matches(
     envelope: &ResourceEnvelope,
-    role: DisplayProcessRole,
     endpoint_ref: &ResourceRef,
     zone: &ZoneId,
     owner_ref: &ResourceRef,
-    owner_uid: &ResourceUid,
     producer_ref: &ResourceRef,
 ) -> bool {
     let Ok(endpoint) = serde_json::from_slice::<EndpointSpec>(
@@ -6028,20 +5041,6 @@ fn durable_endpoint_matches(
     ) else {
         return false;
     };
-    let expected = match role {
-        DisplayProcessRole::HostProxy => (
-            EndpointClass::Data,
-            EndpointTransport::FdAttachment,
-            "wayland-cross-domain",
-            "display-wayland-data-v3",
-        ),
-        DisplayProcessRole::GuestFrontend => (
-            EndpointClass::Transport,
-            EndpointTransport::Vsock,
-            "guest-cross-domain",
-            "guest-frontend-v3",
-        ),
-    };
     envelope.resource_type().as_str() == "Endpoint"
         && ResourceRef::new(
             envelope.resource_type().clone(),
@@ -6049,168 +5048,9 @@ fn durable_endpoint_matches(
         ) == *endpoint_ref
         && envelope.metadata().zone() == zone
         && envelope.metadata().owner_ref() == Some(owner_ref)
+        && envelope.metadata().generation().get() != 0
         && endpoint.provider_ref().to_canonical_string() == "Provider/display-wayland"
         && endpoint.producer_ref() == producer_ref
-        && endpoint.endpoint_class() == expected.0
-        && endpoint.transport() == expected.1
-        && endpoint.purpose().as_str() == expected.2
-        && endpoint
-            .service_fingerprint()
-            .is_some_and(|value| value.as_str() == expected.3)
-        && endpoint.locality() == EndpointLocality::CrossDomain
-        && endpoint.visibility() == EndpointVisibility::Zone
-        && endpoint.consumer_policy().allowed_operations() == [EndpointOperation::Resolve]
-        && endpoint.lifecycle_policy() == EndpointLifecyclePolicy::RecycleWithProducer
-        && !owner_uid.as_str().is_empty()
-}
-
-fn endpoint_record_from_response(
-    endpoint_ref: ResourceRef,
-    resource: wire::ResourceEnvelopeBytes,
-    role: DisplayProcessRole,
-    zone: &ZoneId,
-    owner_ref: &ResourceRef,
-    owner_uid: &ResourceUid,
-    producer_ref: &ResourceRef,
-) -> Result<DurableDisplayEndpoint, WorkerEffectError> {
-    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-        .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-    if !durable_endpoint_matches(
-        &envelope,
-        role,
-        &endpoint_ref,
-        zone,
-        owner_ref,
-        owner_uid,
-        producer_ref,
-    ) {
-        return Err(WorkerEffectError::LaunchRejected);
-    }
-    let generation = envelope
-        .status()
-        .resource()
-        .get("endpointGeneration")
-        .and_then(|value| match value {
-            CanonicalJsonValue::Integer(value) => u64::try_from(*value).ok(),
-            _ => None,
-        })
-        .unwrap_or(0);
-    Ok(DurableDisplayEndpoint {
-        resource_ref: endpoint_ref,
-        resource_uid: envelope.metadata().uid().clone(),
-        revision: envelope.metadata().revision().get(),
-        generation,
-        deletion_requested: metadata_deletion_requested(&resource.canonical_json),
-    })
-}
-
-/// Identity context for a durable display process record.
-struct DurableProcessRecordContext<'a> {
-    zone: &'a ZoneId,
-    owner_ref: &'a ResourceRef,
-    owner_uid: &'a ResourceUid,
-    expected_execution_ref: &'a ResourceRef,
-}
-
-fn durable_record_from_response(
-    process_ref: ResourceRef,
-    resource: wire::ResourceEnvelopeBytes,
-    role: DisplayProcessRole,
-    expected_policy_generation: u64,
-    identity: &DurableProcessRecordContext<'_>,
-) -> Result<(WorkerState, DurableDisplayProcess), WorkerEffectError> {
-    let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-        .map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-    if !durable_envelope_matches(
-        &envelope,
-        role,
-        &process_ref,
-        identity.zone,
-        identity.owner_ref,
-        identity.owner_uid,
-        identity.expected_execution_ref,
-    ) {
-        return Err(WorkerEffectError::LaunchRejected);
-    }
-    let state = if display_policy_generation(&resource.canonical_json)
-        == Some(expected_policy_generation)
-    {
-        project_process_state(&envelope)?
-    } else {
-        WorkerState::Starting
-    };
-    Ok((
-        state,
-        DurableDisplayProcess {
-            resource_ref: process_ref,
-            resource_uid: envelope.metadata().uid().clone(),
-            generation: envelope.metadata().generation().get(),
-            revision: envelope.metadata().revision().get(),
-            restart_count: process_restart_count(&resource.canonical_json),
-            deletion_requested: metadata_deletion_requested(&resource.canonical_json),
-        },
-    ))
-}
-
-fn display_policy_generation(bytes: &[u8]) -> Option<u64> {
-    let value = CanonicalJsonValue::parse(bytes).ok()?;
-    let CanonicalJsonValue::Object(root) = value else {
-        return None;
-    };
-    let CanonicalJsonValue::Object(metadata) = root.get("metadata")? else {
-        return None;
-    };
-    let CanonicalJsonValue::Object(annotations) = metadata.get("annotations")? else {
-        return None;
-    };
-    let CanonicalJsonValue::String(value) = annotations.get(PROCESS_RESTART_ANNOTATION)? else {
-        return None;
-    };
-    value.parse().ok()
-}
-
-fn process_restart_count(bytes: &[u8]) -> u64 {
-    let Ok(CanonicalJsonValue::Object(root)) = CanonicalJsonValue::parse(bytes) else {
-        return 0;
-    };
-    let Some(CanonicalJsonValue::Object(status)) = root.get("status") else {
-        return 0;
-    };
-    let Some(CanonicalJsonValue::Object(resource)) = status.get("resource") else {
-        return 0;
-    };
-    match resource.get("restartCount") {
-        Some(CanonicalJsonValue::Integer(value)) => u64::try_from(*value).unwrap_or(0),
-        _ => 0,
-    }
-}
-
-fn update_display_policy_annotation(
-    bytes: &[u8],
-    policy_generation: u64,
-) -> Result<Vec<u8>, WorkerEffectError> {
-    let mut value =
-        CanonicalJsonValue::parse(bytes).map_err(|_| WorkerEffectError::WorkerUnavailable)?;
-    let CanonicalJsonValue::Object(root) = &mut value else {
-        return Err(WorkerEffectError::WorkerUnavailable);
-    };
-    let Some(CanonicalJsonValue::Object(metadata)) = root.get_mut("metadata") else {
-        return Err(WorkerEffectError::WorkerUnavailable);
-    };
-    if !metadata.contains_key("annotations") {
-        metadata.insert(
-            "annotations".to_owned(),
-            CanonicalJsonValue::Object(BTreeMap::new()),
-        );
-    }
-    let Some(CanonicalJsonValue::Object(annotations)) = metadata.get_mut("annotations") else {
-        return Err(WorkerEffectError::WorkerUnavailable);
-    };
-    annotations.insert(
-        PROCESS_RESTART_ANNOTATION.to_owned(),
-        CanonicalJsonValue::String(policy_generation.to_string()),
-    );
-    Ok(value.to_canonical_bytes())
 }
 
 /// Bounded admission for the daemon-owned provider effect seats.
@@ -6287,29 +5127,10 @@ where
     })
 }
 
-/// One bounded poll between sync effect observations, driven through the
-/// effect bridge so the wait is an async timer on the daemon runtime, never
-/// a `std::thread::sleep` on the caller's thread (U13).
-///
-/// R13 equivalence note: the poll holds an effect admission slot for its
-/// duration (the retired synchronous sleep did not); under a saturated cap
-/// the poll refuses and falls back to a sanctioned synchronous sleep so the
-/// bounded poll latency is preserved and the loop never spins.
-fn effect_poll() {
-    if run_effect(|| async {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        Ok::<(), WorkerEffectError>(())
-    })
-    .is_err()
-    {
-        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::{RESOURCE_ENVELOPE_DOMAIN_TAG, canonical_digest};
     use d2b_contracts_resource::v3::ResourceGeneration;
     use d2b_contracts_zone_session::v3::component_session::RequestId;
     use d2b_provider_process::{
@@ -6439,98 +5260,61 @@ mod tests {
         );
     }
 
+    /// The daemon's display adapter names exactly the rows the display
+    /// Provider derives and commits.
+    ///
+    /// This is the ownership cutover's core observable: the daemon keeps no
+    /// child vocabulary of its own, so every row it observes is named by the
+    /// display Provider's own durable derivation. The two Process rows, the
+    /// host proxy's private Endpoint, and the session's projected Wayland
+    /// endpoint - the guest frontend's OWN Endpoint, never the first Endpoint
+    /// child and never the proxy's carriage (R23) - all resolve to the
+    /// Provider's references.
     #[test]
-    fn durable_display_process_payloads_bind_owner_provider_template_and_target() {
+    fn the_daemon_observes_exactly_the_display_providers_child_rows() {
         let supervisor = d2b_provider_supervisor::ProviderSupervisor::new(Backend::default());
         let mut effects = DisplaySupervisorEffects::new(supervisor);
         effects.resource_zone = Some(ZoneId::parse("work").unwrap());
         effects.wayland_session_ref = Some(
             ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland").unwrap(),
         );
-        effects.wayland_session_uid =
-            Some(ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap());
+        let uid = ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").unwrap();
+        effects.wayland_session_uid = Some(uid.clone());
         effects.host_execution_ref = Some(ResourceRef::parse("Host/host-system").unwrap());
         effects.guest_subject = Some(ResourceRef::parse("Guest/work").unwrap());
         effects.session_digest = [42; 32];
 
-        let host_ticket = d2b_provider_display_wayland::LaunchTicket::new_for_daemon(
-            DisplayProcessRole::HostProxy,
-            Some(d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([1; 32])),
-            d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([2; 32]),
-            "sha256:".to_owned() + &"a".repeat(64),
-            7,
-            "session",
-            3,
-        )
-        .unwrap();
-        let guest_ticket = d2b_provider_display_wayland::LaunchTicket::new_for_daemon(
-            DisplayProcessRole::GuestFrontend,
-            None,
-            d2b_provider_display_wayland::AttachmentGrantHandle::from_daemon([3; 32]),
-            "sha256:".to_owned() + &"b".repeat(64),
-            7,
-            "session",
-            3,
-        )
-        .unwrap();
-        let host_binding = DisplayLaunchBinding::from_ticket(host_ticket);
-        let guest_binding = DisplayLaunchBinding::from_ticket(guest_ticket);
-
-        let host_payload = serde_json::from_slice::<serde_json::Value>(
-            &effects
-                .durable_process_payload(DisplayProcessRole::HostProxy, &host_binding)
-                .unwrap(),
-        )
-        .unwrap();
         assert_eq!(
-            host_payload["metadata"]["ownerRef"],
-            "display-wayland.d2bus.org.WaylandSession/display-wayland"
+            effects.durable_process_ref(DisplayProcessRole::HostProxy).unwrap(),
+            d2b_provider_display_wayland::durable_host_proxy_process_ref(&uid).unwrap(),
         );
         assert_eq!(
-            host_payload["spec"]["providerRef"],
-            "Provider/system-minijail"
+            effects.durable_process_ref(DisplayProcessRole::GuestFrontend).unwrap(),
+            d2b_provider_display_wayland::durable_guest_frontend_process_ref(&uid).unwrap(),
         );
-        assert_eq!(host_payload["spec"]["executionRef"], "Host/host-system");
-        assert_eq!(host_payload["spec"]["template"], "wayland-proxy-worker");
-
-        let guest_payload = serde_json::from_slice::<serde_json::Value>(
-            &effects
-                .durable_process_payload(DisplayProcessRole::GuestFrontend, &guest_binding)
-                .unwrap(),
-        )
-        .unwrap();
         assert_eq!(
-            guest_payload["spec"]["providerRef"],
-            "Provider/system-systemd"
+            effects.durable_endpoint_ref(DisplayProcessRole::HostProxy).unwrap(),
+            d2b_provider_display_wayland::durable_host_proxy_endpoint_ref(&uid).unwrap(),
         );
-        assert_eq!(guest_payload["spec"]["executionRef"], "Guest/work");
-        assert_eq!(guest_payload["spec"]["template"], "wayland-frontend-worker");
+        assert_eq!(
+            effects.durable_endpoint_ref(DisplayProcessRole::GuestFrontend).unwrap(),
+            d2b_provider_display_wayland::durable_wayland_endpoint_ref(&uid).unwrap(),
+            "the session's projected Wayland endpoint is the guest frontend's own \
+             Endpoint row, not the host proxy's private carriage"
+        );
         assert_ne!(
-            effects
-                .durable_process_ref(DisplayProcessRole::HostProxy)
-                .unwrap(),
-            effects
-                .durable_process_ref(DisplayProcessRole::GuestFrontend)
-                .unwrap()
+            effects.durable_process_ref(DisplayProcessRole::HostProxy).unwrap(),
+            effects.durable_process_ref(DisplayProcessRole::GuestFrontend).unwrap(),
         );
-    }
-
-    #[test]
-    fn durable_display_process_names_survive_reconnects() {
-        let owner_uid =
-            ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").expect("owner uid");
-        let host = durable_display_suffix(&owner_uid, DisplayProcessRole::HostProxy);
-        let guest = durable_display_suffix(&owner_uid, DisplayProcessRole::GuestFrontend);
-
-        assert_eq!(
-            host,
-            durable_display_suffix(&owner_uid, DisplayProcessRole::HostProxy)
+        assert_ne!(
+            effects.durable_endpoint_ref(DisplayProcessRole::HostProxy).unwrap(),
+            effects.durable_endpoint_ref(DisplayProcessRole::GuestFrontend).unwrap(),
         );
         assert_eq!(
-            guest,
-            durable_display_suffix(&owner_uid, DisplayProcessRole::GuestFrontend)
+            effects.live_worker_count(),
+            0,
+            "the adapter has observed nothing until it reads the actor-owned rows"
         );
-        assert_ne!(host, guest);
     }
 
     #[test]
@@ -6564,25 +5348,6 @@ mod tests {
         assert_eq!(first, retry);
         assert_ne!(first, changed_revision);
         assert!(OperationId::parse(first).is_ok());
-    }
-
-    #[test]
-    fn durable_display_policy_annotation_is_canonical_and_fenced() {
-        let original = br#"{"metadata":{"annotations":{"existing":"keep"}}}"#;
-        let updated = update_display_policy_annotation(original, 17).expect("annotation update");
-        let value = CanonicalJsonValue::parse(&updated).expect("canonical metadata");
-
-        assert_eq!(display_policy_generation(&updated), Some(17));
-        assert_eq!(
-            value
-                .as_object()
-                .and_then(|root| root.get("metadata"))
-                .and_then(CanonicalJsonValue::as_object)
-                .and_then(|metadata| metadata.get("annotations"))
-                .and_then(CanonicalJsonValue::as_object)
-                .and_then(|annotations| annotations.get("existing")),
-            Some(&CanonicalJsonValue::String("keep".to_owned()))
-        );
     }
 
     #[test]
@@ -9488,85 +8253,41 @@ mod tests {
             "the display driver stamped its proxy finalizer on the committed session"
         );
 
+        // The ownership cutover: production display reconciliation creates,
+        // adopts, deletes, and publishes NOTHING on the display's children.
+        // The WaylandSession actor is the sole desired-child owner, the
+        // `Process` actor the sole launcher, the `Endpoint` and
+        // `EndpointBinding` actors the sole status publishers, and this plane's
+        // WaylandSession driver is a stub that commits no children - so a
+        // reconcile against it MUST leave the Zone with no display Process and
+        // no display Endpoint at all. Anything the daemon wrote here would be
+        // a second owner, and the `UpdateStatus` the old adapter sent is the
+        // write the Resource API refuses by design.
         let processes = plane.manager_keys(&zone, "Process").await;
         assert!(
-            !processes.is_empty(),
-            "the production display driver committed at least one durable display Process \
-             through the system-core client it was bound to"
+            processes.is_empty(),
+            "the production display adapter committed no durable display Process of \
+             its own; {:?}",
+            processes
         );
-        for process in &processes {
-            let envelope = plane.served_envelope(&zone, process).await;
-            assert_eq!(
-                envelope.pointer("/metadata/ownerRef").and_then(serde_json::Value::as_str),
-                Some(owner.as_str()),
-                "{} is owned by the committed WaylandSession",
-                process.to_canonical_string()
-            );
-            assert!(
-                matches!(
-                    envelope
-                        .pointer("/spec/providerRef")
-                        .and_then(serde_json::Value::as_str),
-                    Some("Provider/system-minijail" | "Provider/system-systemd")
-                ),
-                "{} names the system Process provider the display driver launches through",
-                process.to_canonical_string()
-            );
-            assert_eq!(
-                envelope
-                    .pointer("/spec/executionRef")
-                    .and_then(serde_json::Value::as_str),
-                Some("Host/host"),
-                "{} launches against the Host execution reference the committed identity names",
-                process.to_canonical_string()
-            );
-            let row_uid = envelope
-                .pointer("/metadata/uid")
-                .and_then(serde_json::Value::as_str);
-            assert!(
-                row_uid.is_some_and(|uid| uid != session_uid.as_str()),
-                "{} carries its own committed row identity, distinct from the owning session",
-                process.to_canonical_string()
-            );
-        }
         let endpoints = plane.manager_keys(&zone, "Endpoint").await;
-        assert_eq!(
-            endpoints.len(),
-            processes.len(),
-            "each durable Process this reconcile reached publishes its Endpoint"
+        assert!(
+            endpoints.is_empty(),
+            "the production display adapter committed no display Endpoint of its \
+             own; {:?}",
+            endpoints
         );
-        for endpoint in &endpoints {
-            let envelope = plane.served_envelope(&zone, endpoint).await;
-            assert_eq!(
-                envelope.pointer("/metadata/ownerRef").and_then(serde_json::Value::as_str),
-                Some(owner.as_str()),
-                "{} is owned by the committed WaylandSession",
-                endpoint.to_canonical_string()
-            );
-            let producer = envelope
-                .pointer("/spec/producerRef")
-                .and_then(serde_json::Value::as_str)
-                .expect("a committed Endpoint names its producer");
-            assert!(
-                processes
-                    .iter()
-                    .any(|process| process.to_canonical_string() == producer),
-                "{} is produced by a display Process this reconcile committed",
-                endpoint.to_canonical_string()
-            );
-            assert_eq!(
-                envelope.pointer("/spec/providerRef").and_then(serde_json::Value::as_str),
-                Some("Provider/display-wayland"),
-                "{} is the display Provider's endpoint",
-                endpoint.to_canonical_string()
-            );
-            assert_eq!(
-                envelope.pointer("/spec/purpose").and_then(serde_json::Value::as_str),
-                Some("wayland-cross-domain"),
-                "{} is the cross-domain wayland endpoint the proxy serves",
-                endpoint.to_canonical_string()
-            );
-        }
+        let bindings = plane.manager_keys(&zone, "EndpointBinding").await;
+        assert!(
+            bindings.is_empty(),
+            "and admitted no binding row beside them; {:?}",
+            bindings
+        );
+        assert_eq!(
+            owner,
+            session_ref.to_canonical_string(),
+            "the session row the composition bound is the one that owns the children"
+        );
 
         let finalize =
             dispatch_test_request(&client, service, 911, "DisplayService/Finalize", Vec::new())

@@ -184,6 +184,7 @@ filegroup(
             "README.md",
             "nix/**/*.nix",
             "operations.json",
+            "provider-identity.json",
             "registrations.json",
             "resource-types.json",
             "service-catalog.json",

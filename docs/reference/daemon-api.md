@@ -123,6 +123,13 @@ the exact authenticated peer uid, validates one connected terminal fd, and
 multiplexes terminal-v1 operations behind the named stream. Public requests
 carry no policy, uid, argv, environment, cwd, path, or provider override.
 
+> **The shell artifact is blocked, not shipped.** The shell Provider
+> declares only the product and session identities that the packaging and
+> the session catalog route to. The packaged shell artifact, its signature,
+> its Nix row, and its launch are issue #631 and remain unimplemented, so
+> nothing above should be read as a claim that a launched shell artifact
+> exists behind the identity this wire addresses.
+
 Local-VM launcher execution uses a deterministic opaque guest exec id derived
 from the local peer uid and public operation identity. The target-local
 EphemeralProcess record is the restart-stable idempotency authority; the same
@@ -212,6 +219,29 @@ stop-only capability and cannot authorize start or restart. Each lifecycle
 attempt receives a fresh operation identity bound to the current immutable
 Guest tuple; broker replay records have explicit completion and bounded
 expiry, while stale or incomplete records remain forensic quarantine only.
+
+### Resource status authority
+
+Resource status is published, never requested. The actor that owns a row is
+its only publisher: it evaluates its own watchers, hands the transition to the
+Zone manager, and writes nothing durable. The transition is fenced on the row
+generation that actor holds, so a status computed against a superseded spec is
+never recorded as state of the newer row. What a caller reads back through
+`Get` or `List` is that published view, including the wire-visible
+`status.resource` projection the owning actor attached to its last transition;
+a later transition that produces no projection drops the earlier one.
+
+A caller cannot set it. The daemon's Resource API backend refuses
+`UpdateStatus` for every caller and every resource type with
+`resource-status-owner-mismatch`, a refusal that is never retryable, because
+the manager has no durable status write path and this backend must not grow
+one. That is the same answer for `Endpoint` and `EndpointBinding` as it is for
+every other type: nothing on the public socket, and nothing inside `d2bd`
+itself, can stamp, restore, or rewind a resource's status. The broker's
+publication surface is closed the same way - `PublicationMutationKind` carries
+`Create`, `UpdateSpec`, `UpdateMetadata`, and `Delete`, with no status
+variant. A dependent therefore reads readiness and delivery off the rows and
+their own evidence rather than trusting a status value something wrote.
 
 ## Broker socket
 
@@ -378,6 +408,13 @@ The implemented surface contracts are:
 
 Both ops follow the standard `PublicRequest`/`PublicResponse` framing;
 see the auto-generated tables above for the committed Rust variants.
+
+> **The audio artifact is blocked, not shipped.** The audio Provider declares
+> the product identity only and owns no runtime or session identity. The
+> audio artifact and the portal FD transfer are issue #629 and remain
+> unimplemented, so the op family above documents the dispatch contract this
+> daemon serves, not a claim that every declared provider identity ships a
+> running artifact behind it.
 
 
 
