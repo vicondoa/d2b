@@ -17267,38 +17267,42 @@ mod tests {
             plan_ops: Vec::new(),
             network_interfaces: Vec::new(),
         };
+        let duplicate_runner = {
+            let mut duplicate_runner = node(
+                "ch-runner",
+                ProcessRole::CloudHypervisorRunner,
+                RoleProfileBuilder::new()
+                    .with_profile_id("profile-vm-a-ch")
+                    .with_cgroup_placement(CgroupPlacement {
+                        subtree: String::new(),
+                        controllers: Vec::new(),
+                        delegated: false,
+                    })
+                    .with_uid(principal)
+                    .with_gid(principal_gid)
+                    .with_mount_policy(minimal_mount_policy.clone())
+                    .with_namespaces(NamespaceSet {
+                        user: true,
+                        ..no_namespaces.clone()
+                    })
+                    .with_user_namespace(Some(RoleUserNamespace {
+                        host_uid_for_zero: principal,
+                        host_gid_for_zero: principal_gid,
+                    }))
+                    .build(),
+            );
+            let sleep = spawn_test_binary("sleep");
+            duplicate_runner.binary_path = Some(sleep.clone());
+            duplicate_runner.argv = vec![sleep];
+            duplicate_runner
+        };
         ProcessesJson {
             schema_version: "v2".to_owned(),
             vms: vec![
                 // The duplicate-runner guard's fixture: a user-namespace row,
                 // so the first child is genuinely alive when the second
                 // spawn is checked.
-                dag(
-                    "vm-a",
-                    node(
-                        "ch-runner",
-                        ProcessRole::CloudHypervisorRunner,
-                        RoleProfileBuilder::new()
-                            .with_profile_id("profile-vm-a-ch")
-                            .with_cgroup_placement(CgroupPlacement {
-                                subtree: String::new(),
-                                controllers: Vec::new(),
-                                delegated: false,
-                            })
-                            .with_uid(principal)
-                            .with_gid(principal_gid)
-                            .with_mount_policy(minimal_mount_policy.clone())
-                            .with_namespaces(NamespaceSet {
-                                user: true,
-                                ..no_namespaces.clone()
-                            })
-                            .with_user_namespace(Some(RoleUserNamespace {
-                                host_uid_for_zero: principal,
-                                host_gid_for_zero: principal_gid,
-                            }))
-                            .build(),
-                    ),
-                ),
+                dag("vm-a", duplicate_runner),
                 // The serving-worker ACL grant's fixture: a plain row, so the
                 // spawn needs no user namespace.
                 dag(
@@ -18396,18 +18400,19 @@ mod tests {
         // Both payloads carry that same trusted mapping, so the second is
         // refused by the duplicate guard and not by the plan fence.
         let duplicate_intent = spawn_intent_id("vm-a", "ch-runner");
+        let first_payload = spawn_payload_from_intent(
+            &bundle.resolver,
+            &duplicate_intent,
+            false,
+            vec![spawn_test_binary("sleep"), "30".to_owned()],
+        );
+        assert_eq!(
+            first_payload["binaryPath"], first_payload["argv"][0],
+            "the fixture must execute the long-lived binary named by argv"
+        );
         let first = envelope_response(
             harness
-                .invoke(
-                    "spawn-process",
-                    spawn_payload_from_intent(
-                        &bundle.resolver,
-                        &duplicate_intent,
-                        false,
-                        vec![spawn_test_binary("sleep"), "30".to_owned()],
-                    ),
-                    Vec::new(),
-                )
+                .invoke("spawn-process", first_payload, Vec::new())
                 .expect("first spawn dispatches"),
         );
         assert_eq!(

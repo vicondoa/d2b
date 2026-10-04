@@ -33,7 +33,7 @@ use std::fmt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
 use d2b_contracts_broker::broker_wire::{
@@ -489,6 +489,11 @@ struct SocketTarget {
 #[derive(Default)]
 pub struct PlaneResourceRegistry {
     inner: tokio::sync::Mutex<RegistryInner>,
+    /// Immutable-after-open controller identity bindings. Keep these outside
+    /// the mutable row cache so unrelated registry work cannot appear as a
+    /// missing Provider identity during synchronous Process effects.
+    committed_provider_identities:
+        RwLock<BTreeMap<String, (ResourceUid, ResourceGeneration)>>,
     /// The durable authority this registry caches rows from; attached by
     /// the plane once its spec store is open.
     store: OnceLock<Arc<SpecStore>>,
@@ -506,9 +511,6 @@ struct RegistryInner {
     volume_anchors_by_name: BTreeMap<String, VolumeAnchor>,
     socket_targets_by_identity: BTreeMap<String, SocketTarget>,
     socket_targets_by_ref: BTreeMap<String, SocketTarget>,
-    /// Committed `Provider` row identities (KTD7) keyed by canonical ref.
-    committed_provider_identities:
-        BTreeMap<String, (ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)>,
 }
 
 impl PlaneResourceRegistry {
@@ -695,37 +697,29 @@ impl PlaneResourceRegistry {
     /// Process effects bind it to controller rows that Provider owns. Fed by
     /// the plane's construction path from
     /// [`ConstructionInputs::committed_provider_identities`].
-    pub(crate) async fn register_committed_provider_identity(
+    pub(crate) fn register_committed_provider_identity(
         &self,
         provider_ref: &ResourceRef,
         uid: ResourceUid,
-        generation: d2b_contracts_resource::v3::ResourceGeneration,
+        generation: ResourceGeneration,
     ) {
-        self.with_inner(|inner| {
-            inner
-               .committed_provider_identities
-               .insert(provider_ref.to_canonical_string(), (uid, generation));
-        })
-       .await;
+        self.committed_provider_identities
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(provider_ref.to_canonical_string(), (uid, generation));
     }
 
     /// The committed-`Provider` identity view the production Process effects
     /// consult (KTD7), published by [`PlaneResourceRegistry`].
-    ///
-    /// Synchronous surface over the `tokio::sync` inner (plan U4): the
-    /// non-blocking `try_lock` reports unbound on a collision (fail-closed);
-    /// the fences refuse as unavailable and the effects retry.
     pub(crate) fn committed_provider_identity(
         &self,
         provider_ref: &ResourceRef,
-    ) -> Option<(ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)> {
-        self.with_inner_sync(|inner| {
-            inner
-               .committed_provider_identities
-               .get(&provider_ref.to_canonical_string())
-               .cloned()
-        })
-       .flatten()
+    ) -> Option<(ResourceUid, ResourceGeneration)> {
+        self.committed_provider_identities
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&provider_ref.to_canonical_string())
+            .cloned()
     }
 }
 
@@ -3766,7 +3760,7 @@ impl ResourcePlaneV3 {
         for (provider_ref, (uid, generation)) in &committed_provider_identities {
             inputs
                .registry
-               .register_committed_provider_identity(provider_ref, uid.clone(), *generation).await;
+               .register_committed_provider_identity(provider_ref, uid.clone(), *generation);
         }
         // F5: the display Provider's committed-shape vocabulary is rebuilt
         // from the same durable rows, here, before the manager spawns any
@@ -6464,6 +6458,30 @@ HOST_EFFECTS_SERVICE.id,
             None
         );
         plane.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn committed_provider_identity_is_not_lost_to_unrelated_registry_contention() {
+        let registry = PlaneResourceRegistry::new();
+        let provider_ref =
+            ResourceRef::parse(d2b_provider_network_local::NETWORK_PROVIDER_REF).unwrap();
+        let provider_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174010").unwrap();
+        let provider_generation =
+            d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap();
+        registry
+            .register_committed_provider_identity(
+                &provider_ref,
+                provider_uid.clone(),
+                provider_generation,
+            );
+
+        let _unrelated_registry_write = registry.inner.lock().await;
+        assert_eq!(
+            registry.committed_provider_identity(&provider_ref),
+            Some((provider_uid, provider_generation)),
+            "unrelated registry work must not look like a missing Provider identity"
+        );
     }
 
     /// Assembly constructs with fake effects and the readiness gate opens

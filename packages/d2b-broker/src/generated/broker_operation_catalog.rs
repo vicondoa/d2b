@@ -3010,7 +3010,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         fd_kind: Some(FdKind::Any),
         state_cell: None,
         cell_durability: None,
-        deadline_tier: DeadlineTier::Standard,
+        deadline_tier: DeadlineTier::Extended,
     },
     BrokerOperationRow {
         operation: BrokerOperationName::inspect_process_family,

@@ -3097,7 +3097,7 @@ pub struct ZoneResourceRuntime {
     controller_session_providers:
         tokio::sync::Mutex<Option<Arc<crate::process_provider_runtime::ProductionProcessProviders>>>,
     controller_sessions: Arc<tokio::sync::Mutex<BTreeMap<ResourceRef, ControllerSession>>>,
-    controller_session_reconcile_task: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    controller_session_reconcile_task: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     controller_session_reconcile_wake: Arc<tokio::sync::Notify>,
     controller_session_reconcile_shutdown: Arc<AtomicBool>,
     controller_session_coordinator:
@@ -3341,7 +3341,7 @@ impl ZoneResourceRuntime {
             .map_err(|_| ResourceRuntimeError::CoreStartupFailed)?,
             controller_session_providers: tokio::sync::Mutex::new(None),
             controller_sessions: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-            controller_session_reconcile_task: Arc::new(tokio::sync::Mutex::new(None)),
+            controller_session_reconcile_task: Arc::new(std::sync::Mutex::new(None)),
             controller_session_reconcile_wake: Arc::new(tokio::sync::Notify::new()),
             controller_session_reconcile_shutdown: Arc::new(AtomicBool::new(false)),
             controller_session_coordinator: Arc::new(tokio::sync::Mutex::new(None)),
@@ -6210,7 +6210,7 @@ fn row_status_failure_is_retryable(resource: &Value) -> bool {
 }
 
 fn schedule_controller_session_reconcile(
-    task_slot: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    task_slot: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     wake: Arc<tokio::sync::Notify>,
     shutdown: Arc<AtomicBool>,
     coordinator: Arc<ControllerSessionCoordinator>,
@@ -6219,11 +6219,9 @@ fn schedule_controller_session_reconcile(
     if shutdown.load(Ordering::Acquire) {
         return Ok(());
     }
-    // Synchronous surface: non-blocking `try_lock` per plan U4; a
-    // collision fails the schedule closed.
     let mut slot = task_slot
-        .try_lock()
-        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if shutdown.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -6255,6 +6253,15 @@ fn schedule_controller_session_reconcile(
         }
     }));
     Ok(())
+}
+
+fn take_controller_session_reconcile_task(
+    task_slot: &std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    task_slot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
 }
 
 impl ControllerSessionCoordinator {
@@ -7172,7 +7179,10 @@ impl ControllerSessionCoordinator {
                     // The controller retries its bootstrap send forever;
                     // re-arm so the next reconcile pass answers it instead
                     // of orphaning the controller.
-                    providers.rearm_controller_bootstrap(endpoint);
+                    providers
+                        .rearm_controller_bootstrap(endpoint)
+                        .await
+                        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
                     tracing::warn!(
                         provider = %context.provider_owner_ref().to_canonical_string(),
                         stage = error.stage,
@@ -8770,10 +8780,8 @@ impl ZoneResourceRuntime {
             task.abort();
             let _ = task.await;
         }
-        let controller_session_task = controller_session_reconcile_task
-            .lock()
-            .await
-            .take();
+        let controller_session_task =
+            take_controller_session_reconcile_task(&controller_session_reconcile_task);
         if let Some(task) = controller_session_task {
             task.abort();
             let _ = task.await;
@@ -11720,7 +11728,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn readable_pending_controller_bootstrap_wakes_coordinator_to_active() {
+    fn pending_and_rearmed_controller_bootstrap_wake_coordinator_to_active() {
         let zone = ZoneId::parse("work").unwrap();
         let providers = test_controller_session_providers();
         let process_ref = ResourceRef::parse("Process/provider-controller").unwrap();
@@ -11734,65 +11742,66 @@ mod tests {
             nix::sys::socket::MsgFlags::empty(),
         )
         .unwrap();
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let callback_providers = Arc::downgrade(&providers);
-        let callback_zone = zone.clone();
-        let callback_process_ref = process_ref.clone();
-        let callback_wake_count = Arc::clone(&wake_count);
-        providers
-            .set_controller_session_waker(
-                zone.clone(),
-                Arc::new(move || {
-                    let providers = callback_providers
-                        .upgrade()
-                        .expect("providers remain while the wake is delivered");
-                    assert!(providers
-                        .controller_bootstrap_ready(&callback_zone, &callback_process_ref));
-                    let context = providers
-                        .controller_bootstrap_contexts(&callback_zone)
-                        .into_iter()
-                        .find(|context| context.process_ref() == &callback_process_ref)
-                        .expect("readable Pending endpoint context");
-                    let endpoint = providers
-                        .begin_controller_bootstrap_if_matches(&callback_zone, &context)
-                        .expect("readable Pending endpoint must be claimed");
-                    let context = endpoint.context().clone();
-                    assert!(providers.activate_controller_bootstrap(&context));
-                    callback_wake_count.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }),
-            )
-            .unwrap();
-        providers
-            .attach_pending_controller_provider_context_for_test(
-                daemon_endpoint,
-                (
-                    zone.clone(),
-                    process_ref.clone(),
-                    ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
-                    ResourceGeneration::new(1).unwrap(),
-                    ResourceRef::parse("Host/host-system").unwrap(),
-                    ControllerGeneration::new(1).unwrap(),
-                ),
-                (
-                    process_provider_ref,
-                    provider_owner_ref,
-                    ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-                    ResourceGeneration::new(1).unwrap(),
-                ),
-            )
-            .unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let wake_count = Arc::new(AtomicUsize::new(0));
+                let callback_wake_count = Arc::clone(&wake_count);
+                providers
+                    .set_controller_session_waker(
+                        zone.clone(),
+                        Arc::new(move || {
+                            callback_wake_count.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        }),
+                    )
+                    .unwrap();
+                providers
+                    .attach_pending_controller_provider_context_for_test(
+                        daemon_endpoint,
+                        (
+                            zone.clone(),
+                            process_ref.clone(),
+                            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+                            ResourceGeneration::new(1).unwrap(),
+                            ResourceRef::parse("Host/host-system").unwrap(),
+                            ControllerGeneration::new(1).unwrap(),
+                        ),
+                        (
+                            process_provider_ref,
+                            provider_owner_ref,
+                            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+                            ResourceGeneration::new(1).unwrap(),
+                        ),
+                    )
+                    .unwrap();
 
-        assert_eq!(wake_count.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            providers
-                .controller_bootstrap_contexts(&zone)
-                .into_iter()
-                .map(|context| context.process_ref().clone())
-                .collect::<Vec<_>>(),
-            vec![process_ref.clone()]
-        );
-        assert!(!providers.controller_bootstrap_ready(&zone, &process_ref));
+                assert_eq!(wake_count.load(Ordering::SeqCst), 1);
+                assert!(providers.controller_bootstrap_ready(&zone, &process_ref));
+                let context = providers
+                    .controller_bootstrap_contexts(&zone)
+                    .into_iter()
+                    .find(|context| context.process_ref() == &process_ref)
+                    .expect("readable Pending endpoint context");
+                let endpoint = providers
+                    .begin_controller_bootstrap_if_matches(&zone, &context)
+                    .expect("readable Pending endpoint must be claimed");
+                assert!(!providers.controller_bootstrap_ready(&zone, &process_ref));
+                providers.rearm_controller_bootstrap(endpoint).await.unwrap();
+                assert_eq!(
+                    wake_count.load(Ordering::SeqCst),
+                    2,
+                    "rearming a failed bootstrap must wake the coordinator again"
+                );
+                assert!(providers.controller_bootstrap_ready(&zone, &process_ref));
+                let endpoint = providers
+                    .begin_controller_bootstrap_if_matches(&zone, &context)
+                    .expect("rearmed Pending endpoint must be claimed");
+                assert!(providers.activate_controller_bootstrap(endpoint.context()));
+                assert!(!providers.controller_bootstrap_ready(&zone, &process_ref));
+            });
     }
 
 

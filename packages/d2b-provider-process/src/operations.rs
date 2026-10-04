@@ -27,6 +27,7 @@ use async_trait::async_trait;
 use d2b_contracts_broker::broker_wire::{
     CgroupKillRequest, DeregisterRunnerPidfdRequest, DeregisterRunnerPidfdResponse,
     GuestExecutionBinding, ObserveRunnerRequest, ObserveRunnerResponse,
+    MAX_CONTEXT_DEADLINE_MS,
     OpenPeerPidfdFromAcceptedSocketRequest, OpenPeerPidfdFromAcceptedSocketResponse,
     OpenPidfdRequest, OpenPidfdResponse, PollChildReapedResponse, PrepareDirRequest, RunnerRole,
     RunnerSignal, SignalRunnerRequest, SignalRunnerResponse, SpawnRunnerRequest,
@@ -135,8 +136,10 @@ pub const PROCESS_IDENTITY_INVALID: &str = "handler-refused";
 /// The refusal of a request naming a runner the daemon does not track.
 pub const RUNNER_UNKNOWN: &str = "handler-refused";
 
-/// The broker kernel IO budget one nested invocation may take.
-const KERNEL_IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// The broker kernel IO budget one nested invocation may take. Nested
+/// Process operations declare the Extended tier, so the client must remain
+/// available for the full shared ceiling rather than abandon a live kernel.
+const KERNEL_IO_TIMEOUT: Duration = Duration::from_millis(MAX_CONTEXT_DEADLINE_MS);
 
 /// The resource types the family's descriptors cover.
 const MEMBER_TYPES: [WellKnownType; 2] = [WellKnownType::PROCESS, WellKnownType::EPHEMERAL_PROCESS];
@@ -3489,3 +3492,10 @@ mod admitted_effect_tests {
         assert!(matches!(error, PrimitiveSpecError::InvalidToken));
     }
 }
+    #[test]
+    fn nested_kernel_poll_uses_the_extended_context_ceiling() {
+        assert_eq!(
+            KERNEL_IO_TIMEOUT,
+            Duration::from_millis(MAX_CONTEXT_DEADLINE_MS)
+        );
+    }

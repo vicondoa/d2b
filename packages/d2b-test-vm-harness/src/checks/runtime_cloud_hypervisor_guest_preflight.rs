@@ -555,9 +555,16 @@ const VOLUME_BINDING_READY: &str = concat!(
 /// The binding's virtiofs worker Process and its private endpoint are
 /// `Ready`.
 const BINDING_WORKER_READY: &str = concat!(
+    "process_status=0; ",
     "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock ",
     "d2b --zone work --json list Process ",
-    ">/run/d2b-binding-worker.json && ",
+    ">/run/d2b-binding-worker.json || process_status=$?; ",
+    "endpoint_status=0; ",
+    "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock ",
+    "d2b --zone work --json list Endpoint ",
+    ">/run/d2b-binding-endpoint.json || endpoint_status=$?; ",
+    "test \"$process_status\" -eq 0 && ",
+    "test \"$endpoint_status\" -eq 0 && ",
     "jq -e '",
     "([.resources[] | select(.type == \"Process\" and ",
     ".metadata.ownerRef == ",
@@ -568,9 +575,6 @@ const BINDING_WORKER_READY: &str = concat!(
     ".spec.template == \"virtiofsd-worker\" and ",
     ".status.phase == \"Ready\")] | length) == 1' ",
     "/run/d2b-binding-worker.json && ",
-    "runuser -u alice -- env D2B_PUBLIC_SOCKET=/run/d2b/public.sock ",
-    "d2b --zone work --json list Endpoint ",
-    ">/run/d2b-binding-endpoint.json && ",
     "jq -e '",
     "([.resources[] | select(.type == \"Endpoint\" and ",
     ".metadata.ownerRef == ",
@@ -778,6 +782,32 @@ const SESSION_GENERATION_EXPLAIN: &[DiagRow<'static>] = &[
     // The generation the loop compares is the one the Guest's own
     // ComponentSession logged, so that line is the loop's own input.
     ("d2bd.service", "ComponentSession"),
+];
+
+/// Controller-session and Process launch evidence needed when the Guest VMM
+/// wait finds the runtime controller still Pending.
+const GUEST_VMM_PROCESS_EXPLAIN: &[DiagRow<'static>] = &[
+    ("d2bd.service", "acceptance-guest-vmm"),
+    ("d2bd.service", "cloud-hypervisor-runner"),
+    ("d2bd.service", "external Provider controller"),
+    ("d2bd.service", "controller session reconciliation degraded"),
+    ("d2bd.service", "controller assignment"),
+    ("d2bd.service", "controller session service task finished"),
+    ("d2bd.service", "supervisor launch effect failed"),
+    ("d2bd.service", "broker refused a process request"),
+    ("d2bd.service", "broker spawn invocation failed"),
+    ("d2bd.service", "broker transport failed for a process request"),
+    ("d2bd.service", "process provider effect failed"),
+    ("d2bd.service", "process launch failed"),
+    ("d2bd.service", "launch request rejected"),
+    ("d2bd.service", "forwarded invocation refused with a reason"),
+    ("d2bd.service", "broker observe invocation failed"),
+    (
+        "d2b-broker.service",
+        "ObserveRunner registered runner verification is incomplete",
+    ),
+    ("d2b-broker.service", "runner process identity changed"),
+    ("d2b-broker.service", "spawn"),
 ];
 
 /// The Guest's deletion, retried the fixture's own 30 attempts.
@@ -1010,10 +1040,7 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
         GUEST_VMM_PROCESS_READY,
         GUEST_BOUND,
         &[row(&process_ready_rows)],
-        &[
-            ("d2bd.service", "acceptance-guest-vmm"),
-            ("d2bd.service", "cloud-hypervisor-runner"),
-        ],
+        GUEST_VMM_PROCESS_EXPLAIN,
     )?;
     let endpoint_ready_rows = saved_rows("Endpoint rows", "/run/d2b-endpoint-ready.json");
     control.diag_wait(
@@ -1055,10 +1082,42 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
         "binding-worker-ready",
         BINDING_WORKER_READY,
         BINDING_WORKER_BOUND,
-        &[row(&binding_worker_rows), row(&binding_endpoint_rows)],
+        &[
+            row(&binding_worker_rows),
+            row(&binding_endpoint_rows),
+            (
+                "virtiofsd process table",
+                "ps -eo pid=,ppid=,stat=,args= --no-headers 2>/dev/null | grep -F virtiofsd || true",
+            ),
+            (
+                "virtiofsd socket tree",
+                "find /run/d2b/vms/acceptance-guest -maxdepth 3 -printf '%M %u:%g %p -> %l\n' 2>/dev/null || true",
+            ),
+            (
+                "virtiofsd runtime ACLs",
+                "getfacl -pn /run/d2b/vms/acceptance-guest 2>/dev/null | head -40 || true",
+            ),
+            (
+                "broker child reaped records",
+                "grep -h 'ChildReaped' /var/lib/d2b/audit/broker-*.jsonl 2>/dev/null | tail -20 || true",
+            ),
+        ],
         &[
             ("d2bd.service", "vol-binding-6a8ea4307a30f7ceae6533f2"),
             ("d2bd.service", "virtiofsd"),
+            ("d2bd.service", "supervisor launch effect failed"),
+            ("d2bd.service", "broker refused a process request"),
+            ("d2bd.service", "broker spawn invocation failed"),
+            ("d2bd.service", "broker transport failed for a process request"),
+            ("d2bd.service", "process provider effect failed"),
+            ("d2bd.service", "process launch failed"),
+            ("d2bd.service", "launch request rejected"),
+            ("d2bd.service", "forwarded invocation refused with a reason"),
+            ("d2bd.service", "reply timeout"),
+            ("d2bd.service", "broker observe invocation failed"),
+            ("d2bd.service", "reserve: reclaiming"),
+            ("d2bd.service", "broker pidfd reply carried no result"),
+            ("d2b-broker.service", "virtiofsd"),
         ],
     )?;
     control.diag_wait(
@@ -1102,7 +1161,21 @@ pub fn assertions(control: &mut GuestControl) -> LegacyResult<()> {
     // The restart boundary: the same runner process, and a Guest whose session
     // generation advanced behind it.
     control.stage("restart-adoption");
-    control.succeed(&[DAEMON_RESTART], None)?;
+    control.diag_run(
+        "restart-adoption/restart-daemon",
+        DAEMON_RESTART,
+        &[
+            (
+                "d2bd service status",
+                "systemctl status d2bd.service --no-pager 2>&1 | tail -n 80 || true",
+            ),
+            (
+                "daemon and controller processes",
+                "ps -eo pid=,ppid=,stat=,etime=,args= --no-headers 2>/dev/null | grep -E 'd2bd|controller-' || true",
+            ),
+        ],
+        &[("d2bd.service", ""), ("d2b-broker.service", "")],
+    )?;
     control.diag_unit("daemon-restarted", "d2bd.service", DAEMON_BOUND)?;
     control.wait_for_file("/run/d2b/public.sock", SOCKET_BOUND)?;
     control.diag_wait(
