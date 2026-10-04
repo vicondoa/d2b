@@ -541,6 +541,14 @@ impl TargetBinding {
         self.assignment.source()
     }
 
+    /// The session generation this assignment was bound under.
+    ///
+    /// This is the snapshot, unlike [`Self::live_generation`], which reads
+    /// the directory for what is live now.
+    pub const fn session_generation(&self) -> Option<u64> {
+        self.assignment.session_generation()
+    }
+
     /// Realize (create or update) the target-local instance through the live
     /// guest session. The spec is this driver's target-local shape; the host
     /// resolved it and the target applies exactly it.
