@@ -42,14 +42,23 @@
   that satisfaction). The registrations travel across the context rebuild a
   spec change performs, because they live in the target actors' mailboxes and
   not in the context.
-- The blocking-API census is back under its committed baseline. This branch
-  added blocking calls and hid them behind new
-  `#[allow(clippy::disallowed_methods)]` attributes instead of removing them;
-  those calls are gone. The Endpoint and guest-target test doubles take
-  `tokio::sync::Mutex` rather than a `std::sync` guard, the Provider process
-  doubles take `tokio::sync::Mutex` rather than a `parking_lot` one, the
-  broker's dispatch audit test drives the daemon call directly instead of
-  parking the executor on an explicit `block_on` plus three `std::fs` reads,
-  the plane registry publishes its committed Provider identities once instead
-  of guarding them with a read-write lock, and the dead `#[allow]` attributes
-  and `// async-gate-allow:` markers those calls needed are deleted with them.
+- This branch added blocking calls and hid them behind new
+  `#[allow(clippy::disallowed_methods)]` attributes instead of removing them.
+  Sixty-one blocking calls and sixty-five dead suppressions are gone, which
+  eliminated four of the ten over-baseline items outright; the remaining
+  growth is `#[cfg(test)]` scaffolding and two synchronous production paths
+  that hold no await, and each is baselined individually rather than waived.
+  The suppression ratchet is therefore restored at a higher level than before
+  this branch, not at its old level: the process provider +34, endpoint +11,
+  daemon +13, wayland policy +9, resource runtime +5, display wayland +2 and
+  broker +1, against xtask -22. The resource runtime's recorded count had
+  also been stale before this branch.
+- The removals behind those counts: the Endpoint and guest-target test
+  doubles take `tokio::sync::Mutex` rather than a `std::sync` guard, the
+  Provider process doubles take `tokio::sync::Mutex` rather than a
+  `parking_lot` one, the broker's dispatch audit test drives the daemon call
+  directly instead of parking the executor on an explicit `block_on` plus
+  three `std::fs` reads, the plane registry publishes its committed Provider
+  identities once instead of guarding them with a read-write lock, and the
+  dead `#[allow]` attributes and `// async-gate-allow:` markers those calls
+  needed are deleted with them.

@@ -853,7 +853,7 @@
     },
     {
       "file": "packages/d2bd/src/resource_plane_v3.rs",
-      "line": 8146,
+      "line": 8150,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {

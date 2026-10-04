@@ -705,11 +705,15 @@ impl PlaneResourceRegistry {
         &self,
         identities: BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>,
     ) {
-        let _ = self.committed_provider_identities.set(
+        let published = self.committed_provider_identities.set(
             identities
                 .into_iter()
                 .map(|(provider_ref, identity)| (provider_ref.to_canonical_string(), identity))
                 .collect(),
+        );
+        debug_assert!(
+            published.is_ok(),
+            "a second publication would be silently dropped, leaving the first map in service"
         );
     }
 
