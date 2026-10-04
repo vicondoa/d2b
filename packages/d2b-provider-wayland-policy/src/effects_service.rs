@@ -204,8 +204,23 @@ impl InteractionEffectsService {
                 &endpoint_spec,
             )
             .map_err(|_| InteractionEffectError::InvalidResource)?;
+            if rows.is_empty() {
+                continue;
+            }
+            // Every relationship this endpoint publishes is granted over ONE
+            // exact realization, so each of them is compared against the token
+            // the endpoint publishes for its CURRENT row generation (KTD8). A
+            // token the endpoint has since rotated is exactly what a replaced
+            // HostProxy Process row mints, and until the relationship actors
+            // republish against it a delivery standing at the right row
+            // generation describes the incarnation that replaced this one -
+            // so the session holds `Pending` instead of claiming `Ready`
+            // across mixed-incarnation evidence (R20, AE14).
+            let Some(incarnation) = endpoint_incarnation(&view) else {
+                return Ok(false);
+            };
             for row in rows {
-                if !self.binding_delivered(&row).await? {
+                if !self.binding_delivered(&row, incarnation).await? {
                     return Ok(false);
                 }
             }
@@ -214,13 +229,20 @@ impl InteractionEffectsService {
     }
 
     /// Whether one canonical `EndpointBinding` row reports a delivered
-    /// relationship for its own current row generation.
+    /// relationship for its own current row generation and at the realization
+    /// incarnation `incarnation` names.
     ///
     /// A relationship whose row is not committed, whose published layer is
     /// absent, or whose state is anything other than a delivery at the row's
     /// own current generation is not standing: a session that cannot prove
-    /// its delivery is not usable, however Ready its worker rows look.
-    async fn binding_delivered(&self, target: &ResourceRef) -> Result<bool, InteractionEffectError> {
+    /// its delivery is not usable, however Ready its worker rows look. A
+    /// delivery at another incarnation is the same non-proof, for the same
+    /// reason.
+    async fn binding_delivered(
+        &self,
+        target: &ResourceRef,
+        incarnation: &str,
+    ) -> Result<bool, InteractionEffectError> {
         let Some(view) = self.live_view(target).await? else {
             return Ok(false);
         };
@@ -230,6 +252,7 @@ impl InteractionEffectsService {
         Ok(session_children::display_binding_delivered(
             layer.as_ref(),
             view.generation,
+            incarnation,
         ))
     }
 
@@ -340,9 +363,18 @@ impl InteractionEffectsService {
                 InteractionEffectPhase::Pending,
             ));
         }
+        // R23: the Wayland endpoint the session projects is the guest
+        // frontend's OWN cross-domain Endpoint, named by the display
+        // Provider's durable derivation from the row's own uid - not the
+        // first `Endpoint` child this list yields, which is the host
+        // compositor socket, and not the host proxy's private carriage.
+        // A consumer resolving the session's endpoint must land on the
+        // transport the frontend actually produced.
+        let wayland_endpoint = session_children::durable_wayland_endpoint_ref(&request.uid)
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
         Ok(InteractionEffectOutcome::projection(
             InteractionEffectPhase::Ready,
-            display_projection(&intents, request),
+            display_projection(&intents, request, wayland_endpoint),
         ))
     }
 
@@ -794,29 +826,47 @@ fn map_audio_effect_error(error: AudioResourceRuntimeError) -> InteractionEffect
     }
 }
 
+/// The realization token the owning `Endpoint` row publishes right now.
+///
+/// This is that row's OWN published evidence for its CURRENT row generation -
+/// a projection carried over from an older generation is dropped before this
+/// read - and it is the same token its `Delivered` relationships carry, so
+/// one comparison fences both sides of a grant (KTD8). An endpoint that has
+/// published no token for its current generation has proven nothing about
+/// what its relationships would grant access to, so there is no answer here
+/// at all rather than a permissive one.
+fn endpoint_incarnation(view: &ResourceView) -> Option<&str> {
+    view.observed_status_projection()?
+        .pointer("/endpoint/incarnation")?
+        .as_str()
+}
+
 /// The old `status.resource` projection for a display session (old
 /// `display_resource_projection`): the two worker Process references and the
 /// private Endpoint with its committed generation.
+///
+/// `wayland_endpoint` is NAMED, not picked out of `intents`. The first
+/// `Endpoint` child that list yields is the session's host compositor socket,
+/// so selecting it positionally would point every consumer of the session's
+/// endpoint at the host side of the graph and fence it on the wrong row's
+/// generation (R23). The caller derives the guest frontend's own row from the
+/// session's uid; the generation carried beside it is that one row's
+/// committed generation, read from the children this pass already observed.
 fn display_projection(
     intents: &[d2b_core_controller::OwnedChildIntent],
     request: &InteractionEffectRequest<'_>,
+    wayland_endpoint: ResourceRef,
 ) -> Value {
     let process_refs = intents
         .iter()
         .filter(|intent| intent.target().resource_type().as_str() == "Process")
         .map(|intent| intent.target().to_canonical_string())
         .collect::<Vec<_>>();
-    let endpoint_ref = intents
+    let endpoint_generation = request
+        .children
         .iter()
-        .find(|intent| intent.target().resource_type().as_str() == "Endpoint")
-        .map(|intent| intent.target().clone());
-    let endpoint_generation = endpoint_ref.as_ref().and_then(|target| {
-        request
-            .children
-            .iter()
-            .find(|child| child.resource_ref == *target)
-            .map(|child| child.generation)
-    });
+        .find(|child| child.resource_ref == wayland_endpoint)
+        .map(|child| child.generation);
     let resource = WaylandSessionResourceStatus {
         proxy_process_ref: process_refs
             .first()
@@ -824,7 +874,7 @@ fn display_projection(
         guest_frontend_process_ref: process_refs
             .get(1)
             .and_then(|reference| ResourceRef::parse(reference).ok()),
-        wayland_endpoint_ref: endpoint_ref,
+        wayland_endpoint_ref: Some(wayland_endpoint),
         wayland_endpoint_generation: endpoint_generation,
         policy_digest: String::new(),
     };

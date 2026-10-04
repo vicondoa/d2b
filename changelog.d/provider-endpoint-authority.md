@@ -6,8 +6,10 @@
   crate directory, a runtime registration row, a session catalog row, or a
   product matrix row. Product, runtime, session, fixed-bootstrap,
   shared-driver, resource-family, and no-identity crates are distinct
-  classifications, and a name may not be claimed by two crates on two
-  surfaces.
+  surfaces. Which of the packaged artifacts ships no binary is stated by the
+  same declaration rather than named by the packaging generator, so the
+  catalog's one non-binary bootstrap entry resolves from the owning crate's
+  own fact.
 
 ### Changed
 
@@ -69,3 +71,31 @@
   endpoint access at all. An unproven source is now treated as unproven
   everywhere the surrounding branches already treated it that way, so the
   launch defers until the source has actually spoken.
+- A display session projected the host compositor socket as its Wayland
+  endpoint, because the projection took the first `Endpoint` child the child
+  list happened to yield. Every consumer resolving `waylandEndpointRef` was
+  pointed at the host side of the graph and fenced on that row's generation.
+  The session now names the guest frontend's own endpoint through the display
+  Provider's durable derivation, which is the row the transport is produced
+  on (R23).
+- The session's delivery gate compared a binding's `Delivered` state and its
+  own row generation but never the delivery incarnation, so replacing a worker
+  rotated the endpoint's realization token and the session still reported
+  `Ready` over a grant made against the realization that token replaced. Each
+  published relationship is now compared against the realization its owning
+  `Endpoint` row currently holds as well (R20, AE14).
+- The display graph never converged: the `Process` launch gate read a source
+  row's silence as a proven binding withdrawal, so a pass that landed while
+  that row was between its own passes stopped a live helper, which
+  un-realized the endpoint behind it, whose republication woke the row again.
+  A gate that could not READ its evidence is now its own answer and defers
+  without stopping; only evidence that was read and does not stand stops a
+  helper (R18, R21).
+- That gate also re-armed every subscription on every pass, and subscribed to
+  every endpoint its owner published - including the endpoint it produces,
+  whose realization is behind its own readiness - so a converged row spent
+  two manager round trips per dependency per pass and woke itself in a loop.
+  A registration is now released and armed again when its target's evidence
+  has moved rather than when a pass runs, and a source that has published and
+  named no relationship for this consumer is not evidence this row reads or
+  subscribes to (R12, R21).

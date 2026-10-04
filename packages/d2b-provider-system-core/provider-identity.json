@@ -2,6 +2,7 @@
   "crate": "d2b-provider-system-core",
   "family": "system-core",
   "roles": ["product", "session", "fixed-bootstrap"],
+  "nonBinary": true,
   "product": {
     "identity": "system-core",
     "sharesIdentityWith": ["session"],

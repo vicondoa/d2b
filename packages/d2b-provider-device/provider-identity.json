@@ -2,6 +2,7 @@
   "crate": "d2b-provider-device",
   "family": "device",
   "roles": ["runtime"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

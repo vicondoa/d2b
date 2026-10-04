@@ -621,55 +621,70 @@ fn each_worker_requires_exactly_the_canonical_binding_row_publication_names() {
 }
 
 /// Only a delivered projection at the binding row's OWN current generation
-/// proves the relationship is standing (R20).
+/// AND at the realization incarnation its owning `Endpoint` row currently
+/// holds proves the relationship is standing (R20, AE14).
 ///
 /// Every other closed state - a replaced endpoint, an undelivered row, a
-/// draining row, an unreadable layer, and a delivery published for an earlier
-/// row generation - is the same answer: not standing. A session that cannot
+/// draining row, an unreadable layer, a delivery published for an earlier row
+/// generation, and a delivery at a realization the endpoint has since rotated
+/// away from - is the same answer: not standing. A session that cannot
 /// prove its delivery is not usable, however Ready its worker rows look.
 #[test]
-fn only_a_delivery_at_the_rows_own_generation_proves_the_relationship() {
+fn only_a_delivery_at_the_rows_own_generation_and_incarnation_proves_the_relationship() {
     let (uid, _, spec) = committed_session();
     let (_, _, compositor, _, _) = display_graph(&uid);
-    let delivered = d2b_provider_endpoint::BindingDeliveryProjection::Delivered {
-        incarnation: d2b_provider_endpoint::endpoint::RealizationIncarnation::derive(
+    // The endpoint's own incarnation derivation, over the producer generation
+    // a replacement moves. Replacing the HostProxy Process row re-derives the
+    // token, and a delivery that still names the previous one describes the
+    // socket that realization replaced.
+    let incarnation = |producer_generation: u64| {
+        d2b_provider_endpoint::endpoint::RealizationIncarnation::derive(
             zone().as_str(),
             &compositor,
             4,
             uid.as_str(),
-            1,
+            producer_generation,
             spec.reconnect_generation(),
             None,
         )
-        .expect("a committed row derives an incarnation"),
+        .expect("a committed row derives an incarnation")
+    };
+    let current = incarnation(1);
+    let projection = d2b_provider_endpoint::BindingDeliveryProjection::Delivered {
+        incarnation: current.clone(),
         generation: 4,
-    };
-    let at = |generation: u64| {
-        session_children::display_binding_delivered(Some(&delivered.projection()), generation)
-    };
-    assert!(at(4), "the row's own current generation is delivered");
+    }
+    .projection();
+    let gate = session_children::display_binding_delivered;
     assert!(
-        !at(5),
+        gate(Some(&projection), 4, current.as_str()),
+        "the row's own current generation, delivered at the endpoint's current incarnation, stands"
+    );
+    assert!(
+        !gate(Some(&projection), 5, current.as_str()),
         "a delivery published for an earlier row generation proves nothing"
     );
     assert!(
-        !session_children::display_binding_delivered(None, 4),
+        !gate(Some(&projection), 4, incarnation(2).as_str()),
+        "a delivery at a realization the endpoint has since rotated away from proves nothing: the \
+         grant was made over the socket that realization replaced"
+    );
+    assert!(
+        !gate(Some(&projection), 4, "not a realization token"),
+        "a token the Endpoint family's own parser refuses cannot fence anything"
+    );
+    assert!(
+        !gate(None, 4, current.as_str()),
         "an absent published layer proves nothing"
     );
     for state in ["undelivered", "endpoint-replaced", "draining"] {
         assert!(
-            !session_children::display_binding_delivered(
-                Some(&serde_json::json!({ "state": state })),
-                4
-            ),
+            !gate(Some(&serde_json::json!({ "state": state })), 4, current.as_str()),
             "{state} is not a delivery"
         );
     }
     assert!(
-        !session_children::display_binding_delivered(
-            Some(&serde_json::json!({"state": "delivered"})),
-            4
-        ),
+        !gate(Some(&serde_json::json!({"state": "delivered"})), 4, current.as_str()),
         "a delivery layer that carries no incarnation cannot be read back"
     );
 }

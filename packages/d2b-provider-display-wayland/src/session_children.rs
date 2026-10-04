@@ -38,7 +38,7 @@ use d2b_core_controller::OwnedChildIntent;
 use d2b_provider_endpoint::endpoint::{
     EndpointAttachmentPolicy, EndpointBindingPublication, EndpointClass, EndpointConsumerPolicy,
     EndpointLifecyclePolicy, EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport,
-    EndpointVisibility,
+    EndpointVisibility, RealizationIncarnation,
 };
 use d2b_provider_endpoint::{CommittedEndpointShape, EndpointPurposeVocabulary};
 use serde_json::Value;
@@ -754,7 +754,8 @@ pub fn display_canonical_bindings(
 }
 
 /// Whether one published `EndpointBinding` layer proves a DELIVERED
-/// relationship for a row at `generation` (R20).
+/// relationship for a row at `generation` and at the realization incarnation
+/// the owning `Endpoint` row currently holds (R20, AE14).
 ///
 /// The published layer is the relationship actor's own redacted evidence, so
 /// it is read through the Endpoint family's own projection parser rather
@@ -763,19 +764,34 @@ pub fn display_canonical_bindings(
 /// undelivered row, a draining row, and a layer this reader cannot parse are
 /// all the same answer - the relationship is not standing - because a session
 /// that cannot prove its delivery is not usable.
-pub fn display_binding_delivered(layer: Option<&Value>, generation: u64) -> bool {
-    layer
-        .and_then(d2b_provider_endpoint::BindingDeliveryProjection::from_projection)
-        .is_some_and(
-            |evidence| {
-                matches!(
-                    evidence,
-                    d2b_provider_endpoint::BindingDeliveryProjection::Delivered {
-                        generation: delivered,
-                        ..
-                    } if delivered == generation
-                )
-            },
+///
+/// The second half is the Endpoint family's own same-incarnation property
+/// ([`d2b_provider_endpoint::BindingDeliveryProjection::proves_delivery`]),
+/// not a second comparison invented here: `incarnation` is the token the
+/// owning `Endpoint` row's own readiness publishes for its current row
+/// generation, and the grant this relationship reports is made over ONE exact
+/// realization. Once the endpoint has re-realized, its token is a different
+/// one and a delivery still standing at the right row generation is evidence
+/// about the incarnation that replaced it - so the gate answers `false` until
+/// the relationship actor republishes against the current token (R17, KTD8).
+pub fn display_binding_delivered(layer: Option<&Value>, generation: u64, incarnation: &str) -> bool {
+    let Some(evidence) =
+        layer.and_then(d2b_provider_endpoint::BindingDeliveryProjection::from_projection)
+    else {
+        return false;
+    };
+    let Ok(current) =
+        serde_json::from_value::<RealizationIncarnation>(Value::String(incarnation.to_owned()))
+    else {
+        return false;
+    };
+    evidence.proves_delivery(&current)
+        && matches!(
+            evidence,
+            d2b_provider_endpoint::BindingDeliveryProjection::Delivered {
+                generation: delivered,
+                ..
+            } if delivered == generation
         )
 }
 

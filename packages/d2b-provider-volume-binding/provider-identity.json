@@ -2,6 +2,7 @@
   "crate": "d2b-provider-volume-binding",
   "family": "volume-binding",
   "roles": ["runtime"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

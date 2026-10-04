@@ -2,6 +2,7 @@
   "crate": "d2b-provider-volume-local",
   "family": "volume-local",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "volume-local",
     "sharesIdentityWith": ["runtime"],

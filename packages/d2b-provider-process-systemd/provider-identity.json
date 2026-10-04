@@ -2,6 +2,7 @@
   "crate": "d2b-provider-process-systemd",
   "family": "process-systemd",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "system-systemd",
     "evidence": [

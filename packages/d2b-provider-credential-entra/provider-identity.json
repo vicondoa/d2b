@@ -2,6 +2,7 @@
   "crate": "d2b-provider-credential-entra",
   "family": "credential-entra",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "credential-entra",
     "sharesIdentityWith": ["runtime"],

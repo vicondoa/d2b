@@ -2,6 +2,7 @@
   "crate": "d2b-provider-activation-nixos",
   "family": "activation-nixos",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "activation-nixos",
     "sharesIdentityWith": ["runtime"],

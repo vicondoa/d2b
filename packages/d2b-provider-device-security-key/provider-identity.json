@@ -2,6 +2,7 @@
   "crate": "d2b-provider-device-security-key",
   "family": "device-security-key",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "device-security-key",
     "sharesIdentityWith": ["runtime"],

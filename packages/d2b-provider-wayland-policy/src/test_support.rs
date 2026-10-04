@@ -73,18 +73,45 @@ impl InteractionPlaneRead for ScriptedPlaneRead {
     }
 }
 
-/// A scripted plane read serving a fixed row set, for tests that seed the
-/// family's audio registry through the effects' reconcile path.
-struct ScriptedRows(Vec<ResourceView>);
+/// A scripted plane read serving exactly what its handle last published.
+///
+/// The handle is what makes a multi-pass test possible: one driver reads
+/// evidence that moved while its own row stood still, which is exactly what a
+/// projection change publishes underneath a readiness phase that never
+/// changes.
+#[derive(Clone)]
+pub struct ScriptedPlane {
+    rows: Arc<tokio::sync::Mutex<Vec<ResourceView>>>,
+}
+
+impl ScriptedPlane {
+    /// A plane serving exactly these rows from the first read on.
+    pub fn new(rows: Vec<ResourceView>) -> Self {
+        Self {
+            rows: Arc::new(tokio::sync::Mutex::new(rows)),
+        }
+    }
+
+    /// Serve exactly these rows from the next read on.
+    pub async fn publish(&self, rows: Vec<ResourceView>) {
+        *self.rows.lock().await = rows;
+    }
+}
 
 #[async_trait]
-impl InteractionPlaneRead for ScriptedRows {
+impl InteractionPlaneRead for ScriptedPlane {
     async fn get(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ()> {
-        Ok(self.0.iter().find(|view| view.key == *key).cloned())
+        Ok(self
+            .rows
+            .lock()
+            .await
+            .iter()
+            .find(|view| view.key == *key)
+            .cloned())
     }
 
     async fn list(&self, _selector: &ResourceSelector) -> Result<Vec<ResourceView>, ()> {
-        Ok(self.0.clone())
+        Ok(self.rows.lock().await.clone())
     }
 }
 
@@ -115,10 +142,18 @@ pub fn scripted_facets(zone: ZoneId) -> InteractionEffectFacets {
 /// that drives the effects' reconcile over these facets seeds the shared
 /// audio registry, so the hosted service answers the populated report.
 pub fn scripted_facets_with_rows(zone: ZoneId, rows: Vec<ResourceView>) -> InteractionEffectFacets {
+    scripted_facets_over_plane(zone, ScriptedPlane::new(rows))
+}
+
+/// The scripted facet set over a plane the caller rewrites between passes: the
+/// same identity and audio sources, over the plane read the handle owns. A test
+/// that drives one driver across evidence that moved between its passes reads
+/// that evidence here.
+pub fn scripted_facets_over_plane(zone: ZoneId, plane: ScriptedPlane) -> InteractionEffectFacets {
     InteractionEffectFacets::new(
         zone,
         Arc::new(ScriptedIdentitySource),
-        Arc::new(ScriptedRows(rows)),
+        Arc::new(plane),
         Arc::new(ScriptedAudioSource),
     )
 }

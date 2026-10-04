@@ -2,6 +2,7 @@
   "crate": "d2b-provider-audio-binding",
   "family": "audio-binding",
   "roles": ["runtime"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

@@ -2,6 +2,7 @@
   "crate": "d2b-provider-test-controller",
   "family": "test-controller",
   "roles": ["test"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

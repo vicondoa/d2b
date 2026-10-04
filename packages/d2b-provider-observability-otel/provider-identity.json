@@ -2,6 +2,7 @@
   "crate": "d2b-provider-observability-otel",
   "family": "observability-otel",
   "roles": ["product"],
+  "nonBinary": false,
   "product": {
     "identity": "observability-otel",
     "evidence": [

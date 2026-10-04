@@ -10843,20 +10843,57 @@ HOST_EFFECTS_SERVICE.id,
             "the committed binding rows are exactly what the endpoint rows' own publication intent \
              derives"
         );
+        // Each relationship is granted over ONE exact realization, so it is
+        // read against the token its OWNING endpoint row currently publishes
+        // (AE14). The mapping comes from the same derivation that committed
+        // these rows, so it names no relationship the endpoint rows do not
+        // publish, and an endpoint that publishes none is not asked to name a
+        // realization it has no grant over.
+        let mut owning_incarnation: BTreeMap<String, String> = BTreeMap::new();
+        for (key, spec) in &endpoints {
+            let endpoint_ref =
+                ResourceRef::parse(&format!("Endpoint/{}", key.name)).expect("endpoint ref");
+            let rows = d2b_provider_display_wayland::display_canonical_bindings(
+                &zone,
+                &endpoint_ref,
+                spec,
+            )
+            .expect("the Endpoint family derives this row's published relationships");
+            if rows.is_empty() {
+                continue;
+            }
+            let endpoint_view = view_of(&scene.plane, key).await;
+            let token = endpoint_view
+                .observed_status_projection()
+                .and_then(|projection| projection.pointer("/endpoint/incarnation"))
+                .and_then(|token| token.as_str())
+                .unwrap_or_else(|| {
+                    panic!("{key} publishes a relationship and names the realization it rides")
+                });
+            for row in rows {
+                owning_incarnation.insert(row.name().as_str().to_owned(), token.to_owned());
+            }
+        }
         // The delivery those two rows report is the one this scene's broker
         // wire produced: the PRODUCTION `DaemonEndpointAccessDispatch`
         // answered both grants over the daemon's own broker socket, and both
         // relationships publish a delivery at their own current row
-        // generation. Nothing here scripts a verdict - the verdict is read
-        // back through the display Provider's own published-layer parser.
+        // generation and at the realization their endpoint row still holds.
+        // Nothing here scripts a verdict - the verdict is read back through
+        // the display Provider's own published-layer parser.
         for (name, view) in &held_bindings {
             let layer = view.observed_status_projection().and_then(|p| p.pointer("/binding").cloned());
+            let incarnation = owning_incarnation
+                .get(name)
+                .unwrap_or_else(|| panic!("{name} is published by exactly one committed endpoint row"));
             assert!(
                 d2b_provider_display_wayland::session_children::display_binding_delivered(
                     layer.as_ref(),
                     view.generation,
+                    incarnation,
                 ),
-                "{name} publishes no delivery at generation {}: {layer:?}",
+                "{name} publishes no delivery at generation {} for the realization its endpoint \
+                 row currently holds: {layer:?}",
                 view.generation
             );
         }

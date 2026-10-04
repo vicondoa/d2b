@@ -2,6 +2,7 @@
   "crate": "d2b-provider-operation",
   "family": "operation",
   "roles": ["resource-family"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

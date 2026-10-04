@@ -65,7 +65,7 @@ use d2b_process_conformance::{
 use d2b_resource_runtime::guest_target::{GuestAdoption, TargetInstanceState};
 use d2b_resource_runtime::context::{
     EffectCompleted, EffectResult, ResourceContext, RowLookup, SpecDecoder, WatchCondition,
-    typed_spec_decoder,
+    WatchId, typed_spec_decoder,
 };
 use d2b_resource_runtime::driver::{
     DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
@@ -679,12 +679,14 @@ pub(crate) struct ProcessDriver {
     budget: Arc<RestartBudget>,
     ephemeral: Arc<EphemeralRuntime>,
     durable: Arc<DurableRuntime>,
-    /// The dependency rows this actor has already registered an evidence
-    /// watch on. Watches are ephemeral (R12) and this actor re-registers them
-    /// from the rows it read each pass, so the set is a per-target guard
-    /// against re-registering the same edge every pass rather than state the
-    /// launch decision depends on.
-    watched: Vec<ResourceKey>,
+    /// The dependency rows this actor currently holds a live evidence watch
+    /// on, each with the registration standing in that row's mailbox and the
+    /// evidence it was armed against. A runtime watch is one-shot (AE2), so
+    /// this is the LIVE set and not a record of rows once watched: a
+    /// registration whose target has since moved its evidence is spent, and
+    /// the next pass releases it and arms the row again, which is what keeps
+    /// the subscription alive past its first projection change (R21).
+    watched: Vec<ArmedWatch>,
     /// The authenticated Guest target transport of this row, re-bound to the
     /// live session generation (R19, R29). `None` for a Host-targeted row and
     /// before this row first reaches a live Guest session. Runtime-only, like
@@ -915,15 +917,77 @@ struct BindingObservation {
     observed: Vec<ObservedBinding>,
     /// The rows this read took evidence from: the endpoints it derived
     /// expectations from and the relationships it observed.
-    dependencies: Vec<ResourceKey>,
+    dependencies: Vec<DependencyRow>,
+}
+
+/// One dependency row this pass subscribes to, beside the evidence its watch
+/// conditions are evaluated against.
+///
+/// The evidence is captured from the SAME view the gate read, so arming costs
+/// no manager read of its own. `None` is a row this pass named but could not
+/// read - the read faulted at or before it - and the subscription still
+/// belongs to that row: it is left exactly as it stands rather than released,
+/// because a row this pass never reached says nothing about whether the
+/// registration on it is still live.
+#[derive(Clone)]
+struct DependencyRow {
+    key: ResourceKey,
+    evidence: Option<WatchEvidence>,
+}
+
+/// The evidence one dependency row's watch conditions are evaluated against.
+///
+/// Exactly the pair its own actor compares when it publishes a transition
+/// (R11): the phase for [`WatchCondition::Ready`], the projection layer for
+/// [`WatchCondition::ProjectionChanged`]. A row mid-pass republishes both as
+/// its pass concludes, so a fingerprint that moved is a registration the
+/// target has already satisfied and removed, and one that stood is a
+/// registration still live in the target's mailbox - which is what makes
+/// re-arming on a moved fingerprint both necessary and sufficient (AE2, R12,
+/// R21).
+#[derive(Clone, PartialEq)]
+struct WatchEvidence {
+    status: Option<ResourceStatus>,
+    projection: Option<serde_json::Value>,
+}
+
+impl WatchEvidence {
+    /// The evidence one manager view carries, read as the actor published it.
+    fn of(view: &ResourceView) -> Self {
+        Self { status: view.status.clone(), projection: view.status_projection.clone() }
+    }
+}
+
+/// One armed internal watch: the dependency, the registration id standing in
+/// that dependency's mailbox, and the evidence it was armed against.
+#[derive(Clone)]
+struct ArmedWatch {
+    target: ResourceKey,
+    watch: WatchId,
+    evidence: WatchEvidence,
+}
+
+impl BindingObservation {
+    /// The deferral this partial read produces, carrying the rows it HAD
+    /// already proven.
+    ///
+    /// A read that ends `Unproven` has usually proven something on the way
+    /// there - an endpoint it read, a relationship it resolved - and dropping
+    /// that left the row with no subscription but its resync cadence. The
+    /// dependency rows travel with the fault so the caller subscribes to
+    /// whatever the read did establish (R12, R21).
+    fn unproven(&self) -> BindingObservationFault {
+        BindingObservationFault::Unproven(self.dependencies.clone())
+    }
 }
 
 /// Why one binding read could not produce an observation.
 enum BindingObservationFault {
     /// The manager cannot answer right now, or a source published a
     /// relationship whose realization or committed row it has not proven yet:
-    /// the launch defers and issues no effect.
-    Unproven,
+    /// the launch defers and issues no effect. Whatever the read had already
+    /// proven rides with it, as the dependency rows to subscribe to.
+    Unproven(Vec<DependencyRow>),
     /// The published evidence is malformed or foreign: terminal, because
     /// retrying the same evidence cannot change the answer.
     Refused(BindingGateError),
@@ -942,12 +1006,20 @@ enum BindingObservationFault {
 /// An endpoint that has published nothing is a different answer, and the
 /// difference is the whole point: it has stated nothing, and a statement that
 /// was never made is not read as the one that would have been made.
+///
+/// The answer is whether this source published a relationship for THIS
+/// consumer, because that is what decides both what the gate reads and what
+/// the row subscribes to. A source that has spoken and named nobody here is
+/// not this launch's evidence: subscribing to it would make this row wake on
+/// every pass of an endpoint it does not consume - including the endpoint it
+/// PRODUCES, whose realization is behind this row's own readiness - and each
+/// of those wakes would run a pass that un-realizes it again (R12, R21).
 async fn observe_endpoint_bindings(
     ctx: &mut ResourceContext,
     view: &ResourceView,
     process_ref: &ResourceRef,
     observation: &mut BindingObservation,
-) -> Result<(), BindingObservationFault> {
+) -> Result<bool, BindingObservationFault> {
     let Some(projection) = view.observed_status_projection() else {
         // The manager holds this endpoint's row and view, and the view
         // carries no projection published for its CURRENT generation: its
@@ -956,7 +1028,7 @@ async fn observe_endpoint_bindings(
         // None of those is this source saying it publishes no relationship
         // for this consumer, so the launch defers until it has published -
         // silence is not a publication (R18, R21).
-        return Err(BindingObservationFault::Unproven);
+        return Err(observation.unproven());
     };
     let published = projection.pointer("/endpoint/bindings");
     let Some(entries) = published.and_then(serde_json::Value::as_array) else {
@@ -971,7 +1043,7 @@ async fn observe_endpoint_bindings(
             // not interpret as the publication set, which is the same
             // not-proven the missing projection is, and defers on the same
             // terms: a later pass over a layer this source does publish.
-            None => Err(BindingObservationFault::Unproven),
+            None => Err(observation.unproven()),
         };
     };
     let consumer = process_ref.to_canonical_string();
@@ -982,10 +1054,12 @@ async fn observe_endpoint_bindings(
     let published_incarnation = projection
         .pointer("/endpoint/incarnation")
         .and_then(serde_json::Value::as_str);
+    let mut named = false;
     for entry in entries {
         if entry.pointer("/consumer").and_then(serde_json::Value::as_str) != Some(consumer.as_str()) {
             continue;
         }
+        named = true;
         let (Some(name), Some(endpoint), Some(slot), Some(authorization), Some(dependency)) = (
             published_field(entry, "/name"),
             published_field(entry, "/endpoint"),
@@ -1000,7 +1074,7 @@ async fn observe_endpoint_bindings(
             // realization has proven nothing about what it would grant access
             // to, so the launch waits for the token instead of gating on one it
             // cannot name.
-            return Err(BindingObservationFault::Unproven);
+            return Err(observation.unproven());
         };
         let (Ok(endpoint_ref), Ok(binding_ref)) = (
             ResourceRef::parse(&endpoint),
@@ -1009,7 +1083,8 @@ async fn observe_endpoint_bindings(
             return Err(BindingObservationFault::Refused(BindingGateError::Malformed));
         };
         let key = binding_key(ctx, binding_ref.name().as_str());
-        observation.dependencies.push(key.clone());
+        let read = observation.dependencies.len();
+        observation.dependencies.push(DependencyRow { key: key.clone(), evidence: None });
         let relation = match ctx.lookup_view(&key).await {
             RowLookup::Present { row, .. } => row,
             // The publication intent names this relationship and the manager
@@ -1017,7 +1092,7 @@ async fn observe_endpoint_bindings(
             // on a required row it cannot see rather than dropping the
             // expectation and launching as if it were never required.
             RowLookup::Absent { .. } | RowLookup::Unavailable { .. } => {
-                return Err(BindingObservationFault::Unproven);
+                return Err(observation.unproven());
             }
             RowLookup::Error { .. } => {
                 return Err(BindingObservationFault::Refused(
@@ -1025,6 +1100,7 @@ async fn observe_endpoint_bindings(
                 ));
             }
         };
+        observation.dependencies[read].evidence = Some(WatchEvidence::of(&relation));
         let committed: EndpointBindingSpec = serde_json::from_slice(&relation.spec).map_err(|_| {
             BindingObservationFault::Refused(BindingGateError::EvidenceUnreadable)
         })?;
@@ -1078,7 +1154,7 @@ async fn observe_endpoint_bindings(
             BindingDeliveryEvidence::from_projection(relation.observed_status_projection()),
         ));
     }
-    Ok(())
+    Ok(named)
 }
 
 /// The manager key of the canonical relationship row one published
@@ -1989,16 +2065,21 @@ impl ProcessDriver {
         identity: &ProcessResourceIdentity,
         spec: &EphemeralProcessSpec,
     ) -> Result<RecoveryOutcome, ProcessDriverError> {
-        // `Pending` reports `Missing` and touches nothing: the survivor is
-        // not an identity this pass verified, so unproven evidence is no
-        // reason to stop one. `Refused` is the same terminal refusal the
-        // reconcile arms report, and `Ready` carries the lease the adoption
-        // revalidates immediately before it runs.
+        // `Pending` and `Deferred` both report `Missing` and touch nothing: the
+        // survivor is not an identity this pass verified, so neither an
+        // unproven grant nor an unread one is a reason to stop one. They
+        // differ only in what they proved - `Pending` read the evidence and it
+        // did not stand, `Deferred` never read it - and recovery acts on
+        // neither. `Refused` is the same terminal refusal the reconcile arms
+        // report, and `Ready` carries the lease the adoption revalidates
+        // immediately before it runs.
         let binding = self.prepare_launch(ctx, identity, DriverOp::Recover).await?;
         let lease = match &binding {
             ProcessBindingPreparation::NotRequired => None,
             ProcessBindingPreparation::Ready(lease) => Some(lease),
-            ProcessBindingPreparation::Pending => return Ok(RecoveryOutcome::Missing),
+            ProcessBindingPreparation::Pending | ProcessBindingPreparation::Deferred => {
+                return Ok(RecoveryOutcome::Missing);
+            }
             ProcessBindingPreparation::Refused(error) => {
                 return Err(self.binding_gate_refused(identity, *error, DriverOp::Recover));
             }
@@ -2098,7 +2179,21 @@ impl ProcessDriver {
                     &observation.observed,
                 )
             }
-            Err(BindingObservationFault::Unproven) => ProcessBindingPreparation::Pending,
+            // A deferred read is not a blind one: the rows it had already
+            // proven are exactly the evidence this row must be woken for
+            // again, so the subscription is registered on this arm too and
+            // the deferral falls back to the resync cadence only when the read
+            // proved nothing at all (R12, R21).
+            //
+            // It is DEFERRED and not `Pending` because nothing was read: R21
+            // stops a live helper on a proven binding LOSS, and a read that
+            // landed while a source row was mid-pass has proven no loss at
+            // all. Reading it as a withdrawal is what turns one unlucky read
+            // into a stop/relaunch loop that never converges.
+            Err(BindingObservationFault::Unproven(dependencies)) => {
+                self.watch_evidence(ctx, &dependencies).await;
+                ProcessBindingPreparation::Deferred
+            }
             Err(BindingObservationFault::Refused(error)) => {
                 ProcessBindingPreparation::Refused(error)
             }
@@ -2138,25 +2233,69 @@ impl ProcessDriver {
             .map_err(|error| self.binding_gate_refused(identity, error, op))
     }
 
-    /// Register this actor's evidence watch on one dependency row, at most
-    /// once per target (R12, R21).
+    /// Arm this actor's evidence watch on each dependency row, one live
+    /// registration per target (R12, R21).
     ///
     /// The condition is [`WatchCondition::ProjectionChanged`], never `Ready`:
     /// a delivery downgrade - a relationship whose endpoint was replaced, or
     /// whose authorization was withdrawn - keeps its target on `Ready` while
     /// its evidence layer changes underneath it, so a readiness phase can
     /// never be the wake-up this row needs.
-    async fn watch_evidence(&mut self, ctx: &mut ResourceContext, targets: &[ResourceKey]) {
-        for target in targets {
-            if self.watched.contains(target) {
+    ///
+    /// A runtime registration is one-shot: AE2 satisfies it and REMOVES it. A
+    /// registration this actor remembered was therefore a spent registration,
+    /// and skipping a target already in that set made every subscription a
+    /// single-use wake-up - after the first projection change this actor was
+    /// never woken by that target again, so a second downgrade (a relaunch
+    /// over a replaced socket, a withdrawn authorization) reached the row only
+    /// through its resync cadence.
+    ///
+    /// Re-arming is therefore driven by the EVIDENCE, never by the pass. The
+    /// registration this actor holds was armed against one exact fingerprint,
+    /// and a target only ever satisfies a registration by moving the very pair
+    /// of values that fingerprint is built from - so a target whose fingerprint
+    /// stands still has not spent it, and releasing and re-arming it would buy
+    /// nothing while spending two manager round trips per dependency per pass.
+    /// The fingerprint comes from the view the gate has already read, so the
+    /// comparison itself is free.
+    ///
+    /// A dependency this pass named but could not read keeps whatever
+    /// registration it already holds: a read that faulted before reaching a
+    /// row says nothing about whether that row's registration is still live,
+    /// and releasing a live one is the one mistake here that would leave this
+    /// row unsubscribed.
+    async fn watch_evidence(&mut self, ctx: &mut ResourceContext, rows: &[DependencyRow]) {
+        for row in rows {
+            let Some(evidence) = row.evidence.as_ref() else {
+                continue;
+            };
+            let spent = self
+                .watched
+                .iter()
+                .filter(|armed| armed.target == row.key)
+                .collect::<Vec<_>>();
+            if !spent.is_empty() && spent.iter().all(|armed| armed.evidence == *evidence) {
+                // The evidence stood, so the registration is still live in
+                // that row's mailbox and this pass places none.
                 continue;
             }
-            if ctx
-                .watch(target.clone(), WatchCondition::ProjectionChanged)
+            let spent = spent
+                .into_iter()
+                .map(|armed| armed.watch)
+                .collect::<Vec<_>>();
+            for watch in spent {
+                let _ = ctx.cancel_watch(watch).await;
+                self.watched.retain(|held| held.watch != watch);
+            }
+            if let Ok(watch) = ctx
+                .watch(row.key.clone(), WatchCondition::ProjectionChanged)
                 .await
-                .is_ok()
             {
-                self.watched.push(target.clone());
+                self.watched.push(ArmedWatch {
+                    target: row.key.clone(),
+                    watch,
+                    evidence: evidence.clone(),
+                });
             }
         }
     }
@@ -2204,13 +2343,14 @@ impl ProcessDriver {
         let siblings = ctx
             .owner_siblings()
             .await
-            .map_err(|_| BindingObservationFault::Unproven)?;
+            .map_err(|_| BindingObservationFault::Unproven(Vec::new()))?;
         let mut observation = BindingObservation::default();
         for row in siblings
             .iter()
             .filter(|row| row.key.type_name == ENDPOINT_ROW_TYPE)
         {
-            observation.dependencies.push(row.key.clone());
+            let read = observation.dependencies.len();
+            observation.dependencies.push(DependencyRow { key: row.key.clone(), evidence: None });
             let view = match ctx.lookup_view(&row.key).await {
                 RowLookup::Present { row, .. } => row,
                 // The owner-scoped listing named this endpoint, and the
@@ -2224,13 +2364,32 @@ impl ProcessDriver {
                 // the next pass re-derives the sibling set from the manager,
                 // so an endpoint that really is gone is simply absent from
                 // that listing.
-                RowLookup::Absent { .. }
-                | RowLookup::Unavailable { .. }
-                | RowLookup::Error { .. } => {
-                    return Err(BindingObservationFault::Unproven);
+                RowLookup::Absent { .. } | RowLookup::Unavailable { .. } => {
+                    return Err(observation.unproven());
+                }
+                // A read that ANSWERED with a payload this pass cannot
+                // interpret is terminal evidence, not an ordinary not-yet:
+                // retrying the same row cannot change what it says, and the
+                // relationship-row read below maps its own failed read to the
+                // same terminal slug.
+                RowLookup::Error { .. } => {
+                    return Err(BindingObservationFault::Refused(
+                        BindingGateError::EvidenceUnreadable,
+                    ));
                 }
             };
-            observe_endpoint_bindings(ctx, &view, process_ref, &mut observation).await?;
+            // The endpoint row itself was READ, so what this pass knows about
+            // it is the evidence its watch is armed against - even when what
+            // it reads is that the row has published nothing yet. Capturing
+            // it only on the far side of the call below would drop exactly
+            // the source a deferred gate most needs to hear from again.
+            observation.dependencies[read].evidence = Some(WatchEvidence::of(&view));
+            if !observe_endpoint_bindings(ctx, &view, process_ref, &mut observation).await? {
+                // This source has published, and it publishes nothing for
+                // this consumer: it is not this row's evidence, so this row
+                // neither keeps it as a dependency nor subscribes to it.
+                observation.dependencies.truncate(read);
+            }
         }
         Ok(observation)
     }
@@ -2482,21 +2641,29 @@ impl ProcessDriver {
         // runs exactly as it did before the gate existed. `Ready` carries the
         // sealed authority the effect revalidates.
         //
-        // The two closed answers that are NOT `Ready` are where a live
-        // process would otherwise keep running over access its source no
-        // longer grants (R21). `Pending` is the ordinary not-yet for a row
-        // that never launched, and an authority withdrawal for one that did:
-        // either way the verified incarnation stops, the row stops reading
-        // ready, and exactly one retryable requeue runs on the cadence this
-        // arm already uses - a relaunch waits for a freshly sealed lease, it
-        // is never issued here. `Refused` is terminal for the launch, because
-        // retrying the same malformed or foreign evidence cannot change the
-        // answer, and it stops the live effect on exactly the same terms.
+        // The closed answers that are NOT `Ready` are where a live process
+        // would otherwise keep running over access its source no longer
+        // grants (R21). `Pending` is the ordinary not-yet for a row that never
+        // launched, and an authority withdrawal for one that did: the evidence
+        // was READ and it does not stand, so the verified incarnation stops,
+        // the row stops reading ready, and exactly one retryable requeue runs
+        // on the cadence this arm already uses - a relaunch waits for a freshly
+        // sealed lease, it is never issued here. `Deferred` is the one answer
+        // that stops nothing: this pass could not read the evidence at all, so
+        // it has proven no withdrawal and the helper keeps running over the
+        // authority it was last shown to hold. `Refused` is terminal for the
+        // launch, because retrying the same malformed or foreign evidence
+        // cannot change the answer, and it stops the live effect on exactly
+        // the same terms as `Pending`.
         let lease = match &binding {
             ProcessBindingPreparation::NotRequired => None,
             ProcessBindingPreparation::Ready(lease) => Some(lease),
             ProcessBindingPreparation::Pending => {
                 self.stop_withdrawn_effect(ctx, &identity, spec).await?;
+                let _ = ctx.requeue_after(PROCESS_RESYNC);
+                return Ok(ReconcileOutcome::RetryScheduled);
+            }
+            ProcessBindingPreparation::Deferred => {
                 let _ = ctx.requeue_after(PROCESS_RESYNC);
                 return Ok(ReconcileOutcome::RetryScheduled);
             }
@@ -2785,15 +2952,21 @@ impl ProcessDriver {
         // The launch binding gate, answered exactly as the long-running arm
         // answers it and AFTER the bounded-runtime stop above: a one-shot whose
         // runtime deadline elapsed still stops exactly, because the stop is
-        // the fence, not a use of the authority (R18, R22). The two answers
-        // that are not `Ready` stop a verified live one-shot on the same
-        // terms the durable arm does (R21): the row stops reading ready, the
-        // incarnation stops, and neither path launches.
+        // the fence, not a use of the authority (R18, R22). `Pending` and
+        // `Refused` stop a verified live one-shot on the same terms the
+        // durable arm does (R21): the row stops reading ready, the incarnation
+        // stops, and neither path launches. `Deferred` stops nothing, for the
+        // same reason it does not there - a pass that could not read the
+        // evidence has proven no withdrawal.
         let lease = match &binding {
             ProcessBindingPreparation::NotRequired => None,
             ProcessBindingPreparation::Ready(lease) => Some(lease),
             ProcessBindingPreparation::Pending => {
                 self.stop_withdrawn_one_shot(ctx, identity, spec).await?;
+                let _ = ctx.requeue_after(PROCESS_RESYNC);
+                return Ok(ReconcileOutcome::RetryScheduled);
+            }
+            ProcessBindingPreparation::Deferred => {
                 let _ = ctx.requeue_after(PROCESS_RESYNC);
                 return Ok(ReconcileOutcome::RetryScheduled);
             }
@@ -3389,17 +3562,20 @@ impl ResourceDriver for ProcessDriver {
                 // is held to exactly as the launch is, and a restart is the
                 // pass that most needs the fence: a delivery withdrawn while
                 // this daemon was down is invisible to every effect it has
-                // already issued. `Pending` therefore reports `Missing` and
-                // touches nothing - a survivor is not a verified identity, so
-                // unproven evidence is no reason to stop one either - and
-                // `Refused` is the same terminal refusal the reconcile arms
-                // report. `Ready` carries the sealed lease, which the
-                // adoption revalidates immediately before it runs.
+                // already issued. `Pending` and `Deferred` therefore report
+                // `Missing` and touch nothing - a survivor is not a verified
+                // identity, so neither an unproven grant nor an unread one is
+                // a reason to stop one - and `Refused` is the same terminal
+                // refusal the reconcile arms report. `Ready` carries the sealed
+                // lease, which the adoption revalidates immediately before it
+                // runs.
                 let binding = self.prepare_launch(ctx, &identity, DriverOp::Recover).await?;
                 let lease = match &binding {
                     ProcessBindingPreparation::NotRequired => None,
                     ProcessBindingPreparation::Ready(lease) => Some(lease),
-                    ProcessBindingPreparation::Pending => return Ok(RecoveryOutcome::Missing),
+                    ProcessBindingPreparation::Pending | ProcessBindingPreparation::Deferred => {
+                        return Ok(RecoveryOutcome::Missing);
+                    }
                     ProcessBindingPreparation::Refused(error) => {
                         return Err(self.binding_gate_refused(&identity, *error, DriverOp::Recover));
                     }
@@ -6279,12 +6455,15 @@ mod tests {
         }
 
         /// The owner-scoped manager one gated pass reads: the committed rows
-        /// its owner holds, the views those rows published, and the evidence
-        /// the launch gate revalidates immediately before the effect.
+        /// its owner holds, the views those rows published, the evidence the
+        /// launch gate revalidates immediately before the effect, and the
+        /// watch registrations it handed out and the driver released.
         struct BindingManager {
             rows: Vec<StoredDesiredResource>,
             views: parking_lot::Mutex<Vec<ResourceView>>,
             reads: parking_lot::Mutex<Vec<ResourceKey>>,
+            armed: parking_lot::Mutex<u64>,
+            released: parking_lot::Mutex<u64>,
         }
 
         #[async_trait::async_trait]
@@ -6338,10 +6517,14 @@ mod tests {
                 _subscriber: &ResourceKey,
                 _registration: WatchRegistration,
             ) -> Result<WatchId, ResourceError> {
-                Ok(WatchId(1))
+                let mut armed = self.armed.lock(); // async-gate-allow: fixture counts under a short guard and holds no await
+                *armed += 1;
+                Ok(WatchId(*armed))
             }
 
             async fn cancel_watch(&self, _id: WatchId) -> Result<(), ResourceError> {
+                let mut released = self.released.lock(); // async-gate-allow: fixture counts under a short guard and holds no await
+                *released += 1;
                 Ok(())
             }
         }
@@ -6352,6 +6535,14 @@ mod tests {
             #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
             fn view_reads(&self) -> Vec<ResourceKey> {
                 self.reads.lock().clone() // async-gate-allow: fixture reads under a short guard and holds no await
+            }
+
+            /// The registrations this manager handed out, and the ones the
+            /// driver released: a runtime watch is one-shot, so a driver that
+            /// never releases and re-arms one is subscribed exactly once.
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fn watch_cycle(&self) -> (u64, u64) {
+                (*self.armed.lock(), *self.released.lock()) // async-gate-allow: fixture reads under a short guard and holds no await
             }
         }
 
@@ -6367,6 +6558,8 @@ mod tests {
                 rows: vec![endpoint_row()],
                 views: parking_lot::Mutex::new(vec![endpoint_view(), binding_view(true)]),
                 reads: parking_lot::Mutex::new(Vec::new()),
+                armed: parking_lot::Mutex::new(0),
+                released: parking_lot::Mutex::new(0),
             });
             (
                 GuestFixture::with(row, Arc::clone(&manager) as Arc<dyn ManagerEndpoint>),
@@ -6433,6 +6626,8 @@ mod tests {
                 rows,
                 views: parking_lot::Mutex::new(views),
                 reads: parking_lot::Mutex::new(Vec::new()),
+                armed: parking_lot::Mutex::new(0),
+                released: parking_lot::Mutex::new(0),
             })
         }
 
@@ -7028,6 +7223,340 @@ mod tests {
             assert!(
                 d.delete(&mut f.ctx).await.is_err(),
                 "an unreadable endpoint row retains the consumer row"
+            );
+        }
+
+        /// The owner row whose committed child set the completeness proof
+        /// settles on, with or without the status that settles it.
+        fn session_key() -> ResourceKey {
+            ResourceKey::new("work", "WaylandSession", "display")
+        }
+
+        /// The owner's own view. A session publishes its status at the END of
+        /// the pass that materializes its children, so `published: false` is
+        /// exactly the window a child actor reconciles inside: the child row
+        /// is committed, and the endpoints this child will consume are not.
+        fn session_view(published: bool) -> ResourceView {
+            ResourceView {
+                status: published.then_some(ResourceStatus::Pending),
+                status_generation: published.then_some(1),
+                ..view(session_key(), [0x51; 16], 1, None, Vec::new())
+            }
+        }
+
+        /// A `Process` row committed into a session that has not finished its
+        /// first pass: the owner row is committed, the row is owned by it, and
+        /// the owner's owned rows hold no `Endpoint` at all.
+        fn mid_pass_manager(published_owner: bool) -> Arc<BindingManager> {
+            binding_manager(
+                vec![owned_host_row()],
+                if published_owner { vec![session_view(true)] } else { Vec::new() },
+            )
+        }
+
+        /// An owner whose committed child set has not settled yet proves
+        /// nothing about what its children consume, so the launch defers -
+        /// and it is that deferral, not a stall: the moment the owner
+        /// publishes for its own generation the same row launches (R18, R20).
+        ///
+        /// This is the shape a session's own commit loop produces. It commits
+        /// its children one `ensure_child` at a time and spawns each child's
+        /// actor before the next call, so a `Process` actor reconciles while
+        /// the owner-scoped listing holds nothing but `Process` rows. An empty
+        /// expected set read there is "this pass has not reached the endpoints
+        /// yet", and answering `NotRequired` from it started the row over an
+        /// endpoint access its owner was about to publish.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        #[ignore = "open finding H3: the gate still answers NotRequired from an unproven empty set"]
+        async fn a_process_waits_for_its_owners_child_set_to_settle() {
+            let manager = mid_pass_manager(false);
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
+                active: false,
+                ..FakeFacetsConfig::default()
+            }));
+            let mut f = fixture_owned_by(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+                Some(session_key()),
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the mid-pass reconcile"),
+                ReconcileOutcome::RetryScheduled,
+                "an owner mid-pass proves nothing about what this row consumes"
+            );
+            yield_until_effects_settled().await;
+            assert!(
+                fake.launch_calls().is_empty(),
+                "no launch over an expectation set nobody proved: {:?}",
+                fake.launch_calls()
+            );
+            assert!(
+                manager.view_reads().contains(&session_key()),
+                "the pass read the owner's own view rather than assuming its child set"
+            );
+            assert!(
+                f.requeue_calls().contains(&PROCESS_RESYNC),
+                "and it re-reads on the cadence: {:?}",
+                f.requeue_calls()
+            );
+
+            // The owner's pass completed and published for its own generation.
+            // Nothing else about the evidence moved, so this row's expected set
+            // is now provably empty and it launches exactly as a row outside
+            // any display neighbourhood always has.
+            publish(&manager, session_view(true));
+            assert!(
+                matches!(
+                    d.reconcile(&mut f.ctx).await.expect("the settled pass"),
+                    ReconcileOutcome::InProgress { .. }
+                ),
+                "a settled owner with no endpoint for this consumer admits the launch"
+            );
+            yield_until_effects_settled().await;
+            assert_eq!(
+                fake.launch_calls().len(),
+                1,
+                "the gate opens instead of deadlocking: {:?}",
+                fake.launch_calls()
+            );
+        }
+
+        /// A row with NO owner has no neighbourhood at all, so the only scope
+        /// that can prove what the Zone publishes for it is the Zone itself.
+        /// An endpoint outside any owner this row has publishes a delivered
+        /// relationship naming it, and the launch must carry that delivery -
+        /// not the empty set an owner-scoped read reports for a root row.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        #[ignore = "open finding H3: the gate still answers NotRequired from an unproven empty set"]
+        async fn a_root_row_reads_the_whole_zone_before_it_mints_no_expectation() {
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![endpoint_view(), binding_view(true)],
+            );
+            // The consumer row is a ROOT row: `owner_siblings()` answers an
+            // empty listing for it without asking the manager anything.
+            let mut f = GuestFixture::with(guest_row(), Arc::clone(&manager) as Arc<dyn ManagerEndpoint>);
+            let mut d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
+
+            assert!(
+                matches!(
+                    d.reconcile(&mut f.fixture.ctx).await.expect("the delivered pass"),
+                    ReconcileOutcome::InProgress { .. }
+                ),
+                "the delivered relationship admits the launch"
+            );
+            yield_until_effects_settled().await;
+            let realized = f.target.realized();
+            assert_eq!(realized.len(), 1, "one realize frame carries the delivery");
+            let realization = crate::worker_launch::GuestProcessRealization::decode(&realized[0].1)
+                .expect("the delivered realization decodes");
+            assert_eq!(
+                realization.deliveries().len(),
+                1,
+                "the endpoint outside this row's neighbourhood still delivers: a root row \
+                 whose empty owner-scoped listing was read as \"no relationship required\" \
+                 realizes with NO deliveries at all"
+            );
+        }
+
+        /// The Zone holds an `Endpoint` row whose own actor has published
+        /// nothing: the completeness proof cannot be established, so the row
+        /// issues no launch and no realize frame. Silence from one row in the
+        /// Zone is not the Zone saying it publishes nothing.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        #[ignore = "open finding H3: the gate still answers NotRequired from an unproven empty set"]
+        async fn a_zone_publication_this_row_cannot_prove_blocks_the_launch() {
+            let manager = binding_manager(vec![endpoint_row()], Vec::new());
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
+                active: false,
+                ..FakeFacetsConfig::default()
+            }));
+
+            let mut host = fixture_with(
+                test_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+            assert_eq!(
+                d.reconcile(&mut host.ctx).await.expect("the unproven pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            yield_until_effects_settled().await;
+            assert!(
+                fake.launch_calls().is_empty(),
+                "an unread Zone publication starts nothing: {:?}",
+                fake.launch_calls()
+            );
+
+            // The same evidence over a row committed to a Guest target, where
+            // the realize frame IS the launch.
+            let mut guest = GuestFixture::with(
+                guest_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut guest_driver = driver(Arc::clone(&fake)).await;
+            assert_eq!(
+                guest_driver
+                    .reconcile(&mut guest.fixture.ctx)
+                    .await
+                    .expect("the unproven pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            yield_until_effects_settled().await;
+            assert!(
+                guest.target.realized().is_empty(),
+                "no realize frame crosses the session while the Zone publication is unread: {:?}",
+                guest.target.realized()
+            );
+        }
+
+        /// A deferred gate is still a subscribed one: the rows the read HAD
+        /// proven are exactly the evidence this row must be woken for, so the
+        /// `Unproven` arm registers its watches instead of leaving the row on
+        /// the bare resync cadence (R12, R21).
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn a_deferred_gate_subscribes_to_the_evidence_it_proved() {
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![unpublished_endpoint_view(), binding_view(true)],
+            );
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
+                active: false,
+                ..FakeFacetsConfig::default()
+            }));
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the unproven pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            assert_eq!(
+                manager.watch_cycle(),
+                (1, 0),
+                "the endpoint this pass read before it faulted is the row it subscribed to"
+            );
+        }
+
+        /// A runtime watch is one-shot: AE2 satisfies it and removes it. A
+        /// driver that only ever registers a target once is therefore
+        /// subscribed to it exactly once, and the SECOND projection change on
+        /// that target - the downgrade after a relaunch - is never delivered
+        /// to it. The registration this row holds is therefore released and
+        /// armed again once the target's evidence has MOVED, so the second
+        /// change still wakes this row (R21, AE18).
+        ///
+        /// It is moved evidence, not a pass, that spends a registration: the
+        /// evidence a registration was armed against is exactly the pair its
+        /// target compares when it publishes, so a target whose pair stands
+        /// has not satisfied it. A pass over evidence that did not move
+        /// therefore places none and releases none, which is what keeps a
+        /// converged row from spending two manager round trips per dependency
+        /// on every tick it re-reads.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn the_evidence_subscription_rearms_when_the_evidence_moves() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![endpoint_view(), binding_view(true)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            expect_in_progress(d.reconcile(&mut f.ctx).await);
+            assert_eq!(
+                manager.watch_cycle(),
+                (2, 0),
+                "the first pass subscribes to the endpoint and the relationship"
+            );
+
+            fake.push_adoption(ProviderAdoption::Adopted(adopted_report()));
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the observed pass"),
+                ReconcileOutcome::Satisfied
+            );
+            assert_eq!(
+                manager.watch_cycle(),
+                (2, 0),
+                "a pass over evidence that stood releases nothing and arms nothing: both \
+                 registrations are still live in their targets, so re-arming them would buy \
+                 no wake-up and cost two round trips per dependency"
+            );
+
+            // The relationship's own evidence moves - the delivery is
+            // withdrawn - so the registration standing on it is spent, and the
+            // endpoint's did not move, so the one standing on it is not.
+            publish(&manager, binding_view(false));
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the withdrawn pass"),
+                ReconcileOutcome::RetryScheduled,
+                "a withdrawn delivery defers the launch"
+            );
+            assert_eq!(
+                manager.watch_cycle(),
+                (3, 1),
+                "exactly the registration whose evidence moved was released and armed again, so \
+                 a second change on that relationship still wakes this row, and the endpoint's \
+                 untouched registration is left standing"
+            );
+        }
+
+        /// The retention barrier reads the same scope the completeness proof
+        /// does. A root `Process` row has no owner-scoped neighbourhood at
+        /// all, and a committed relationship naming it anywhere in the Zone
+        /// still needs this row's committed consumer reference to release: the
+        /// row is retained until that relationship is gone (R22, AE15).
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        #[ignore = "open finding H3: the retention barrier still reads an owner-scoped listing"]
+        async fn a_process_row_does_not_retire_while_the_zone_still_publishes_it() {
+            let manager = binding_manager(
+                vec![endpoint_row_with_spec(&endpoint_spec_naming("Process/other")), binding_row()],
+                vec![endpoint_view(), binding_view(true)],
+            );
+            let mut f =
+                fixture_with(test_row(), Arc::clone(&manager) as Arc<dyn ManagerEndpoint>);
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
+                adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
+                ..FakeFacetsConfig::default()
+            }));
+            let mut d = driver(fake).await;
+
+            let held = d
+                .delete(&mut f.ctx)
+                .await
+                .expect_err("a relationship the Zone publishes holds this row");
+            assert_eq!(
+                held.class(),
+                FailureClass::Retryable,
+                "the barrier defers the row rather than failing it"
+            );
+
+            // The relationship row is gone: nothing in the Zone names this
+            // consumer any more, so the barrier releases and the row retires.
+            let manager = binding_manager(
+                vec![endpoint_row_with_spec(&endpoint_spec_naming("Process/other"))],
+                vec![endpoint_view()],
+            );
+            let mut f = fixture_with(test_row(), Arc::clone(&manager) as Arc<dyn ManagerEndpoint>);
+            let mut d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
+            let outcome = d.delete(&mut f.ctx).await;
+            assert!(
+                outcome.is_ok(),
+                "with the published relationship retired, the row retires: {outcome:?}"
             );
         }
     }

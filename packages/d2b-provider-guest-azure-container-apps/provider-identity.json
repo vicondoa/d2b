@@ -2,6 +2,7 @@
   "crate": "d2b-provider-guest-azure-container-apps",
   "family": "runtime-azure-container-apps",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "runtime-azure-container-apps",
     "sharesIdentityWith": ["runtime"],

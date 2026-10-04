@@ -145,15 +145,28 @@ const PROVIDER_ARTIFACT_REQUIRED_FILES: &[&str] = &[
     "share/d2b/provider/config-schema.json",
 ];
 
-/// The fixed-bootstrap Provider identity whose packaged artifact ships no
-/// binary: the deployment registers it as the root of the graph without
-/// materializing a process for it, so the remaining fixed-bootstrap entry is
-/// the process provider whose self-binding authorizes materialization.
+/// The one fixed-bootstrap Provider identity whose packaged artifact ships no
+/// binary, as the identity authority's declarations state it.
 ///
-/// Which identities are fixed-bootstrap at all is the identity authority's
-/// to state; this constant names which of them is the non-binary one, and the
-/// render refuses a value outside that set.
-const NO_BINARY_BOOTSTRAP_PROVIDER: &str = "system-core";
+/// Which crate owns the deployment's non-binary graph root is a fact about that
+/// crate's own artifact, so the crate's `provider-identity.json` states it and
+/// nothing here names an identity: the catalog has to carry exactly one, and
+/// no declaration naming one, or two declarations naming one each, is a
+/// refusal rather than a row that points at nothing or at two answers.
+fn no_binary_bootstrap_provider<'a>(declared: &'a [(&'a str, &'a str)]) -> Result<&'a str, String> {
+    match declared {
+        [(_, identity)] => Ok(identity),
+        [] => Err("no-binary-bootstrap-unknown: no provider crate's `provider-identity.json` states that the artifact it packages ships no binary; the deployment registers that identity as the root of the graph without materializing a process for it".to_owned()),
+        claimants => Err(format!(
+            "no-binary-bootstrap-ambiguous: crates ({}) each state that the artifact they package ships no binary, so the catalog has no single non-binary bootstrap Provider to name",
+            claimants
+                .iter()
+                .map(|(crate_name, _)| *crate_name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
 
 fn nix_string(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len() + 2);
@@ -216,11 +229,11 @@ fn generated_catalog_shape_module(identities: &ProviderIdentities) -> Result<Str
         .filter(|(_, identity)| bootstrap_set.contains(*identity))
         .map(|(_, identity)| *identity)
         .collect();
-    if !bootstrap_set.contains(NO_BINARY_BOOTSTRAP_PROVIDER) {
-        return Err(format!(
-            "no-binary-bootstrap-unknown: {NO_BINARY_BOOTSTRAP_PROVIDER} is not one of the fixed-bootstrap identities the authority declares"
-        ));
-    }
+    // The non-binary member of that set is a property of the crate's own
+    // packaged artifact, so it is read from the same declarations and refuses
+    // before a row is emitted if the tree states no such crate or two.
+    let non_binary = identities.non_binary_bootstrap_identities();
+    let no_binary = no_binary_bootstrap_provider(&non_binary)?;
     out.push_str(GENERATED_HEADER);
     out.push_str(
         "#\n\
@@ -319,7 +332,7 @@ fn generated_catalog_shape_module(identities: &ProviderIdentities) -> Result<Str
     ));
     out.push_str(&format!(
         "    noBinaryBootstrapProvider = {};\n",
-        nix_string(NO_BINARY_BOOTSTRAP_PROVIDER)
+        nix_string(no_binary)
     ));
     out.push_str("    fixedBootstrapProviders = [\n");
     for identity in &bootstrap_ids {
@@ -527,9 +540,21 @@ mod tests {
                 "share/d2b/provider/config-schema.json",
             ]
         );
-        assert_eq!(NO_BINARY_BOOTSTRAP_PROVIDER, "system-core");
+        // The non-binary member is the fixed-bootstrap identity the authority's
+        // declarations single out: this module names no identity of its own,
+        // so the value it renders is the one the join returns.
+        let identities = identities();
+        let declared = identities.non_binary_bootstrap_identities();
+        let non_binary = no_binary_bootstrap_provider(&declared)
+            .expect("exactly one crate states that its packaged artifact ships no binary");
+        assert!(
+            identities
+                .fixed_bootstrap_identities()
+                .into_iter()
+                .any(|(_, identity)| identity == non_binary)
+        );
         assert_eq!(
-            identities()
+            identities
                 .fixed_bootstrap_identities()
                 .into_iter()
                 .map(|(_, identity)| identity)
@@ -548,6 +573,33 @@ mod tests {
         );
     }
 
+    /// The catalog carries exactly one non-binary bootstrap Provider, so a
+    /// tree whose declarations name none and one that names two are refusals
+    /// rather than a rendered row pointing at nothing or at two answers.
+    #[test]
+    fn the_non_binary_bootstrap_provider_refuses_anything_but_one() {
+        assert_eq!(
+            no_binary_bootstrap_provider(&[("d2b-provider-alpha", "alpha")]),
+            Ok("alpha")
+        );
+        assert!(
+            no_binary_bootstrap_provider(&[])
+                .expect_err("no declaration states that an artifact ships no binary")
+                .contains("no-binary-bootstrap-unknown")
+        );
+        let refusal = no_binary_bootstrap_provider(&[
+            ("d2b-provider-alpha", "alpha"),
+            ("d2b-provider-beta", "beta"),
+        ])
+        .expect_err("two declarations state that their artifacts ship no binary");
+        assert!(
+            refusal.contains("no-binary-bootstrap-ambiguous")
+                && refusal.contains("d2b-provider-alpha")
+                && refusal.contains("d2b-provider-beta"),
+            "the refusal names both claimants: {refusal}"
+        );
+    }
+
     #[test]
     fn generated_provider_matrix_contains_every_closed_identity() {
         let identities = identities();
@@ -561,6 +613,13 @@ mod tests {
             assert!(rendered.contains(row.bazel_target));
         }
         assert!(rendered.contains("fixedBootstrapProviderIds"));
+        // The one non-binary member the artifact carries is the identity the
+        // declarations single out, read through the same join the render uses.
+        assert!(rendered.contains(&format!(
+            "noBinaryBootstrapProvider = \"{}\";",
+            no_binary_bootstrap_provider(&identities.non_binary_bootstrap_identities())
+                .expect("exactly one crate states that its packaged artifact ships no binary")
+        )));
     }
 
     /// The rendered rows carry no identity of their own: the `provider` and

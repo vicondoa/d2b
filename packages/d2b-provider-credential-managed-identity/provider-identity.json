@@ -2,6 +2,7 @@
   "crate": "d2b-provider-credential-managed-identity",
   "family": "credential-managed-identity",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "credential-managed-identity",
     "sharesIdentityWith": ["runtime"],

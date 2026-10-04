@@ -2,6 +2,7 @@
   "crate": "d2b-provider-transport-azure-relay",
   "family": "transport-azure-relay",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "transport-azure-relay",
     "sharesIdentityWith": ["runtime"],

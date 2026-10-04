@@ -491,7 +491,7 @@ mod tests {
             self.write(
                 &format!("packages/{crate_name}/provider-identity.json"),
                 &format!(
-                    "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{runtime}\",\n  \"roles\": [\"runtime\"],\n  \"product\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"runtime\": {{\n    \"identity\": \"{runtime}\",\n    \"evidence\": [\n      {{\n        \"path\": \"packages/{crate_name}/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }}\n    ]\n  }},\n  \"session\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"blockers\": []\n}}\n"
+                    "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{runtime}\",\n  \"roles\": [\"runtime\"],\n  \"nonBinary\": false,\n  \"product\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"runtime\": {{\n    \"identity\": \"{runtime}\",\n    \"evidence\": [\n      {{\n        \"path\": \"packages/{crate_name}/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }}\n    ]\n  }},\n  \"session\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"blockers\": []\n}}\n"
                 ),
             );
         }
@@ -599,7 +599,7 @@ mod tests {
         fixture.write_sources("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
         fixture.write(
             "packages/d2b-provider-fixture/provider-identity.json",
-            "{\n  \"crate\": \"d2b-provider-fixture\",\n  \"family\": \"fixture\",\n  \"roles\": [\"product\"],\n  \"product\": {\n    \"identity\": \"fixture\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-fixture/src/driver.rs\",\n        \"symbol\": \"DriverDescriptor\"\n      }\n    ]\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"composition-hosted\"\n  },\n  \"session\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"blockers\": []\n}\n",
+            "{\n  \"crate\": \"d2b-provider-fixture\",\n  \"family\": \"fixture\",\n  \"roles\": [\"product\"],\n  \"nonBinary\": false,\n  \"product\": {\n    \"identity\": \"fixture\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-fixture/src/driver.rs\",\n        \"symbol\": \"DriverDescriptor\"\n      }\n    ]\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"composition-hosted\"\n  },\n  \"session\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"blockers\": []\n}\n",
         );
         fixture.write_declaration("d2b-provider-fixture", &["fixture.d2bus.org/alpha"]);
         let errors = parity_errors(&fixture.root).expect("parity loads");

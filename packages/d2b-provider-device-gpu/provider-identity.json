@@ -2,6 +2,7 @@
   "crate": "d2b-provider-device-gpu",
   "family": "device-gpu",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "device-gpu",
     "sharesIdentityWith": ["runtime"],

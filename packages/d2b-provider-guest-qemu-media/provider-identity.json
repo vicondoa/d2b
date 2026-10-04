@@ -2,6 +2,7 @@
   "crate": "d2b-provider-guest-qemu-media",
   "family": "runtime-qemu-media",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "runtime-qemu-media",
     "sharesIdentityWith": ["runtime"],

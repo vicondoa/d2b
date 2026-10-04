@@ -2,6 +2,7 @@
   "crate": "d2b-provider-guest-azure-virtual-machine",
   "family": "runtime-azure-virtual-machine",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "runtime-azure-virtual-machine",
     "sharesIdentityWith": ["runtime"],

@@ -2,6 +2,7 @@
   "crate": "d2b-provider-user",
   "family": "user",
   "roles": ["runtime"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

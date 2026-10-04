@@ -2,6 +2,7 @@
   "crate": "d2b-provider-shell-pool",
   "family": "shell-pool",
   "roles": ["runtime"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

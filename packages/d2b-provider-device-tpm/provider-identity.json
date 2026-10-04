@@ -2,6 +2,7 @@
   "crate": "d2b-provider-device-tpm",
   "family": "device-tpm",
   "roles": ["product", "shared-driver"],
+  "nonBinary": false,
   "product": {
     "identity": "device-tpm",
     "evidence": [

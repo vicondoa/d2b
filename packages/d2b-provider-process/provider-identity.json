@@ -2,6 +2,7 @@
   "crate": "d2b-provider-process",
   "family": "process",
   "roles": ["runtime"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

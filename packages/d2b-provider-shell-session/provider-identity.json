@@ -2,6 +2,7 @@
   "crate": "d2b-provider-shell-session",
   "family": "shell-session",
   "roles": ["runtime"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

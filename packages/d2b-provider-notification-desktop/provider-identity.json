@@ -2,6 +2,7 @@
   "crate": "d2b-provider-notification-desktop",
   "family": "notification-desktop",
   "roles": ["product", "session"],
+  "nonBinary": false,
   "product": {
     "identity": "notification-desktop",
     "sharesIdentityWith": ["session"],

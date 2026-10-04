@@ -2,6 +2,7 @@
   "crate": "d2b-provider-credential-secret-service",
   "family": "credential-secret-service",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "credential-secret-service",
     "sharesIdentityWith": ["runtime"],

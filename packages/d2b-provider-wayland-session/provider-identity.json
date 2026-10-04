@@ -2,6 +2,7 @@
   "crate": "d2b-provider-wayland-session",
   "family": "wayland-session",
   "roles": ["runtime"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

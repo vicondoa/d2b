@@ -1428,7 +1428,7 @@ mod tests {
             self.write_raw(
                 &format!("packages/{crate_name}/provider-identity.json"),
                 &format!(
-                    "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{family}\",\n  \"roles\": {roles},\n  \"product\": {product},\n  \"runtime\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"session\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"blockers\": []\n}}\n"
+                    "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{family}\",\n  \"roles\": {roles},\n  \"nonBinary\": false,\n  \"product\": {product},\n  \"runtime\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"session\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"blockers\": []\n}}\n"
                 ),
             );
         }

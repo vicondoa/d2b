@@ -1057,7 +1057,7 @@ mod tests {
             );
             self.write(
                 "packages/d2b-provider-system-core/provider-identity.json",
-                "{\n  \"crate\": \"d2b-provider-system-core\",\n  \"family\": \"system-core\",\n  \"roles\": [\"product\", \"session\", \"fixed-bootstrap\"],\n  \"product\": {\n    \"identity\": \"system-core\",\n    \"sharesIdentityWith\": [\"session\"],\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-system-core/src/lib.rs\",\n        \"symbol\": \"PROVIDER_NAME\"\n      }\n    ]\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"session\": {\n    \"identity\": \"system-core\",\n    \"sharesIdentityWith\": [\"product\"],\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-system-core/src/lib.rs\",\n        \"symbol\": \"PROVIDER_NAME\"\n      }\n    ]\n  },\n  \"blockers\": []\n}\n",
+                "{\n  \"crate\": \"d2b-provider-system-core\",\n  \"family\": \"system-core\",\n  \"roles\": [\"product\", \"session\", \"fixed-bootstrap\"],\n  \"nonBinary\": false,\n  \"product\": {\n    \"identity\": \"system-core\",\n    \"sharesIdentityWith\": [\"session\"],\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-system-core/src/lib.rs\",\n        \"symbol\": \"PROVIDER_NAME\"\n      }\n    ]\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"session\": {\n    \"identity\": \"system-core\",\n    \"sharesIdentityWith\": [\"product\"],\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-system-core/src/lib.rs\",\n        \"symbol\": \"PROVIDER_NAME\"\n      }\n    ]\n  },\n  \"blockers\": []\n}\n",
             );
         }
 
@@ -1107,7 +1107,7 @@ mod tests {
             self.write(
                 &format!("packages/{crate_name}/provider-identity.json"),
                 &format!(
-                    "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{family}\",\n  \"roles\": [\"runtime\", \"session\"],\n  \"product\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"runtime\": {{\n    \"identity\": \"{family}\",\n    \"sharesIdentityWith\": [\"session\"],\n    \"evidence\": [\n      {{\n        \"path\": \"packages/{crate_name}/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }}\n    ]\n  }},\n  \"session\": {{\n    \"identity\": \"{family}\",\n    \"sharesIdentityWith\": [\"runtime\"],\n    \"evidence\": [\n      {{\n        \"path\": \"packages/{crate_name}/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }}\n    ]\n  }},\n  \"blockers\": []\n}}\n"
+                    "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{family}\",\n  \"roles\": [\"runtime\", \"session\"],\n  \"nonBinary\": false,\n  \"product\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"runtime\": {{\n    \"identity\": \"{family}\",\n    \"sharesIdentityWith\": [\"session\"],\n    \"evidence\": [\n      {{\n        \"path\": \"packages/{crate_name}/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }}\n    ]\n  }},\n  \"session\": {{\n    \"identity\": \"{family}\",\n    \"sharesIdentityWith\": [\"runtime\"],\n    \"evidence\": [\n      {{\n        \"path\": \"packages/{crate_name}/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }}\n    ]\n  }},\n  \"blockers\": []\n}}\n"
                 ),
             );
             self.write(
@@ -1379,7 +1379,7 @@ mod tests {
         fixture.write_crate("d2b-provider-fixture", "export", "fixture.d2bus.org/export");
         fixture.write(
             "packages/d2b-provider-fixture/provider-identity.json",
-            "{\n  \"crate\": \"d2b-provider-fixture\",\n  \"family\": \"fixture\",\n  \"roles\": [\"runtime\"],\n  \"product\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"runtime\": {\n    \"identity\": \"fixture\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-fixture/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }\n    ]\n  },\n  \"session\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"blockers\": []\n}\n",
+            "{\n  \"crate\": \"d2b-provider-fixture\",\n  \"family\": \"fixture\",\n  \"roles\": [\"runtime\"],\n  \"nonBinary\": false,\n  \"product\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"runtime\": {\n    \"identity\": \"fixture\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-fixture/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }\n    ]\n  },\n  \"session\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"blockers\": []\n}\n",
         );
         let error = undeclared_compiled_handlers(&fixture.root)
             .expect_err("a catalog with no session identity is refused");
@@ -1398,7 +1398,7 @@ mod tests {
         fixture.write_crate("d2b-provider-fixture", "export", "fixture.d2bus.org/export");
         fixture.write(
             "packages/d2b-provider-fixture/provider-identity.json",
-            "{\n  \"crate\": \"d2b-provider-fixture\",\n  \"family\": \"fixture\",\n  \"roles\": [\"session\"],\n  \"product\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"composition-hosted\"\n  },\n  \"session\": {\n    \"identity\": \"fixture\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-fixture/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }\n    ]\n  },\n  \"blockers\": []\n}\n",
+            "{\n  \"crate\": \"d2b-provider-fixture\",\n  \"family\": \"fixture\",\n  \"roles\": [\"session\"],\n  \"nonBinary\": false,\n  \"product\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"composition-hosted\"\n  },\n  \"session\": {\n    \"identity\": \"fixture\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-fixture/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }\n    ]\n  },\n  \"blockers\": []\n}\n",
         );
         let error = undeclared_compiled_handlers(&fixture.root)
             .expect_err("a registration with no runtime identity is refused");

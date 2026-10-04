@@ -128,7 +128,14 @@ refusal. The categories a declaration can fall into:
   at startup, outside ordinary Process projection and outside the ProviderSet
   runtime registrations. It lives on the product surface because that is where
   its artifact ships; its startup is a deployment fact, so a fixed-bootstrap
-  crate owns no runtime identity and never becomes a normal runtime row.
+  crate owns no runtime identity and never becomes a normal runtime row. A
+  declaration also states whether the artifact it packages contains a binary,
+  and that flag is what selects the catalog's one non-binary bootstrap entry:
+  the deployment registers the non-binary identity as the root of its graph
+  without materializing a process for it, so the flag belongs to a
+  fixed-bootstrap crate owning a product identity, exactly one crate may state
+  it, and the generator reads the identity from the declaration rather than
+  naming one.
 - **shared-driver** - the crate declares a driver another family's
   registration runs, so it owns the identity that driver serves. A crate in
   this category registers no Provider of its own.

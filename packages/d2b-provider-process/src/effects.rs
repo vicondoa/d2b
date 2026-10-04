@@ -561,9 +561,26 @@ pub enum ProcessBindingPreparation {
     ///
     /// A missing row, an endpoint that is not ready, an undelivered, replaced
     /// or draining relationship, and a relationship whose source side is still
-    /// incomplete all land here. The launch requeues through the runtime's
-    /// retryable path and issues NO effect.
+    /// incomplete all land here. Every one of them was READ: the evidence says
+    /// the grant does not stand, so a live helper stops (R21).
     Pending,
+    /// The evidence could not be READ this pass.
+    ///
+    /// A source row that has published nothing for its current generation, a
+    /// required relationship the manager does not answer for, and an endpoint
+    /// that has not named the realization it would grant over are all silence
+    /// rather than a statement - and silence is not a publication (R18). A
+    /// row mid-pass republishes its evidence within the pass, so this answer
+    /// is transient by construction, which is exactly why it must not be
+    /// confused with [`Self::Pending`]: R21 stops a helper on a proven
+    /// binding LOSS, and a reader that landed inside a source's own pass has
+    /// proven nothing at all. Stopping here is what turns one unlucky read
+    /// into a relaunch loop, so this answer defers and keeps whatever the row
+    /// is already running.
+    ///
+    /// Only a fault produces this; [`resolve_process_binding_preparation`]
+    /// reads a complete observation and cannot.
+    Deferred,
     /// The evidence is malformed or foreign, and retrying cannot fix it.
     ///
     /// Terminal for this launch: an observation naming a relationship this
@@ -661,8 +678,8 @@ impl BindingAuthorityLease {
 /// The outcomes are closed and the mapping is total (KTD6):
 ///
 /// - an empty expected set is [`ProcessBindingPreparation::NotRequired`];
-/// - a missing row, an endpoint that is not `Ready`, an undelivered, replaced
-///   or draining relationship, an absent projection, and a relationship whose
+/// - a row the observation does not carry, an endpoint that is not `Ready`, an
+///   undelivered, replaced or draining relationship, and a relationship whose
 ///   source side is still incomplete are
 ///   [`ProcessBindingPreparation::Pending`] - the launch defers and issues no
 ///   effect;
@@ -672,6 +689,14 @@ impl BindingAuthorityLease {
 ///   because retrying the same evidence cannot change either answer;
 /// - everything matching is [`ProcessBindingPreparation::Ready`] carrying the
 ///   sealed lease.
+///
+/// The mapping is total over a COMPLETE observation, and that is what makes
+/// the closure sound: this function is handed evidence the caller already
+/// read, so every answer it can reach is a statement about that evidence.
+/// [`ProcessBindingPreparation::Deferred`] is the one answer it cannot produce,
+/// because "this pass could not read the evidence" is a fact about the READ
+/// and not about the grant - the caller knows that from the fault it got
+/// instead of an observation.
 pub fn resolve_process_binding_preparation(
     consumer: ResourceUid,
     expected: &[ExpectedBindingRow],

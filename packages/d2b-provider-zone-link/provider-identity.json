@@ -2,6 +2,7 @@
   "crate": "d2b-provider-zone-link",
   "family": "zone-link",
   "roles": ["resource-family"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

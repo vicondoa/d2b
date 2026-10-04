@@ -719,6 +719,17 @@ impl ResourceContext {
             .await
     }
 
+    /// Release one internal watch this row registered ([`Self::watch`]).
+    ///
+    /// A runtime registration is one-shot - AE2 satisfies and REMOVES it - so
+    /// a driver that keeps one target subscribed across passes has to release
+    /// the registration it is replacing. Without this the target's watcher set
+    /// grows by one registration per pass and every later change on that
+    /// target is delivered once per spent registration.
+    pub async fn cancel_watch(&mut self, watch: WatchId) -> Result<(), ResourceError> {
+        self.manager.cancel_watch(watch).await
+    }
+
     /// Schedule exactly one reconcile after `after` (R13; spec section 32).
     /// Runtime-only: the schedule rides the injected [`RequeueScheduler`]
     /// and is never persisted.

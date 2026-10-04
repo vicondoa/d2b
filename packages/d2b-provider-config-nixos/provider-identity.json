@@ -2,6 +2,7 @@
   "crate": "d2b-provider-config-nixos",
   "family": "config-nixos",
   "roles": ["session"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

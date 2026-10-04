@@ -9356,7 +9356,7 @@ mod tests {
         fs::write(
             package.join("provider-identity.json"),
             format!(
-                "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{family}\",\n  \"roles\": {roles},\n  \"product\": {product},\n  \"runtime\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"session\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"blockers\": []\n}}\n"
+                "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{family}\",\n  \"roles\": {roles},\n  \"nonBinary\": false,\n  \"product\": {product},\n  \"runtime\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"session\": {{\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  }},\n  \"blockers\": []\n}}\n"
             ),
         )
         .unwrap();
@@ -9691,7 +9691,7 @@ mod tests {
         .unwrap();
         fs::write(
             fixture.root.join("packages/d2b-provider-broken/provider-identity.json"),
-            "{\n  \"crate\": \"d2b-provider-broken\",\n  \"family\": \"broken\",\n  \"roles\": [\"product\"],\n  \"product\": {\n    \"identity\": \"not a name\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-broken/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }\n    ]\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"session\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"blockers\": []\n}\n",
+            "{\n  \"crate\": \"d2b-provider-broken\",\n  \"family\": \"broken\",\n  \"roles\": [\"product\"],\n  \"nonBinary\": false,\n  \"product\": {\n    \"identity\": \"not a name\",\n    \"evidence\": [\n      {\n        \"path\": \"packages/d2b-provider-broken/src/identity.rs\",\n        \"symbol\": \"PROVIDER_IDENTITY\"\n      }\n    ]\n  },\n  \"runtime\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"session\": {\n    \"identity\": null,\n    \"reason\": \"no-identity-owned\"\n  },\n  \"blockers\": []\n}\n",
         )
         .unwrap();
         fixture.set_members(&[

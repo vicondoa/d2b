@@ -2,6 +2,7 @@
   "crate": "d2b-provider-clipboard-wayland",
   "family": "clipboard-wayland",
   "roles": ["product", "session"],
+  "nonBinary": false,
   "product": {
     "identity": "clipboard-wayland",
     "sharesIdentityWith": ["session"],

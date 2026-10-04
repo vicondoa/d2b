@@ -2,6 +2,7 @@
   "crate": "d2b-provider-guest-cloud-hypervisor",
   "family": "runtime-cloud-hypervisor",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "runtime-cloud-hypervisor",
     "sharesIdentityWith": ["runtime"],

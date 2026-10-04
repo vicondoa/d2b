@@ -2,6 +2,7 @@
   "crate": "d2b-provider-audio-service",
   "family": "audio-service",
   "roles": ["runtime"],
+  "nonBinary": false,
   "product": {
     "identity": null,
     "reason": "no-identity-owned"

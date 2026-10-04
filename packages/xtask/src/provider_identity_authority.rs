@@ -4,9 +4,10 @@
 //! provider crate's Provider identities are stated: the identity it owns on
 //! each of the three identity surfaces (product, runtime, session), the closed
 //! classification roles that ownership implies (fixed bootstrap, shared
-//! driver, and the identity-less classes), the production source that names
-//! each identity, the closed reason every empty surface states, and any
-//! external blocker the crate is waiting on.
+//! driver, and the identity-less classes), whether the packaged artifact it
+//! ships contains a binary, the production source that names each identity,
+//! the closed reason every empty surface states, and any external blocker the
+//! crate is waiting on.
 //!
 //! The declaration is the identity authority the runtime registrations, the
 //! session service catalogs, and the product packaging metadata resolve their
@@ -29,11 +30,12 @@
 //! matrix this declaration set replaces.
 //!
 //! Uniqueness is global and explicit: an identity names exactly one owning
-//! crate across every surface, and the one admitted repetition - the same
-//! crate naming one identity on two of its own surfaces - has to be stated on
-//! both surfaces before it loads. Nothing here fails open: a missing, renamed,
-//! malformed, duplicated, unexplained, unevidenced, or matrix-sourced
-//! declaration is a refusal, not a row with defaults.
+//! crate across every surface, the one admitted repetition - the same crate
+//! naming one identity on two of its own surfaces - has to be stated on both
+//! surfaces before it loads, and exactly one crate may state that its packaged
+//! artifact ships no binary. Nothing here fails open: a missing, renamed,
+//! malformed, duplicated, unexplained, unevidenced, unstated, or
+//! matrix-sourced declaration is a refusal, not a row with defaults.
 //!
 //! The coverage gate requires every provider crate to carry the
 //! declaration: [`Declaration::ProviderIdentity`] is a mandatory declaration
@@ -344,6 +346,16 @@ pub(crate) struct IdentityDeclaration {
     family: String,
     /// The closed classification roles this crate carries.
     roles: Vec<Role>,
+    /// Whether the packaged artifact this crate ships contains a binary.
+    ///
+    /// The deployment registers a fixed-bootstrap Provider as the root of its
+    /// graph without materializing a process for it, so one of them ships no
+    /// binary at all. The flag is a fact about the crate's own artifact and is
+    /// stated rather than read out of a directory name or a packaging row, and
+    /// it is not defaulted: a declaration that does not say whether its
+    /// artifact ships a binary is refused at the schema rather than read as
+    /// either answer.
+    non_binary: bool,
     /// The product-plane identity slot.
     product: SurfaceSlot,
     /// The runtime-plane identity slot.
@@ -383,6 +395,12 @@ impl IdentityDeclaration {
     /// The external issues this declaration records.
     fn blockers(&self) -> &[Blocker] {
         &self.blockers
+    }
+
+    /// Whether this crate states that the packaged artifact it ships contains
+    /// no binary.
+    fn non_binary(&self) -> bool {
+        self.non_binary
     }
 
     /// Whether this crate carries one classification role.
@@ -494,6 +512,26 @@ impl ProviderIdentities {
                 let identity = declaration.slot(Surface::Product).identity()?;
                 declaration
                     .has_role(Role::FixedBootstrap)
+                    .then_some((crate_name.as_str(), identity))
+            })
+            .collect()
+    }
+
+    /// Every `(crate, identity)` pair whose declaration states that the
+    /// packaged artifact it ships contains no binary, in crate-name order.
+    ///
+    /// The load gates the pair twice over: a crate stating the flag without
+    /// fixed-bootstrap ownership and a product identity is refused, and two
+    /// crates stating it is a refusal, so the answer is at most one row and a
+    /// consumer reads the deployment's graph root from the authority rather
+    /// than naming one identity itself.
+    pub(crate) fn non_binary_bootstrap_identities(&self) -> Vec<(&str, &str)> {
+        self.declarations
+            .iter()
+            .filter_map(|(crate_name, declaration)| {
+                let identity = declaration.slot(Surface::Product).identity()?;
+                declaration
+                    .non_binary()
                     .then_some((crate_name.as_str(), identity))
             })
             .collect()
@@ -625,7 +663,26 @@ fn declaration_errors(
             }
         }
     }
+    errors.extend(non_binary_errors(declarations));
     errors
+}
+
+/// The non-binary violations: the flag is a fact about one crate's packaged
+/// artifact, and the deployment registers exactly one Provider as the root of
+/// its graph without materializing a process for it.
+fn non_binary_errors(declarations: &BTreeMap<String, IdentityDeclaration>) -> Vec<String> {
+    let claimants: Vec<&str> = declarations
+        .iter()
+        .filter(|(_, declaration)| declaration.non_binary())
+        .map(|(crate_name, _)| crate_name.as_str())
+        .collect();
+    if claimants.len() > 1 {
+        return vec![format!(
+            "non-binary-bootstrap-declared-twice: crates ({}) each state that the artifact they package ships no binary; exactly one fixed-bootstrap Provider is the deployment's graph root, and the remaining fixed-bootstrap entry is the process provider whose self-binding authorizes materialization",
+            claimants.join(", ")
+        )];
+    }
+    Vec::new()
 }
 
 /// One crate's declaration violations, in a fixed order: the family, the
@@ -764,6 +821,14 @@ fn role_errors(crate_name: &str, declaration: &IdentityDeclaration) -> Vec<Strin
     {
         errors.push(format!(
             "fixed-bootstrap-without-product: crate {crate_name} claims fixed-bootstrap ownership but declares no product identity; a fixed-bootstrap Provider identity is a packaged product identity whose startup is a deployment fact, not a ProviderSet runtime registration"
+        ));
+    }
+    if declaration.non_binary()
+        && !(declaration.has_role(Role::FixedBootstrap)
+            && declaration.slot(Surface::Product).identity().is_some())
+    {
+        errors.push(format!(
+            "non-binary-without-fixed-bootstrap: crate {crate_name} states that the artifact it packages ships no binary but claims no fixed-bootstrap product identity; only the fixed-bootstrap Provider the deployment registers without materializing a process ships no binary, and every other packaged artifact carries one"
         ));
     }
     if declaration.has_role(Role::SharedDriver) && !owns_any {
@@ -1176,6 +1241,7 @@ mod tests {
                     "d2b-provider-fixture",
                     "process-systemd",
                     &["product", "runtime"],
+                    false,
                     &slot(
                         Some("system-systemd"),
                         None,
@@ -1219,6 +1285,7 @@ mod tests {
                     crate_name,
                     family,
                     &[surface.key()],
+                    false,
                     &product,
                     &runtime,
                     &session,
@@ -1298,13 +1365,14 @@ mod tests {
         crate_name: &str,
         family: &str,
         roles: &[&str],
+        non_binary: bool,
         product: &str,
         runtime: &str,
         session: &str,
         blockers: &str,
     ) -> String {
         format!(
-            "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{family}\",\n  \"roles\": [{}],\n  \"product\": {product},\n  \"runtime\": {runtime},\n  \"session\": {session},\n  \"blockers\": {blockers}\n}}",
+            "{{\n  \"crate\": \"{crate_name}\",\n  \"family\": \"{family}\",\n  \"roles\": [{}],\n  \"nonBinary\": {non_binary},\n  \"product\": {product},\n  \"runtime\": {runtime},\n  \"session\": {session},\n  \"blockers\": {blockers}\n}}",
             quoted(roles)
         )
     }
@@ -1420,6 +1488,7 @@ mod tests {
                 "d2b-provider-execution-policy",
                 "execution-policy",
                 &["no-identity", "resource-family"],
+                false,
                 &null_slot("no-identity-owned"),
                 &null_slot("no-identity-owned"),
                 &null_slot("no-identity-owned"),
@@ -1461,6 +1530,7 @@ mod tests {
                 "d2b-provider-process-minijail",
                 "system-minijail",
                 &["product", "fixed-bootstrap"],
+                false,
                 &identity_slot("system-minijail", (NIX_SOURCE, NIX_SYMBOL)),
                 &null_slot("no-identity-owned"),
                 &null_slot("no-identity-owned"),
@@ -1493,6 +1563,7 @@ mod tests {
                 "d2b-provider-device-tpm",
                 "device-tpm",
                 &["product", "shared-driver"],
+                false,
                 &identity_slot("device-tpm", (NIX_SOURCE, NIX_SYMBOL)),
                 &null_slot("composition-hosted"),
                 &null_slot("no-identity-owned"),
@@ -1543,6 +1614,7 @@ mod tests {
                 "d2b-provider-fixture",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -1595,6 +1667,7 @@ mod tests {
                     "d2b-provider-alpha",
                     "alpha",
                     &["runtime"],
+                    false,
                     &null_slot("no-identity-owned"),
                     &identity_slot(identity, (RUST_SOURCE, RUST_SYMBOL)),
                     &null_slot("no-identity-owned"),
@@ -1621,6 +1694,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime", "bootstrap"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -1648,6 +1722,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("not-implemented-yet"),
@@ -1675,6 +1750,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 "{}",
@@ -1696,6 +1772,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &slot(
                     Some("runtime-alpha"),
@@ -1721,6 +1798,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &slot(Some("runtime-alpha"), None, &[], &[]),
                 &null_slot("no-identity-owned"),
@@ -1743,6 +1821,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (GENERATED_SOURCE, GENERATED_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -1770,6 +1849,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (PROVIDER_MATRIX_SOURCE, "PROVIDER_MATRIX")),
                 &null_slot("no-identity-owned"),
@@ -1795,6 +1875,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", ("nixos-modules/absent.nix", "absentRef")),
                 &null_slot("no-identity-owned"),
@@ -1822,6 +1903,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", ("docs/adr/0049.md", "PROVIDER_REF")),
                 &null_slot("no-identity-owned"),
@@ -1844,6 +1926,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", ("../outside/runtime.rs", "SOME_REF")),
                 &null_slot("no-identity-owned"),
@@ -1869,6 +1952,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (NIX_SOURCE, "SOME_OTHER_REF")),
                 &null_slot("no-identity-owned"),
@@ -1901,6 +1985,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -1927,6 +2012,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &slot(
                     Some("runtime-alpha"),
@@ -1955,6 +2041,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &slot(
                     None,
                     Some("no-identity-owned"),
@@ -1980,6 +2067,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "Alpha_Family",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -2001,6 +2089,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &[],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -2021,6 +2110,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime", "runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -2043,6 +2133,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["product", "runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -2068,6 +2159,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &identity_slot("alpha-product", (NIX_SOURCE, NIX_SYMBOL)),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -2093,6 +2185,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime", "service-only"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -2114,6 +2207,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["fixed-bootstrap"],
+                false,
                 &null_slot("no-identity-owned"),
                 &null_slot("no-identity-owned"),
                 &null_slot("no-identity-owned"),
@@ -2130,6 +2224,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["shared-driver"],
+                false,
                 &null_slot("no-identity-owned"),
                 &null_slot("no-identity-owned"),
                 &null_slot("no-identity-owned"),
@@ -2137,6 +2232,81 @@ mod tests {
             ),
         );
         assert!(fixture.refuses("shared-driver-without-identity"));
+    }
+
+    /// The flag is a fact about the crate's own packaged artifact, and only the
+    /// fixed-bootstrap Provider the deployment registers without materializing
+    /// a process ships none: a crate that states it without owning one has
+    /// described an artifact no deployment rule admits.
+    #[test]
+    fn the_non_binary_flag_needs_a_fixed_bootstrap_product_identity() {
+        let fixture = Fixture::new("non-binary-without-fixed-bootstrap");
+        fixture.with_identity_crate();
+        fixture.write_declaration(
+            "d2b-provider-alpha",
+            &declaration(
+                "d2b-provider-alpha",
+                "alpha",
+                &["runtime"],
+                true,
+                &null_slot("no-identity-owned"),
+                &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
+                &null_slot("no-identity-owned"),
+                "[]",
+            ),
+        );
+        assert!(fixture.refuses("non-binary-without-fixed-bootstrap"));
+    }
+
+    /// Exactly one crate may state that the artifact it packages ships no
+    /// binary: two would leave the deployment's graph root with two answers,
+    /// and the catalog can name only one of them.
+    #[test]
+    fn two_crates_may_not_both_state_a_non_binary_artifact() {
+        let fixture = Fixture::new("non-binary-declared-twice");
+        fixture.with_identity_crate();
+        for (crate_name, family, identity) in [
+            ("d2b-provider-alpha", "alpha", "alpha-product"),
+            ("d2b-provider-beta", "beta", "system-systemd"),
+        ] {
+            fixture.write_declaration(
+                crate_name,
+                &declaration(
+                    crate_name,
+                    family,
+                    &["product", "fixed-bootstrap"],
+                    true,
+                    &identity_slot(identity, (NIX_SOURCE, NIX_SYMBOL)),
+                    &null_slot("no-identity-owned"),
+                    &null_slot("no-identity-owned"),
+                    "[]",
+                ),
+            );
+        }
+        assert!(fixture.refuses("non-binary-bootstrap-declared-twice"));
+    }
+
+    /// The flag is not defaulted: a declaration that never says whether the
+    /// artifact it packages ships a binary is refused at the schema, exactly
+    /// as a misspelled key is, because a loader that read the absence as
+    /// either answer would decide it for the crate.
+    #[test]
+    fn a_declaration_that_never_states_the_binary_flag_is_refused() {
+        let fixture = Fixture::new("unstated-binary-flag");
+        fixture.with_identity_crate();
+        let body = declaration(
+            "d2b-provider-alpha",
+            "alpha",
+            &["runtime"],
+            false,
+            &null_slot("no-identity-owned"),
+            &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
+            &null_slot("no-identity-owned"),
+            "[]",
+        )
+        .replace("\"nonBinary\": false,\n  ", "");
+        fixture.write_declaration("d2b-provider-alpha", &body);
+        assert!(fixture.refuses("malformed-provider-identity-declaration"));
     }
 
     /// A blocker is a tracked external issue: a free-text reference cannot be
@@ -2151,6 +2321,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -2171,6 +2342,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("runtime-alpha", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -2197,6 +2369,7 @@ mod tests {
                 "d2b-provider-alpha",
                 "alpha",
                 &["runtime"],
+                false,
                 &null_slot("no-identity-owned"),
                 &identity_slot("system-systemd", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -2225,6 +2398,7 @@ mod tests {
                 "d2b-provider-endpoint",
                 "endpoint",
                 &["product", "runtime"],
+                false,
                 &slot(
                     Some("endpoint"),
                     None,
@@ -2259,6 +2433,7 @@ mod tests {
                 "d2b-provider-endpoint",
                 "endpoint",
                 &["product", "runtime"],
+                false,
                 &identity_slot("endpoint", (NIX_SOURCE, NIX_SYMBOL)),
                 &identity_slot("endpoint", (RUST_SOURCE, RUST_SYMBOL)),
                 &null_slot("no-identity-owned"),
@@ -2285,6 +2460,7 @@ mod tests {
                 "d2b-provider-endpoint",
                 "endpoint",
                 &["product", "runtime"],
+                false,
                 &slot(
                     Some("endpoint"),
                     None,
@@ -2315,6 +2491,7 @@ mod tests {
                 "d2b-provider-endpoint",
                 "endpoint",
                 &["product", "runtime"],
+                false,
                 &slot(
                     Some("endpoint"),
                     None,
@@ -2340,6 +2517,7 @@ mod tests {
                 "d2b-provider-endpoint",
                 "endpoint",
                 &["product", "runtime"],
+                false,
                 &slot(
                     Some("endpoint"),
                     None,
@@ -2671,6 +2849,11 @@ mod tests {
                 "{crate_name} is fixed bootstrap through its packaged {identity}, so it owns no runtime Provider"
             );
         }
+        assert_eq!(
+            identities.non_binary_bootstrap_identities(),
+            vec![("d2b-provider-system-core", "system-core")],
+            "the non-binary graph root is the one crate stating that the artifact it packages ships no binary; the other fixed-bootstrap product is the process provider whose self-binding authorizes materialization"
+        );
     }
 
     /// AE3: `system-minijail` is a fixed-bootstrap product identity owned by

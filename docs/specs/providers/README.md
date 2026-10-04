@@ -55,7 +55,10 @@ at all - are read from the declarations rather than counted here; the two
 fixed-bootstrap identities are named above because their handlers run outside
 ordinary Process projection, and no Provider in the catalog is a runtime
 registration without also shipping a product artifact unless it declares one
-surface and nulls the others.
+surface and nulls the others. A declaration also states whether the artifact
+the crate packages contains a binary, so the one bootstrap Provider the
+deployment registers without materializing a process is the crate that says
+so, not a name a generator holds.
 
 
 ## Process placement, controllers, and state

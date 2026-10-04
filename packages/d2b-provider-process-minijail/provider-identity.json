@@ -2,6 +2,7 @@
   "crate": "d2b-provider-process-minijail",
   "family": "system-minijail",
   "roles": ["product", "fixed-bootstrap"],
+  "nonBinary": false,
   "product": {
     "identity": "system-minijail",
     "evidence": [

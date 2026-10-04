@@ -2,6 +2,7 @@
   "crate": "d2b-provider-shell-terminal",
   "family": "shell-terminal",
   "roles": ["product", "session"],
+  "nonBinary": false,
   "product": {
     "identity": "shell-terminal",
     "sharesIdentityWith": ["session"],

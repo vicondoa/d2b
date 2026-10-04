@@ -2,6 +2,7 @@
   "crate": "d2b-provider-transport-vsock",
   "family": "transport-vsock",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "transport-vsock",
     "sharesIdentityWith": ["runtime"],

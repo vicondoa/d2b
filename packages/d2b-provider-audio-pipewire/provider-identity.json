@@ -2,6 +2,7 @@
   "crate": "d2b-provider-audio-pipewire",
   "family": "audio-pipewire",
   "roles": ["product"],
+  "nonBinary": false,
   "product": {
     "identity": "audio-pipewire",
     "evidence": [

@@ -408,7 +408,7 @@ async fn reconcile_ensures_children_then_runs_the_effect_and_requeues() {
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
-async fn reconcile_projects_ready_status_and_registers_each_watch_once() {
+async fn reconcile_projects_ready_status_and_arms_both_watch_conditions() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
     fixture.effects.make_ready();
 
@@ -429,9 +429,16 @@ async fn reconcile_projects_ready_status_and_registers_each_watch_once() {
             .cmp(&(right.type_name.as_str(), right.name.as_str()))
     });
     unique.dedup();
-    assert_eq!(unique.len(), watches.len(), "one watch per target: {watches:?}");
-    // The dependency plus the two children.
-    assert_eq!(watches.len(), 3);
+    // A target the driver can never re-drive is a target whose readiness it
+    // can never take back, so each one is armed for a status change AND for a
+    // projection change. One registration per condition, two per target.
+    assert_eq!(
+        unique.len() * 2,
+        watches.len(),
+        "each target is armed once per watch condition: {watches:?}"
+    );
+    // The dependency plus the two children, each armed for both conditions.
+    assert_eq!(watches.len(), 6);
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

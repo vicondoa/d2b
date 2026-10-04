@@ -2,6 +2,7 @@
   "crate": "d2b-provider-device-usbip",
   "family": "device-usbip",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "device-usbip",
     "sharesIdentityWith": ["runtime"],

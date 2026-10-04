@@ -2,6 +2,7 @@
   "crate": "d2b-provider-volume-virtiofs",
   "family": "volume-virtiofs",
   "roles": ["product", "runtime"],
+  "nonBinary": false,
   "product": {
     "identity": "volume-virtiofs",
     "sharesIdentityWith": ["runtime"],
