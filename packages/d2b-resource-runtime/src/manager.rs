@@ -4317,6 +4317,44 @@ mod tests {
         );
     }
 
+    /// §36 internal watches (`a satisfied registration reads spent to the
+    /// driver`): the target's satisfaction reaches this row as
+    /// `DependencySatisfied`, and the actor records the spend on the context
+    /// before running the pass it triggers.
+    ///
+    /// This is the signal a re-arm reads. The target republished the same
+    /// status it published before, so no comparison of evidence could tell the
+    /// driver that its registration was consumed - and a driver that believed
+    /// it was still standing would never re-arm, leaving a `Ready` row
+    /// subscribed to nothing.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_satisfied_registration_reads_spent_to_the_dependent() {
+        let h = harness(&["Target", "Dep"]).await;
+        let tkey = key("test", "Target", "t");
+        let dkey = key("test", "Dep", "d");
+        let dshare = h.factory.shared(&dkey).await;
+        *dshare.watch_target.lock().await = Some(tkey.clone());
+        h.client.ensure(subject(), None, desired("Target", "t", b"t")).await.expect("target");
+        h.client.ensure(subject(), None, desired("Dep", "d", b"d")).await.expect("dependent");
+        wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
+        until(|| dshare.watch_calls.load(AtomicOrdering::SeqCst) >= 1).await;
+        // The probe is recorded from the second pass on: the first had no
+        // registration to remember.
+        until(|| dshare.reconcile_calls.load(AtomicOrdering::SeqCst) >= 2).await;
+
+        assert!(
+            !dshare.watch_liveness.lock().await.last().copied().expect("one probe"),
+            "the target satisfied the registration and republished the same status, so only \
+             the recorded spend tells the dependent it is no longer subscribed"
+        );
+        assert!(
+            dshare.registered_watches.lock().await.len() >= 2,
+            "the dependent re-armed after the spend rather than stacking nothing and \
+             re-subscribing to nothing"
+        );
+    }
+
     /// §36 internal watches (`restart rebuilds dependency relationships
     /// through reconciliation`): the dependency edge is ephemeral, so the
     /// restarted dependent re-registers it during its start reconcile, and

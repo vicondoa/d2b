@@ -26,7 +26,7 @@ use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid,
 use d2b_core_controller::{OwnedChildIntent, materialize_child_create_payload};
 use d2b_resource_runtime::ResourceStatus;
 use d2b_resource_runtime::context::{
-    ChildEnsure, ResourceContext, SpecDecoder, WatchCondition, typed_spec_decoder,
+    ChildEnsure, ResourceContext, SpecDecoder, WatchCondition, WatchId, typed_spec_decoder,
 };
 use d2b_resource_runtime::driver::{
     DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
@@ -487,41 +487,87 @@ fn classify_interaction_error(error: &InteractionDriverError) -> DriverFailure {
     }
 }
 
-/// The evidence one watched target's watch conditions are evaluated against.
+/// What arming one condition on one target did this pass.
 ///
-/// Exactly the pair a resource actor compares when it publishes a transition:
-/// the status for [`WatchCondition::Ready`], the `status.resource` layer for
-/// [`WatchCondition::ProjectionChanged`]. A fingerprint that moved is a
-/// registration the target has already satisfied and removed; one that stands
-/// is a registration still live in the target's mailbox.
-#[derive(PartialEq)]
-struct WatchEvidence {
-    status: Option<ResourceStatus>,
-    projection: Option<Value>,
+/// A runtime registration is one-shot (AE2): the target actor satisfies it
+/// exactly once, removes it, and notifies this row, which reaches the actor as
+/// `DependencySatisfied` and stops reading as live through
+/// [`ResourceContext::watch_is_live`]. `placed` marks a registration THIS pass
+/// put out, which a pair that cannot be completed has to hand back.
+enum Arm {
+    /// This row holds `id`: still standing in the target's mailbox, or placed
+    /// by this pass.
+    Held { id: WatchId, placed: bool },
+    /// Nothing to hold and none wanted: the condition is not one this row
+    /// subscribes to, or the registration this row remembered is already spent
+    /// and none was placed.
+    Vacant,
+    /// The manager would not route a registration for this target.
+    Refused,
 }
 
-/// One armed internal watch: the target, and the evidence its registrations
-/// were evaluated against when they went out.
+impl Arm {
+    /// Whether the manager refused to place this registration.
+    fn refused(&self) -> bool {
+        matches!(self, Arm::Refused)
+    }
+
+    /// The registration this row holds for the condition, if any.
+    fn held(self) -> Option<WatchId> {
+        match self {
+            Arm::Held { id, .. } => Some(id),
+            Arm::Vacant | Arm::Refused => None,
+        }
+    }
+}
+
+/// One armed internal watch: the target, and the registrations this row holds
+/// on it, one per condition.
+///
+/// The ids ARE the record, and no fingerprint of the target's evidence can
+/// stand in for them: a target pass satisfies every registration this row
+/// holds on it - the entry `Reconciling` publishes no projection, and the exit
+/// satisfies `Ready` - and then republishes the very pair it published before,
+/// so a spent registration and a standing one read identically.
 struct ArmedWatch {
     target: ResourceKey,
-    evidence: WatchEvidence,
+    ready: Option<WatchId>,
+    changed: Option<WatchId>,
 }
 
-/// The evidence one watched target's conditions are evaluated against, read
-/// from the manager's in-memory plane.
+/// Keep one registration for `condition` on `target` outstanding.
 ///
-/// A target actor enqueues its transition to the manager in the same handler
-/// that notifies a projection-change subscriber, so the pass that wake opened
-/// observes at least that transition: unchanged evidence means the live
-/// registrations were not spent, and anything else means they were. A read the
-/// plane cannot answer is evidence too - absence, not a guess - so a target
-/// that appears later moves the fingerprint and re-arms.
-async fn target_evidence(ctx: &mut ResourceContext, target: &ResourceKey) -> WatchEvidence {
-    let (status, projection) = match ctx.get_view(target).await {
-        Ok(Some(view)) => (view.status, view.status_projection),
-        _ => (None, None),
-    };
-    WatchEvidence { status, projection }
+/// `held` is the registration this row remembers, if any. One the target has
+/// not notified on is still standing and is kept without a round trip; one it
+/// notified on is spent and is replaced. `want` is the driver's standing
+/// decision to subscribe at all, and a registration to be dropped is released
+/// rather than forgotten: a registration nobody remembers is one this row
+/// stacks a second of on the next pass.
+async fn arm_condition(
+    ctx: &mut ResourceContext,
+    target: &ResourceKey,
+    condition: WatchCondition,
+    held: Option<WatchId>,
+    want: bool,
+) -> Arm {
+    if let Some(id) = held.filter(|id| ctx.watch_is_live(*id)) {
+        if want {
+            return Arm::Held { id, placed: false };
+        }
+        return match ctx.cancel_watch(id).await {
+            Ok(()) => Arm::Vacant,
+            // A release that did not take is a release this row still owes: the
+            // registration stands in the target, so it stays recorded.
+            Err(_) => Arm::Held { id, placed: false },
+        };
+    }
+    if !want {
+        return Arm::Vacant;
+    }
+    match ctx.watch(target.clone(), condition).await {
+        Ok(id) => Arm::Held { id, placed: true },
+        Err(_) => Arm::Refused,
+    }
 }
 
 /// One desired interaction resource.
@@ -530,8 +576,8 @@ pub struct InteractionDriver<T: InteractionType> {
     controller_generation: ControllerGeneration,
     effects: Arc<dyn InteractionDriverEffects>,
     behavior: T,
-    /// Armed dependency and child watches: each target, beside the evidence
-    /// its live registrations were armed against (see [`Self::watch_target`]).
+    /// Armed dependency and child watches: each target, and the
+    /// registrations this row holds on it (see [`Self::watch_target`]).
     watched: Vec<ArmedWatch>,
 }
 
@@ -591,15 +637,30 @@ impl<T: InteractionType> InteractionDriver<T> {
     /// never wakes this row for the evidence change it has to re-read (R21,
     /// AE18, KTD7).
     ///
-    /// The arming is per evidence, not per driver. An internal registration is
-    /// satisfied exactly once and then removed by the target actor, so a
-    /// per-driver latch leaves this row unsubscribed the instant the world
-    /// moves - and a pass that published `Ready` without mutating anything
-    /// requeues nothing, so nothing else would ever re-arm it. This reads the
-    /// target's live view and compares it against the evidence the live
-    /// registrations were evaluated against: equal evidence means both are
-    /// still standing and this pass places none, which is what keeps a
-    /// requeued pass from stacking duplicates on one target.
+    /// The arming is per registration, and it reads the SPEND - not the
+    /// evidence, and not "I armed this before". An internal registration is
+    /// satisfied exactly once and then removed by the target actor, and every
+    /// pass a target runs consumes all of them: its entry `Reconciling`
+    /// publishes no projection and fires the evidence condition, and its exit
+    /// satisfies `Ready`. A target that then republishes the pair it published
+    /// before reads identically whether it spent this row's registrations or
+    /// not, so a latch - over the `(status, projection)` pair or over anything
+    /// else - places none after the first spend and leaves this row subscribed
+    /// to nothing. A pass that published `Ready` without mutating anything
+    /// requeues nothing to correct that. The runtime's own answer is the
+    /// record instead: an id this row still holds is standing, and an id the
+    /// target notified on is spent and is replaced.
+    ///
+    /// Readiness is the one condition this row does not hold unconditionally,
+    /// because a registration whose condition already holds is answered on
+    /// arrival (AE2). Against a target that already reports `Ready` that
+    /// answer is spent before it can stand, and re-arming it on every spend
+    /// would wake this row for the answer alone, without end. The readiness
+    /// arm is therefore held exactly while the target has not reported
+    /// `Ready` - the readiness this row has not read yet, which is what
+    /// [`ResourceContext::get_view`] documents the arm for - and the evidence
+    /// arm, which no arrival can satisfy, carries every later change under a
+    /// phase that never moves.
     ///
     /// Best-effort by design: a dependency that is not a manager actor yet
     /// cannot be watched, and the resync schedule re-evaluates it.
@@ -607,35 +668,77 @@ impl<T: InteractionType> InteractionDriver<T> {
         if target == *ctx.key() {
             return;
         }
-        let evidence = target_evidence(ctx, &target).await;
-        if self
-            .watched
-            .iter()
-            .any(|armed| armed.target == target && armed.evidence == evidence)
-        {
-            return;
-        }
-        let ready = ctx
-            .watch(target.clone(), WatchCondition::Ready)
-            .await
-            .is_ok();
-        let changed = ctx
-            .watch(target.clone(), WatchCondition::ProjectionChanged)
-            .await
-            .is_ok();
+        let (held_ready, held_changed) =
+            match self.watched.iter().find(|armed| armed.target == target) {
+                Some(armed) => (armed.ready, armed.changed),
+                None => (None, None),
+            };
+        // What the target last published. A target with no published status and
+        // a read the plane could not answer are both "not ready", which is the
+        // readiness this row subscribes for. The evidence arm is placed either
+        // way: no arrival can satisfy it, so it costs one round trip and misses
+        // nothing.
+        let target_ready = matches!(
+            ctx.get_view(&target).await,
+            Ok(Some(view)) if view.status == Some(ResourceStatus::Ready)
+        );
+        let ready =
+            arm_condition(ctx, &target, WatchCondition::Ready, held_ready, !target_ready).await;
+        let changed = arm_condition(
+            ctx,
+            &target,
+            WatchCondition::ProjectionChanged,
+            held_changed,
+            true,
+        )
+        .await;
+
         // Both or neither: a half-placed pair would leave one condition
-        // unsubscribed until that evidence moved again, which is exactly the
-        // gap this method exists to close.
-        if ready && changed {
-            self.watched.retain(|armed| armed.target != target);
-            self.watched.push(ArmedWatch { target, evidence });
+        // unsubscribed until the target moved again, which is exactly the gap
+        // this method exists to close. What THIS pass placed is handed back
+        // with it; what this row already held stands either way, because a
+        // registration standing in the target is not this pair's to drop.
+        let mut armed = ArmedWatch { target: target.clone(), ready: None, changed: None };
+        if ready.refused() || changed.refused() {
+            for arm in [ready, changed] {
+                if let Arm::Held { id, placed: true } = arm {
+                    let _ = ctx.cancel_watch(id).await;
+                }
+            }
+        } else {
+            armed.ready = ready.held();
+            armed.changed = changed.held();
         }
+        self.watched.retain(|held| held.target != target);
+        self.watched.push(armed);
     }
 
-    /// Drop the arming of every target this pass no longer watches, so a
-    /// retired child leaves nothing behind for this row to keep re-reading.
-    fn forget_unwatched(&mut self, targets: &[ResourceKey]) {
-        self.watched.retain(|armed| targets.contains(&armed.target));
+    /// Release every arming this pass no longer watches, so a retired child
+    /// leaves nothing standing in the target's mailbox for this row to keep
+    /// re-reading.
+    ///
+    /// A registration that could not be handed back stays recorded: it still
+    /// stands in the target, and a later pass releases it.
+    async fn forget_unwatched(&mut self, ctx: &mut ResourceContext, targets: &[ResourceKey]) {
+        let mut index = 0;
+        while index < self.watched.len() {
+            let armed = &self.watched[index];
+            if targets.contains(&armed.target) {
+                index += 1;
+                continue;
+            }
+            let mut released = true;
+            for watch in [armed.ready, armed.changed].into_iter().flatten() {
+                if ctx.watch_is_live(watch) && ctx.cancel_watch(watch).await.is_err() {
+                    released = false;
+                }
+            }
+            if released {
+                self.watched.remove(index);
+            } else {
+                index += 1;
+            }
+        }
     }
 
     fn child_key(&self, target: &ResourceRef) -> ResourceKey {
@@ -916,7 +1019,7 @@ impl<T: InteractionType> ResourceDriver for InteractionDriver<T> {
             self.watch_target(ctx, target.clone()).await;
             watched.push(target);
         }
-        self.forget_unwatched(&watched);
+        self.forget_unwatched(ctx, &watched).await;
 
         let children = self.realized_children(ctx, &desired, op).await?;
         let request = self.request(ctx, &envelope, &children, op)?;
@@ -1096,6 +1199,7 @@ pub fn binding_child_ensure(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
     use async_trait::async_trait;
@@ -1275,11 +1379,38 @@ mod tests {
         /// store (KTD12), so the boundary serves the very rows the pass will
         /// be judged against.
         plane: ScriptedPlane,
-        /// Every `(target, condition)` registration the driver placed, in
-        /// order, so a test can count what one pass armed and what a later
-        /// pass stacked on top of it.
-        watches: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>>,
+        /// The registrations standing in the target actors' mailboxes. One
+        /// leaves this set exactly as it leaves production: the target actor
+        /// satisfies it once and REMOVES it (AE2), or this row releases it
+        /// through [`ManagerEndpoint::cancel_watch`]. Counting what is left is
+        /// therefore counting what production would have standing, which is
+        /// the only honest way to assert a subscription neither stacks nor
+        /// disappears.
+        watches: Arc<Mutex<Vec<LiveWatch>>>,
+        /// Every `(target, condition)` the driver placed, in order, including
+        /// the ones later spent or released.
+        placed: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>>,
+        /// Registrations this row released, in order: the ids a test asserts
+        /// were handed back rather than dropped on the floor.
+        released: Arc<Mutex<Vec<WatchId>>>,
+        /// Registrations the manager refuses to route, so a test can place
+        /// one half of a pair and observe the other half's fate.
+        refused: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>>,
+        /// The manager-allocated id the next registration receives.
+        next_watch: Arc<AtomicU64>,
     }
+
+    /// One internal-watch registration the driver placed, held by the target
+    /// actor it was routed to.
+    struct LiveWatch {
+        id: WatchId,
+        target: ResourceKey,
+        condition: WatchCondition,
+        /// The channel the target actor notifies on, exactly as the runtime
+        /// hands it: a satisfaction travels back over the subscriber's own
+        /// notify channel, never a side channel the test invented.
+        notify: tokio::sync::mpsc::UnboundedSender<WatchSatisfied>,
+     }
 
     #[async_trait]
     impl ManagerEndpoint for ChildManager {
@@ -1364,13 +1495,38 @@ mod tests {
             _subscriber: &ResourceKey,
             registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            let mut watches = self.watches.lock().await;
-            let id = WatchId(watches.len() as u64);
-            watches.push((registration.target, registration.condition));
+            if self
+                .refused
+                .lock()
+                .await
+                .iter()
+                .any(|(target, condition)| {
+                    target == &registration.target && *condition == registration.condition
+                })
+            {
+                // The runtime refuses exactly this way when the target has no
+                // running actor to route the registration to.
+                return Err(ResourceError::ManagerRejected {
+                    reason: "watch target has no running actor".into(),
+                });
+            }
+            let id = WatchId(self.next_watch.fetch_add(1, Ordering::SeqCst));
+            self.placed
+                .lock()
+                .await
+                .push((registration.target.clone(), registration.condition.clone()));
+            self.watches.lock().await.push(LiveWatch {
+                id,
+                target: registration.target,
+                condition: registration.condition,
+                notify: registration.notify,
+            });
             Ok(id)
         }
 
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
+        async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError> {
+            self.watches.lock().await.retain(|live| live.id != watch);
+            self.released.lock().await.push(watch);
             Ok(())
         }
     }
@@ -1498,20 +1654,52 @@ mod tests {
         /// effects read, so a test can move the evidence between two passes of
         /// one driver.
         plane: ScriptedPlane,
-        /// Every `(target, condition)` registration the driver placed.
-        watches: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>>,
+        /// The registrations still standing in their target actors' mailboxes.
+        watches: Arc<Mutex<Vec<LiveWatch>>>,
+        /// Every `(target, condition)` the driver placed, spent or not.
+        placed: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>>,
+        /// Every registration the driver handed back.
+        released: Arc<Mutex<Vec<WatchId>>>,
+        /// The channel the runtime forwards a satisfaction into; the receiver
+        /// stands in for this row's mailbox.
+        watch_rx: tokio::sync::mpsc::UnboundedReceiver<WatchSatisfied>,
+        /// The manager's routing refusals, which a test arms before a pass.
+        refused: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>>,
     }
 
     impl Fixture {
-        /// How many registrations of one condition this driver placed on one
-        /// target: `1` while the armed pair is still standing on the target,
-        /// and a second one only after that target's evidence moved.
+        /// How many registrations of one condition this row still HOLDS on one
+        /// target. One live registration per condition is the whole contract:
+        /// two is a stack (one target change would then wake this row twice),
+        /// and zero is the miss this fixture exists to catch.
         async fn armed(&self, target: &ResourceKey, condition: &WatchCondition) -> usize {
             self.watches
                 .lock()
                 .await
                 .iter()
-                .filter(|(key, placed)| key == target && placed == condition)
+                .filter(|live| &live.target == target && &live.condition == condition)
+                .count()
+        }
+
+        /// The ids of one target's live registrations, in placement order.
+        async fn armed_ids(&self, target: &ResourceKey) -> Vec<WatchId> {
+            self.watches
+                .lock()
+                .await
+                .iter()
+                .filter(|live| &live.target == target)
+                .map(|live| live.id)
+                .collect()
+        }
+
+        /// How many registrations of one condition the driver ever placed,
+        /// spent ones included.
+        async fn placements(&self, target: &ResourceKey, condition: &WatchCondition) -> usize {
+            self.placed
+                .lock()
+                .await
+                .iter()
+                .filter(|(key, armed)| key == target && armed == condition)
                 .count()
         }
 
@@ -1523,13 +1711,50 @@ mod tests {
                 .lock()
                 .await
                 .iter()
-                .map(|(key, _)| key.clone())
+                .map(|live| live.target.clone())
                 .collect::<Vec<_>>();
             targets.sort_by(|left, right| {
                 (&left.type_name, &left.name).cmp(&(&right.type_name, &right.name))
             });
             targets.dedup();
             targets
+        }
+
+        /// One pass of `target`, as the runtime plays it: every registration
+        /// this row holds on that target is satisfied once and REMOVED (AE2),
+        /// and the target actor notifies this row over the channel the
+        /// registration carried.
+        ///
+        /// The plane is untouched, so the target's `(status, projection)` pair
+        /// reads back exactly as it did before - which is the case a
+        /// fingerprint cannot tell from "nothing was spent".
+        async fn target_pass(&self, target: &ResourceKey) -> Vec<WatchId> {
+            let mut spent = Vec::new();
+            let mut live = self.watches.lock().await;
+            let mut index = 0;
+            while index < live.len() {
+                if &live[index].target == target {
+                    let satisfied = live.remove(index);
+                    let _ = satisfied.notify.send(WatchSatisfied {
+                        watch: satisfied.id,
+                        target: satisfied.target.clone(),
+                    });
+                    spent.push(satisfied.id);
+                    continue;
+                }
+                index += 1;
+            }
+            spent
+        }
+
+        /// The satisfactions the runtime's pump forwarded into this row's
+        /// mailbox, in arrival order.
+        async fn delivered(&mut self) -> Vec<(ResourceKey, WatchId)> {
+            let mut notifications = Vec::new();
+            while let Ok(satisfied) = self.watch_rx.try_recv() {
+                notifications.push((satisfied.target, satisfied.watch));
+            }
+            notifications
         }
     }
 
@@ -1550,17 +1775,23 @@ mod tests {
             created_at: 0,
         };
         let plane = ScriptedPlane::new(rows);
-        let watches: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>> =
-            Arc::new(Mutex::new(Vec::new()));
+        let watches: Arc<Mutex<Vec<LiveWatch>>> = Arc::new(Mutex::new(Vec::new()));
+        let placed: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>> = Arc::new(Mutex::new(Vec::new()));
+        let released: Arc<Mutex<Vec<WatchId>>> = Arc::new(Mutex::new(Vec::new()));
+        let refused: Arc<Mutex<Vec<(ResourceKey, WatchCondition)>>> = Arc::new(Mutex::new(Vec::new()));
         let manager = Arc::new(ChildManager {
             rows: Arc::new(Mutex::new(Vec::new())),
             parent_uid: row.uid,
             plane: plane.clone(),
             watches: Arc::clone(&watches),
+            placed: Arc::clone(&placed),
+            released: Arc::clone(&released),
+            refused: Arc::clone(&refused),
+            next_watch: Arc::new(AtomicU64::new(1)),
         });
         let requeue = Arc::new(RecordingRequeue::default());
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel::<EffectCompleted>();
-        let (watch_tx, _watch_rx) = tokio::sync::mpsc::unbounded_channel::<WatchSatisfied>();
+        let (watch_tx, watch_rx) = tokio::sync::mpsc::unbounded_channel::<WatchSatisfied>();
         let ctx = ResourceContext::new(
             row,
             spec_decoder(),
@@ -1577,7 +1808,16 @@ mod tests {
             effects: Arc::new(effects),
             behavior: DisplaySession,
         });
-        let fixture = Fixture { ctx, requeue, plane, watches };
+        let fixture = Fixture {
+            ctx,
+            requeue,
+            plane,
+            watches,
+            placed,
+            released,
+            watch_rx,
+            refused,
+        };
         (fixture, driver)
     }
 
@@ -1732,11 +1972,16 @@ mod tests {
     /// nothing, and an internal registration is satisfied once and then
     /// removed by the target actor - so a driver that armed each target once
     /// and never again is unsubscribed at exactly the moment it needs to be
-    /// woken, and keeps publishing `Ready` over a child that withdrew. This
-    /// drives one driver across three passes: it arms both conditions on every
-    /// child and every dependency, stacks nothing while that evidence stands,
-    /// re-arms the pair on a target whose evidence moved, and leaves `Ready`
-    /// over the withdrawn child.
+    /// woken, and keeps publishing `Ready` over a child that withdrew.
+    ///
+    /// A readiness registration is a subscription to BECOMING ready: the
+    /// target actor answers one on arrival whenever the target already reports
+    /// `Ready` (AE2), so over a converged aggregate the evidence arm is the
+    /// only one that can stand. The evidence arm is also the one a target's
+    /// own pass consumes - that pass publishes `Reconciling` with no
+    /// projection and then satisfies `Ready` - so this drives one driver
+    /// across three passes and spends every target's registrations the way the
+    /// runtime does.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn a_downgraded_child_is_re_armed_and_leaves_the_session_pending() {
@@ -1763,18 +2008,22 @@ mod tests {
         let creating = fixture.requeue.scheduled().len();
 
         for target in &expected {
-            for condition in [WatchCondition::Ready, WatchCondition::ProjectionChanged] {
-                assert_eq!(
-                    fixture.armed(target, &condition).await,
-                    1,
-                    "the first pass arms {condition:?} on {target:?}, so an evidence change \
-                     under a phase that never moves still wakes this row"
-                );
-            }
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::ProjectionChanged).await,
+                1,
+                "the first pass arms the evidence condition on {target:?}, so an evidence \
+                 change under a phase that never moves still wakes this row"
+            );
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::Ready).await,
+                0,
+                "{target:?} already reports ready, and a readiness registration is answered \
+                 on arrival - holding one there subscribes to nothing"
+            );
         }
 
-        // A second pass over evidence that stood: the armed registrations are
-        // still live on their targets, so a converged pass adds none, and it
+        // A second pass over evidence that stood: the registrations are still
+        // live on their targets, so a converged pass places none, and it
         // schedules nothing either - which is exactly why the subscription is
         // the only thing left that can re-drive this row.
         let second = driver.reconcile(&mut fixture.ctx).await;
@@ -1790,17 +2039,22 @@ mod tests {
              nothing schedules nothing, so only a subscription re-drives this row"
         );
         for target in &expected {
-            for condition in [WatchCondition::Ready, WatchCondition::ProjectionChanged] {
-                assert_eq!(
-                    fixture.armed(target, &condition).await,
-                    1,
-                    "unchanged evidence keeps one live registration on {target:?}, never a stack"
-                );
-            }
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::ProjectionChanged).await,
+                1,
+                "a standing registration keeps {target:?} subscribed without stacking a second"
+            );
         }
 
-        // The child withdrew while the session stood `Ready`: the plane moves,
-        // the row does not, and the third pass has to see it.
+        // Every target runs a pass, so every registration this row holds is
+        // satisfied and gone, and the children withdraw while the session
+        // stood `Ready`: the plane moves, the row does not, and the third pass
+        // has to see it.
+        for target in &expected {
+            for watch in fixture.target_pass(target).await {
+                fixture.ctx.mark_watch_spent(watch);
+            }
+        }
         fixture.plane.publish(plane(false, false)).await;
         let third = driver.reconcile(&mut fixture.ctx).await;
         assert_eq!(
@@ -1822,23 +2076,31 @@ mod tests {
             .map(|intent| key_of(intent.target()))
             .collect::<Vec<_>>();
         for target in &children {
-            for condition in [WatchCondition::Ready, WatchCondition::ProjectionChanged] {
-                assert_eq!(
-                    fixture.armed(target, &condition).await,
-                    2,
-                    "the registration the child already satisfied is armed again on {target:?}, \
-                     so a second downgrade is observed too"
-                );
-            }
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::ProjectionChanged).await,
+                1,
+                "the registration the child already satisfied is armed again on {target:?}, \
+                 so a second downgrade is observed too"
+            );
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::Ready).await,
+                1,
+                "{target:?} no longer reports ready, so the readiness arm this row needs to be \
+                 woken by is armed"
+            );
         }
         for target in expected.iter().filter(|target| !children.contains(target)) {
-            for condition in [WatchCondition::Ready, WatchCondition::ProjectionChanged] {
-                assert_eq!(
-                    fixture.armed(target, &condition).await,
-                    1,
-                    "a dependency whose evidence stood keeps exactly one registration"
-                );
-            }
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::ProjectionChanged).await,
+                1,
+                "a dependency whose registration was satisfied is armed again on {target:?}"
+            );
+            assert_eq!(
+                fixture.armed(target, &WatchCondition::Ready).await,
+                0,
+                "a dependency that still reports ready is not subscribed for a readiness it \
+                 already has"
+            );
         }
         assert_eq!(
             fixture.armed_targets().await,
@@ -1851,6 +2113,159 @@ mod tests {
                 targets
             },
             "every watched row is a child or a dependency this pass derived, and nothing else"
+        );
+    }
+
+    /// The re-arm reads the SPEND, not the evidence (R21, AE18, KTD7).
+    ///
+    /// A target pass consumes every registration this row holds on it: the
+    /// entry `Reconciling` publishes no projection and fires the evidence
+    /// condition, and the exit satisfies `Ready`. A pass that lands on the very
+    /// pair those registrations were armed against therefore cannot tell
+    /// "spent" from "standing" by comparing evidence - and placing nothing
+    /// leaves a `Ready` row subscribed to nothing. It is never woken again, and
+    /// `mutated || !ready` schedules no requeue for it either, so it keeps
+    /// publishing `Ready` over a target that moves.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_woken_row_re_arms_the_registration_its_target_spent() {
+        let (mut fixture, mut driver) = fixture(plane(true, true));
+        let target = key_of(session_spec().policy_ref());
+
+        driver.reconcile(&mut fixture.ctx).await.expect("the first pass");
+        assert_eq!(
+            fixture.armed(&target, &WatchCondition::ProjectionChanged).await,
+            1,
+            "the first pass subscribes to {target:?}"
+        );
+
+        // The target runs a pass and the plane ends exactly where it started,
+        // so the row is woken and re-reads the pair it already read.
+        let spent = fixture.target_pass(&target).await;
+        for watch in &spent {
+            fixture.ctx.mark_watch_spent(*watch);
+        }
+        assert_eq!(
+            fixture.delivered().await,
+            spent.iter().map(|watch| (target.clone(), *watch)).collect::<Vec<_>>(),
+            "the target's pass notified this row, which is what the runtime turns into the \
+             pass below"
+        );
+
+        driver.reconcile(&mut fixture.ctx).await.expect("the woken pass");
+        assert_eq!(
+            fixture.armed(&target, &WatchCondition::ProjectionChanged).await,
+            1,
+            "the woken pass re-armed on evidence that reads back unchanged: the spend is what \
+ told it to, not the fingerprint"
+        );
+        assert_eq!(
+            fixture.placements(&target, &WatchCondition::ProjectionChanged).await,
+            2,
+            "the re-arm placed a fresh registration rather than leaving the spent id behind"
+        );
+
+        // And it is a standing subscription: the target's next pass satisfies
+        // exactly that registration and notifies this row again.
+        let armed = fixture.armed_ids(&target).await;
+        assert_eq!(armed.len(), 1, "one live registration on {target:?}");
+        assert_eq!(
+            fixture.target_pass(&target).await,
+            armed,
+            "the target's next pass satisfies the registration this row placed"
+        );
+        assert_eq!(
+            fixture.delivered().await,
+            vec![(target.clone(), armed[0])],
+            "a later evidence change under a phase that never moves still wakes this row"
+        );
+    }
+
+    /// One live registration per condition, however many passes go by: the
+    /// re-arm replaces a spent registration, it never stacks a second one on
+    /// a target whose evidence stands.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn repeated_passes_over_an_unchanged_target_hold_one_registration() {
+        let (mut fixture, mut driver) = fixture(plane(true, true));
+        let target = key_of(session_spec().guest_ref());
+        let mut standing: Option<Vec<WatchId>> = None;
+
+        for round in 1..=4 {
+            driver.reconcile(&mut fixture.ctx).await.expect("a converged pass");
+            assert_eq!(
+                fixture.armed(&target, &WatchCondition::ProjectionChanged).await,
+                1,
+                "round {round}: one live registration on {target:?}, never a stack"
+            );
+            assert_eq!(
+                fixture.armed(&target, &WatchCondition::Ready).await,
+                0,
+                "round {round}: {target:?} already reports ready, so no readiness registration \
+                 is held"
+            );
+            let armed = fixture.armed_ids(&target).await;
+            if let Some(previous) = standing.clone() {
+                assert_ne!(
+                    armed, previous,
+                    "round {round}: the spent registration was replaced, not stacked beside"
+                );
+            }
+            standing = Some(armed);
+            for watch in fixture.target_pass(&target).await {
+                fixture.ctx.mark_watch_spent(watch);
+            }
+        }
+
+        assert_eq!(
+            fixture.placements(&target, &WatchCondition::ProjectionChanged).await,
+            4,
+            "one placement per spend and no placement at all while a registration stands"
+        );
+    }
+
+    /// A pair this row could only half place is handed back whole.
+    ///
+    /// The readiness arm went out and the evidence arm did not; a registration
+    /// that is not remembered cannot be re-armed, so holding it would stack a
+    /// second readiness arm on every later pass while the target changes
+    /// nothing. Releasing it leaves the pair unplaced, which every pass
+    /// retries.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_half_placed_pair_is_released_rather_than_left_standing() {
+        let (mut fixture, mut driver) = fixture(plane(false, true));
+        let child = key_of(committed_intents().first().expect("a derived child").target());
+        // The manager cannot route the evidence arm to this target.
+        fixture
+            .refused
+            .lock()
+            .await
+            .push((child.clone(), WatchCondition::ProjectionChanged));
+
+        driver.reconcile(&mut fixture.ctx).await.expect("the first pass");
+        assert_eq!(
+            fixture.armed(&child, &WatchCondition::Ready).await,
+            0,
+            "the readiness arm that did place was handed back with the pair it could not \
+             complete, so nothing stands unremembered"
+        );
+        assert_eq!(
+            fixture.released.lock().await.len(),
+            fixture.placements(&child, &WatchCondition::Ready).await,
+            "every arm this pass placed was released, not dropped"
+        );
+
+        driver.reconcile(&mut fixture.ctx).await.expect("the second pass");
+        assert_eq!(
+            fixture.armed(&child, &WatchCondition::Ready).await,
+            0,
+            "a still-refused pair leaves nothing standing, so no pass can stack an arm"
+        );
+        assert_eq!(
+            fixture.placements(&child, &WatchCondition::Ready).await,
+            2,
+            "each pass re-attempts the pair, and releases what it placed"
         );
     }
 }

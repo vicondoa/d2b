@@ -572,7 +572,13 @@ impl ResourceActorState {
     }
 
     /// Rebuild the driver context after a spec change (generation moves).
+    ///
+    /// The internal-watch registrations this row holds travel with it: they
+    /// live in the target actors' mailboxes, so a rebuilt context that started
+    /// with an empty set would report every remembered id as spent and let the
+    /// driver stack duplicates on top of registrations that still stand.
     fn rebuild_context(&mut self) {
+        let live_watches = self.ctx.take_live_watches();
         let ctx = ResourceContext::new(
             self.row.clone(),
             self.decoder.clone(),
@@ -582,7 +588,8 @@ impl ResourceActorState {
             self.watch_tx.clone(),
         )
         .with_owner_key(self.owner_key.clone())
-        .with_target(self.target.clone());
+        .with_target(self.target.clone())
+        .with_live_watches(live_watches);
         self.ctx = ctx;
     }
 
@@ -833,7 +840,15 @@ impl Actor for ResourceActor {
                 state.apply_spec_changed(generation, spec, metadata, &myself).await
             }
             ResourceMsg::Reconcile => state.reconcile_msg(myself).await,
-            ResourceMsg::DependencyChanged { .. } | ResourceMsg::DependencySatisfied { .. } => {
+            // A satisfaction is the target speaking: the registration is
+            // already gone from its mailbox (AE2), so the context records the
+            // spend before the pass this row is about to run reads it. The
+            // evidence the target republished may be identical to the
+            // evidence the registration was armed against, so this - not a
+            // comparison - is what tells the driver to re-arm.
+            ResourceMsg::DependencyChanged { .. } => state.dependency_triggered(&myself).await,
+            ResourceMsg::DependencySatisfied { watch, .. } => {
+                state.ctx.mark_watch_spent(watch);
                 state.dependency_triggered(&myself).await
             }
             ResourceMsg::Watch { id, condition, subscriber } => {
@@ -920,7 +935,7 @@ pub(crate) mod test_support {
     use async_trait::async_trait;
     use tokio::sync::Mutex;
 
-    use crate::context::{EffectCompleted, EffectResult, ResourceContext, WatchCondition};
+    use crate::context::{EffectCompleted, EffectResult, ResourceContext, WatchCondition, WatchId};
     use crate::driver::{DynResourceDriver, ResourceDriver, ResourceDriverFactory};
     use crate::driver::{ReconcileOutcome, RecoveryOutcome};
     use crate::error::{DriverFailure, DriverOp};
@@ -1101,6 +1116,13 @@ pub(crate) mod test_support {
         pub(crate) view_reads: Mutex<Vec<FakeViewRead>>,
         /// Generations observed by `reconcile` (spec change delivery).
         pub(crate) generations_seen: Mutex<Vec<u64>>,
+        /// Internal-watch registrations this driver placed, in order.
+        pub(crate) registered_watches: Mutex<Vec<WatchId>>,
+        /// What each pass read for the registration it remembered: `true` is
+        /// still standing in the target's mailbox, `false` is spent. This is
+        /// the signal a driver re-arms from, so a test can assert a re-arm
+        /// happened without depending on the pass that carried it.
+        pub(crate) watch_liveness: Mutex<Vec<bool>>,
     }
 
     impl FakeDriverShared {
@@ -1124,6 +1146,8 @@ pub(crate) mod test_support {
                 view_targets: Mutex::new(Vec::new()),
                 view_reads: Mutex::new(Vec::new()),
                 generations_seen: Mutex::new(Vec::new()),
+                registered_watches: Mutex::new(Vec::new()),
+                watch_liveness: Mutex::new(Vec::new()),
             }
         }
 
@@ -1199,11 +1223,20 @@ pub(crate) mod test_support {
             self.shared.generations_seen.lock().await.push(ctx.generation());
             // A dependent registers its internal watch in every reconcile
             // (spec sections 15-16): exactly-once delivery is the target
-            // actor's contract, re-registration is the dependent's.
+            // actor's contract, re-registration is the dependent's. Each pass
+            // first asks whether the registration it remembers is still
+            // standing, which is what tells a re-arm apart from a stack.
             let watch_target = self.shared.watch_target.lock().await.clone();
             if let Some(target) = watch_target {
                 self.shared.watch_calls.fetch_add(1, Ordering::SeqCst);
-                let _watch = ctx.watch(target, WatchCondition::Ready).await;
+                let remembered = self.shared.registered_watches.lock().await.last().copied();
+                if let Some(remembered) = remembered {
+                    let live = ctx.watch_is_live(remembered);
+                    self.shared.watch_liveness.lock().await.push(live);
+                }
+                if let Ok(watch) = ctx.watch(target, WatchCondition::Ready).await {
+                    self.shared.registered_watches.lock().await.push(watch);
+                }
             }
             // Live state of other resources (KTD3): each reconcile reads the
             // configured keys through the context and records the answer.

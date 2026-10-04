@@ -430,8 +430,12 @@ async fn reconcile_projects_ready_status_and_arms_both_watch_conditions() {
     });
     unique.dedup();
     // A target the driver can never re-drive is a target whose readiness it
-    // can never take back, so each one is armed for a status change AND for a
-    // projection change. One registration per condition, two per target.
+    // can never take back, so a target that has NOT yet reported `Ready` is
+    // armed for a status change AND for a projection change: one registration
+    // per condition, two per target. (A target that already reports `Ready` is
+    // armed for the projection condition alone - the runtime answers a
+    // readiness registration on arrival - which this fixture never reaches:
+    // its manager publishes no runtime status for any target.)
     assert_eq!(
         unique.len() * 2,
         watches.len(),

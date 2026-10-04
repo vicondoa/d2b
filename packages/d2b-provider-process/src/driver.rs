@@ -968,7 +968,7 @@ struct ArmedWatch {
 }
 
 impl BindingObservation {
-    /// The deferral this partial read produces, carrying the rows it HAD
+    /// The SILENCE this partial read produces, carrying the rows it HAD
     /// already proven.
     ///
     /// A read that ends `Unproven` has usually proven something on the way
@@ -979,15 +979,57 @@ impl BindingObservation {
     fn unproven(&self) -> BindingObservationFault {
         BindingObservationFault::Unproven(self.dependencies.clone())
     }
+
+    /// The PROVEN LOSS this partial read produces, carrying the same rows.
+    ///
+    /// The difference is the whole content of the arm that returns it: this
+    /// one is reached only where the manager has answered, from the one
+    /// committed-row set it serves every other answer from, that it holds no
+    /// row for a key some published intent REQUIRES.
+    fn absent(&self) -> BindingObservationFault {
+        BindingObservationFault::Absent(self.dependencies.clone())
+    }
 }
 
 /// Why one binding read could not produce an observation.
+///
+/// Silence, absence and failure are three facts, and they are never the same
+/// answer. Reading one as another is what this enum exists to prevent:
+///
+/// - **silence** - [`Self::Unproven`]. The plane could not answer, or the row
+///   it did answer has published nothing for its CURRENT generation: its
+///   actor has not run a pass yet, or is mid-pass with the projection its
+///   pass will publish still blank. Nothing was stated, so the launch defers
+///   and keeps whatever it is running.
+/// - **absence** - [`Self::Absent`]. The manager answered that it holds NO row
+///   for a relationship a source's own publication intent requires. That is a
+///   statement about the committed set, so a live helper stops over access
+///   whose delivery provably does not exist (R21).
+/// - **failure** - not a fault here at all. A row that published a terminal
+///   `Failed` status for its current generation HAS SPOKEN; it grants nothing
+///   for this consumer, and [`observe_endpoint_bindings`] reports exactly that
+///   as the statement it is (`Ok(false)`) rather than as silence (R14).
+///
+/// The split between silence and absence is not a difference in degree, and
+/// nothing in a mid-pass read can reach [`Self::Absent`]: a row that is held
+/// but momentarily unreadable answers `RowLookup::Present` with no projection,
+/// or `RowLookup::Unavailable` when the plane refuses - while
+/// `RowLookup::Absent` is produced by exactly one thing, a manager whose
+/// committed-row set has no entry for the key. Treating the two alike is what
+/// turned a read landing inside a source's own pass into a stop that
+/// un-realized the endpoint behind it, which woke the row again: the
+/// livelock R21 closes.
 enum BindingObservationFault {
     /// The manager cannot answer right now, or a source published a
     /// relationship whose realization or committed row it has not proven yet:
     /// the launch defers and issues no effect. Whatever the read had already
     /// proven rides with it, as the dependency rows to subscribe to.
     Unproven(Vec<DependencyRow>),
+    /// The manager holds no row for a relationship a published intent
+    /// requires: a proven binding loss, and the same `Pending` a withdrawn
+    /// delivery produces. Whatever the read had already proven rides with it,
+    /// as the dependency rows to subscribe to.
+    Absent(Vec<DependencyRow>),
     /// The published evidence is malformed or foreign: terminal, because
     /// retrying the same evidence cannot change the answer.
     Refused(BindingGateError),
@@ -1020,14 +1062,27 @@ async fn observe_endpoint_bindings(
     process_ref: &ResourceRef,
     observation: &mut BindingObservation,
 ) -> Result<bool, BindingObservationFault> {
+    // FAILURE is a statement, and its silence about this consumer is part of
+    // it. A terminally `Failed` row published a status for its CURRENT
+    // generation and no projection beside it, because refusing a lookalike
+    // shape is a designed terminal state rather than an unfinished pass
+    // (R14) - so the missing projection below is this row HAVING SPOKEN, not
+    // this row being silent. It grants nothing for this consumer, which is an
+    // answer, and reading it as an unfinished pass would let ONE refused
+    // `Endpoint` committed anywhere in a Zone defer EVERY root `Process` row in
+    // that Zone forever - rows it does not even name.
+    if matches!(view.observed_status(), Some(ResourceStatus::Failed(_))) {
+        return Ok(false);
+    }
     let Some(projection) = view.observed_status_projection() else {
         // The manager holds this endpoint's row and view, and the view
         // carries no projection published for its CURRENT generation: its
-        // actor has not run a pass yet (spawn in flight, actor restart), or
-        // the row has moved past the generation its last publication was for.
-        // None of those is this source saying it publishes no relationship
-        // for this consumer, so the launch defers until it has published -
-        // silence is not a publication (R18, R21).
+        // actor has not run a pass yet (spawn in flight, actor restart), is
+        // mid-pass with that projection still blank, or the row has moved past
+        // the generation its last publication was for. None of those is this
+        // source saying it publishes no relationship for this consumer, so the
+        // launch defers until it has published - silence is not a publication
+        // (R18, R21).
         return Err(observation.unproven());
     };
     let published = projection.pointer("/endpoint/bindings");
@@ -1088,12 +1143,19 @@ async fn observe_endpoint_bindings(
         let relation = match ctx.lookup_view(&key).await {
             RowLookup::Present { row, .. } => row,
             // The publication intent names this relationship and the manager
-            // has not shown it. That is the ordinary not-yet: the gate defers
-            // on a required row it cannot see rather than dropping the
-            // expectation and launching as if it were never required.
-            RowLookup::Absent { .. } | RowLookup::Unavailable { .. } => {
-                return Err(observation.unproven());
-            }
+            // has answered, from the one committed-row set it serves every
+            // other answer from, that it holds NO row for this key. Absence is
+            // a statement: the delivery provably does not exist, so a live
+            // helper stops over access that is not there rather than deferring
+            // past it on every resync (R21).
+            RowLookup::Absent { .. } => return Err(observation.absent()),
+            // A plane that COULD NOT answer is silence, not absence: the row
+            // may be committed and merely unreadable right now, and a read
+            // that landed inside the relationship's own pass has proven no
+            // loss at all. Stopping here is what turns one unlucky read into a
+            // stop that un-realizes the endpoint behind it, which wakes this
+            // row again - the livelock R21 closes.
+            RowLookup::Unavailable { .. } => return Err(observation.unproven()),
             RowLookup::Error { .. } => {
                 return Err(BindingObservationFault::Refused(
                     BindingGateError::EvidenceUnreadable,
@@ -2316,6 +2378,17 @@ impl ProcessDriver {
                 self.watch_evidence(ctx, &dependencies).await;
                 ProcessBindingPreparation::Deferred
             }
+            // A proven loss is `Pending`, and stops, on exactly the terms a
+            // withdrawn delivery stops: the relationship the source's own
+            // publication requires is not in the committed set at all, so a
+            // helper running over it is running over access that does not
+            // exist (R21). This arm is reached ONLY by that answer - the
+            // mid-pass and merely-unreadable cases both land on the `Unproven`
+            // arm above, which defers and stops nothing.
+            Err(BindingObservationFault::Absent(dependencies)) => {
+                self.watch_evidence(ctx, &dependencies).await;
+                ProcessBindingPreparation::Pending
+            }
             Err(BindingObservationFault::Refused(error)) => {
                 ProcessBindingPreparation::Refused(error)
             }
@@ -2406,8 +2479,17 @@ impl ProcessDriver {
                 .map(|armed| armed.watch)
                 .collect::<Vec<_>>();
             for watch in spent {
-                let _ = ctx.cancel_watch(watch).await;
-                self.watched.retain(|held| held.watch != watch);
+                // A release the manager did not accept leaves the
+                // registration standing in its target's mailbox, so the entry
+                // STAYS. Dropping it would leak a live registration this actor
+                // could no longer name, release, or re-arm - and would leave
+                // the target delivering one wake-up per spent registration to
+                // a subscriber that has forgotten it. The next pass over this
+                // target sees the same entry with evidence that no longer
+                // matches and asks again.
+                if ctx.cancel_watch(watch).await.is_ok() {
+                    self.watched.retain(|held| held.watch != watch);
+                }
             }
             if let Ok(watch) = ctx
                 .watch(row.key.clone(), WatchCondition::ProjectionChanged)
@@ -4082,19 +4164,27 @@ mod tests {
         }
     }
 
-    /// Dead manager: these Process flows mutate no child and read no single row.
+    /// A plane that holds no committed row at all: these Process flows
+    /// mutate no child and read no single row.
     ///
-    /// The double holds no committed row at all, so both listings answer
-    /// truthfully - the owner-scoped one and the Zone-scoped one are empty -
-    /// and that is what states a `Process` launched over it requires no
-    /// `EndpointBinding`. Refusing them instead would leave every flow that
-    /// consumes no endpoint unprovable rather than exercised. The single-row
-    /// reads still refuse, which is what keeps "this plane cannot answer"
-    /// distinct from "this plane holds no such row".
-    struct DeadManager;
+    /// Every READ here answers the empty plane truthfully - the owner-scoped
+    /// listing, the Zone-scoped one, and the single-row reads alike - and that
+    /// is what states a `Process` launched over it requires no
+    /// `EndpointBinding`. A double that refused its reads instead would leave
+    /// every flow that consumes no endpoint unprovable rather than exercised,
+    /// and would report "this plane cannot answer" where the truth is "this
+    /// plane holds no such row" - two different facts, and reading one as the
+    /// other is the defect this crate's own gate exists to avoid. A case that
+    /// needs an UNANSWERABLE plane reaches for a double that says so - the
+    /// manager whose reads refuse - and never for this one.
+    ///
+    /// What still refuses is what has nothing to answer about: a mutation of
+    /// a row this plane does not hold, and a registration against a target
+    /// with no running actor - which is the real manager's own refusal.
+    struct EmptyPlaneManager;
 
     #[async_trait::async_trait]
-    impl ManagerEndpoint for DeadManager {
+    impl ManagerEndpoint for EmptyPlaneManager {
         async fn ensure_child(
             &self,
             _parent: &ResourceKey,
@@ -4107,7 +4197,7 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerUnavailable("dead".into()))
+            Ok(None)
         }
 
         async fn view(
@@ -4148,7 +4238,11 @@ mod tests {
             &self,
             _watch: d2b_resource_runtime::context::WatchId,
         ) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerUnavailable("dead".into()))
+            // A release the real manager cannot route to an entry it no longer
+            // holds still answers `Ok`: it is idempotent, so a driver
+            // releasing a registration this plane never handed out sees the
+            // same answer the runtime would give it.
+            Ok(())
         }
     }
 
@@ -4347,7 +4441,7 @@ mod tests {
     }
 
     fn fixture(row: StoredDesiredResource) -> Fixture {
-        fixture_with(row, Arc::new(DeadManager))
+        fixture_with(row, Arc::new(EmptyPlaneManager))
     }
 
     fn fixture_with(row: StoredDesiredResource, manager: Arc<dyn ManagerEndpoint>) -> Fixture {
@@ -4725,11 +4819,15 @@ mod tests {
             device_worker_vm(&mut f.ctx, &device_key).await,
             Err("device-worker-device-row-missing")
         );
-        let mut f = fixture(test_row());
+        let mut f = fixture_with(
+            test_row(),
+            Arc::new(SettledOwnerManager(device_key.clone())),
+        );
         assert_eq!(
             device_worker_vm(&mut f.ctx, &device_key).await,
             Err("device-worker-device-row-unreadable"),
-            "an unanswerable plane is never read as absence"
+            "an unanswerable plane is never read as absence - and the plane that IS empty \
+             answers the missing row above it instead"
         );
     }
 
@@ -6393,7 +6491,7 @@ mod tests {
 
     impl GuestFixture {
         fn new(row: StoredDesiredResource) -> Self {
-            Self::with(row, Arc::new(DeadManager))
+            Self::with(row, Arc::new(EmptyPlaneManager))
         }
 
         fn with(row: StoredDesiredResource, manager: Arc<dyn ManagerEndpoint>) -> Self {
@@ -6694,12 +6792,35 @@ mod tests {
         /// its owner holds, the views those rows published, the evidence the
         /// launch gate revalidates immediately before the effect, and the
         /// watch registrations it handed out and the driver released.
+        ///
+        /// A runtime registration is ONE-SHOT: its target satisfies it and
+        /// REMOVES it (AE2). This double therefore drops a registration whose
+        /// target has published a pair different from the one it was armed
+        /// against, which is what makes the premise the watch assertions rest
+        /// on exercised rather than assumed - a double that kept satisfied
+        /// registrations would let a driver stack one per pass for free.
         struct BindingManager {
-            rows: Vec<StoredDesiredResource>,
+            rows: parking_lot::Mutex<Vec<StoredDesiredResource>>,
             views: parking_lot::Mutex<Vec<ResourceView>>,
+            /// Keys this plane cannot answer for right now: it REFUSES them,
+            /// which is not the same answer as holding no such row.
+            unreadable: parking_lot::Mutex<Vec<ResourceKey>>,
             reads: parking_lot::Mutex<Vec<ResourceKey>>,
+            live: parking_lot::Mutex<Vec<LiveWatch>>,
             armed: parking_lot::Mutex<u64>,
             released: parking_lot::Mutex<u64>,
+            /// When set, a release is refused, leaving every registration
+            /// standing in its target's mailbox.
+            refuse_cancels: parking_lot::Mutex<bool>,
+        }
+
+        /// One live registration standing in a target's mailbox, with the
+        /// exact pair that target had published when it was armed.
+        struct LiveWatch {
+            id: WatchId,
+            target: ResourceKey,
+            status: Option<ResourceStatus>,
+            projection: Option<serde_json::Value>,
         }
 
         #[async_trait::async_trait]
@@ -6719,7 +6840,11 @@ mod tests {
                 &self,
                 key: &ResourceKey,
             ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-                Ok(self.rows.iter().find(|row| row.key == *key).cloned())
+                if self.withholds(key) {
+                    return Err(ResourceError::ManagerUnavailable("withheld".into()));
+                }
+                let rows = self.rows.lock(); // async-gate-allow: fixture reads under a short guard and holds no await
+                Ok(rows.iter().find(|row| row.key == *key).cloned())
             }
 
             async fn view(
@@ -6727,7 +6852,11 @@ mod tests {
                 key: &ResourceKey,
             ) -> Result<Option<ResourceView>, ResourceError> {
                 self.reads.lock().push(key.clone()); // async-gate-allow: fixture records under a short guard and holds no await
-                Ok(self.views.lock().iter().find(|view| view.key == *key).cloned()) // async-gate-allow: fixture reads under a short guard and holds no await
+                if self.withholds(key) {
+                    return Err(ResourceError::ManagerUnavailable("withheld".into()));
+                }
+                let views = self.views.lock(); // async-gate-allow: fixture reads under a short guard and holds no await
+                Ok(views.iter().find(|view| view.key == *key).cloned())
             }
 
             async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
@@ -6740,12 +6869,8 @@ mod tests {
                 &self,
                 owner_uid: [u8; 16],
             ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-                Ok(self
-                    .rows
-                    .iter()
-                    .filter(|row| row.owner_uid == Some(owner_uid))
-                    .cloned()
-                    .collect())
+                let rows = self.rows.lock(); // async-gate-allow: fixture reads under a short guard and holds no await
+                Ok(rows.iter().filter(|row| row.owner_uid == Some(owner_uid)).cloned().collect())
             }
 
             async fn list_zone_type(
@@ -6753,8 +6878,8 @@ mod tests {
                 zone: &str,
                 type_name: &str,
             ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-                Ok(self
-                    .rows
+                let rows = self.rows.lock(); // async-gate-allow: fixture reads under a short guard and holds no await
+                Ok(rows
                     .iter()
                     .filter(|row| row.key.zone == zone && row.key.type_name == type_name)
                     .cloned()
@@ -6764,14 +6889,35 @@ mod tests {
             async fn register_watch(
                 &self,
                 _subscriber: &ResourceKey,
-                _registration: WatchRegistration,
+                registration: WatchRegistration,
             ) -> Result<WatchId, ResourceError> {
-                let mut armed = self.armed.lock(); // async-gate-allow: fixture counts under a short guard and holds no await
-                *armed += 1;
-                Ok(WatchId(*armed))
+                let id = WatchId({
+                    let mut armed = self.armed.lock(); // async-gate-allow: fixture counts under a short guard and holds no await
+                    *armed += 1;
+                    *armed
+                });
+                // The registration is armed against the pair its target has
+                // published right now, which is the only pair a target ever
+                // satisfies it by moving.
+                let view = self.views.lock().iter().find(|view| view.key == registration.target).cloned(); // async-gate-allow: fixture reads under a short guard and holds no await
+                self.live.lock().push(LiveWatch { // async-gate-allow: fixture records under a short guard and holds no await
+                    id,
+                    target: registration.target,
+                    status: view.as_ref().and_then(|view| view.status.clone()),
+                    projection: view.and_then(|view| view.status_projection.clone()),
+                });
+                Ok(id)
             }
 
-            async fn cancel_watch(&self, _id: WatchId) -> Result<(), ResourceError> {
+            async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError> {
+                if *self.refuse_cancels.lock() { // async-gate-allow: fixture reads under a short guard and holds no await
+                    return Err(ResourceError::ManagerUnavailable("release refused".into()));
+                }
+                // A release the real manager cannot route to an entry it no
+                // longer holds still answers `Ok`: it is idempotent, so a
+                // driver releasing a registration the target already spent
+                // sees the same answer either way.
+                self.live.lock().retain(|entry| entry.id != watch); // async-gate-allow: fixture rewrites under a short guard and holds no await
                 let mut released = self.released.lock(); // async-gate-allow: fixture counts under a short guard and holds no await
                 *released += 1;
                 Ok(())
@@ -6793,6 +6939,60 @@ mod tests {
             fn watch_cycle(&self) -> (u64, u64) {
                 (*self.armed.lock(), *self.released.lock()) // async-gate-allow: fixture reads under a short guard and holds no await
             }
+
+            /// Whether this plane REFUSES one key: the manager declining to
+            /// answer is not the same answer as holding no such row, and it is
+            /// the answer a driver must never read as one.
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fn withholds(&self, key: &ResourceKey) -> bool {
+                self.unreadable.lock().iter().any(|held| held == key) // async-gate-allow: fixture reads under a short guard and holds no await
+            }
+
+            /// The registrations still standing in their targets' mailboxes,
+            /// in the order they were handed out: what proves whether a driver
+            /// re-armed, left a spent one standing, or stacked a second.
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fn live_watches(&self) -> Vec<WatchId> {
+                self.live.lock().iter().map(|entry| entry.id).collect() // async-gate-allow: fixture reads under a short guard and holds no await
+            }
+
+            /// AE2: a target that has published a pair different from the one a
+            /// registration was armed against has satisfied it and REMOVED it.
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fn spend_satisfied(&self) {
+                let views = self.views.lock().clone(); // async-gate-allow: fixture clones under a short guard and holds no await
+                let mut live = self.live.lock(); // async-gate-allow: fixture rewrites under a short guard and holds no await
+                live.retain(|entry| match views.iter().find(|view| view.key == entry.target) {
+                    Some(view) => {
+                        view.status == entry.status && view.status_projection == entry.projection
+                    }
+                    None => true,
+                });
+            }
+
+            /// Withdraw one committed row from the plane: what a manager
+            /// answers once the row it held is gone is `Ok(None)`, and that is
+            /// a stable fact rather than a row that is merely unreadable.
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fn retire(&self, key: &ResourceKey) {
+                self.rows.lock().retain(|row| &row.key != key); // async-gate-allow: fixture rewrites under a short guard and holds no await
+                self.views.lock().retain(|view| &view.key != key); // async-gate-allow: fixture rewrites under a short guard and holds no await
+                self.spend_satisfied();
+            }
+
+            /// Make this plane unable to answer for one key: the manager
+            /// REFUSES, which says nothing about whether the row is there.
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fn withhold(&self, key: &ResourceKey) {
+                self.unreadable.lock().push(key.clone()); // async-gate-allow: fixture records under a short guard and holds no await
+            }
+
+            /// Make this plane refuse to release, so a registration stays
+            /// standing in its target's mailbox however hard the driver asks.
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fn set_refusing_cancels(&self, refusing: bool) {
+                *self.refuse_cancels.lock() = refusing; // async-gate-allow: fixture writes under a short guard and holds no await
+            }
         }
 
         fn gated_guest_fixture() -> (GuestFixture, Arc<BindingManager>) {
@@ -6804,11 +7004,14 @@ mod tests {
             row.metadata =
                 br#"{"annotations":{},"labels":{},"ownerRef":"Provider/runtime-local"}"#.to_vec();
             let manager = Arc::new(BindingManager {
-                rows: vec![endpoint_row()],
+                rows: parking_lot::Mutex::new(vec![endpoint_row()]),
                 views: parking_lot::Mutex::new(vec![endpoint_view(), binding_view(true)]),
+                unreadable: parking_lot::Mutex::new(Vec::new()),
                 reads: parking_lot::Mutex::new(Vec::new()),
+                live: parking_lot::Mutex::new(Vec::new()),
                 armed: parking_lot::Mutex::new(0),
                 released: parking_lot::Mutex::new(0),
+                refuse_cancels: parking_lot::Mutex::new(false),
             });
             (
                 GuestFixture::with(row, Arc::clone(&manager) as Arc<dyn ManagerEndpoint>),
@@ -6872,20 +7075,30 @@ mod tests {
             views: Vec<ResourceView>,
         ) -> Arc<BindingManager> {
             Arc::new(BindingManager {
-                rows,
+                rows: parking_lot::Mutex::new(rows),
                 views: parking_lot::Mutex::new(views),
+                unreadable: parking_lot::Mutex::new(Vec::new()),
                 reads: parking_lot::Mutex::new(Vec::new()),
+                live: parking_lot::Mutex::new(Vec::new()),
                 armed: parking_lot::Mutex::new(0),
                 released: parking_lot::Mutex::new(0),
+                refuse_cancels: parking_lot::Mutex::new(false),
             })
         }
 
         /// Replace one published view, which is how a case states that the
-        /// evidence under a live row moved.
+        /// evidence under a live row moved. Publishing is also what satisfies
+        /// and REMOVES every registration armed against the pair it replaces
+        /// (AE2), so the one-shot premise is exercised by the double rather
+        /// than assumed by it.
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn publish(manager: &BindingManager, view: ResourceView) {
-            manager.views.lock().retain(|published| published.key != view.key); // async-gate-allow: fixture rewrites under a short guard and holds no await
-            manager.views.lock().push(view); // async-gate-allow: fixture rewrites under a short guard and holds no await
+            {
+                let mut views = manager.views.lock(); // async-gate-allow: fixture rewrites under a short guard and holds no await
+                views.retain(|published| published.key != view.key);
+                views.push(view);
+            }
+            manager.spend_satisfied();
         }
 
         /// The delivery a live Guest Process receives is exactly the sealed
@@ -7728,6 +7941,11 @@ mod tests {
                 (2, 0),
                 "the first pass subscribes to the endpoint and the relationship"
             );
+            assert_eq!(
+                manager.live_watches(),
+                vec![WatchId(1), WatchId(2)],
+                "and the plane is holding exactly those two registrations"
+            );
 
             fake.push_adoption(ProviderAdoption::Adopted(adopted_report()));
             assert_eq!(
@@ -7741,11 +7959,24 @@ mod tests {
                  registrations are still live in their targets, so re-arming them would buy \
                  no wake-up and cost two round trips per dependency"
             );
+            assert_eq!(
+                manager.live_watches(),
+                vec![WatchId(1), WatchId(2)],
+                "and the SAME two registrations are still standing: nothing was stacked and \
+                 nothing was spent by a pass that read evidence that had not moved"
+            );
 
             // The relationship's own evidence moves - the delivery is
             // withdrawn - so the registration standing on it is spent, and the
             // endpoint's did not move, so the one standing on it is not.
             publish(&manager, binding_view(false));
+            assert_eq!(
+                manager.live_watches(),
+                vec![WatchId(1)],
+                "the target REMOVED the registration it satisfied (AE2), rather than this \
+                 double holding it: that one-shot removal is what makes re-arming load-bearing \
+                 instead of decorative"
+            );
             assert_eq!(
                 d.reconcile(&mut f.ctx).await.expect("the withdrawn pass"),
                 ReconcileOutcome::RetryScheduled,
@@ -7757,6 +7988,240 @@ mod tests {
                 "exactly the registration whose evidence moved was released and armed again, so \
                  a second change on that relationship still wakes this row, and the endpoint's \
                  untouched registration is left standing"
+            );
+            assert_eq!(
+                manager.live_watches(),
+                vec![WatchId(1), WatchId(3)],
+                "so the relationship is subscribed again under a NEW registration and the \
+                 endpoint's original one is untouched"
+            );
+        }
+
+        /// One `Endpoint` row that reached a TERMINAL failure: its actor
+        /// refused the shape it was handed and published `Failed` for its
+        /// CURRENT generation, with no projection beside it (R14). The
+        /// missing projection there is the row having SPOKEN.
+        fn failed_endpoint_view() -> ResourceView {
+            let mut view = view(endpoint_key(), [0x62; 16], 2, None, Vec::new());
+            view.status = Some(ResourceStatus::Failed(DriverFailure::refused(
+                DriverOp::Reconcile,
+                FailureKinds::PROCESS_PROVIDER_EFFECT_FAILED,
+            )));
+            view
+        }
+
+        /// The committed row behind it, naming a producer that is not this
+        /// consumer - so the retirement barrier reads a well-formed endpoint
+        /// and not an unreadable one.
+        fn failed_endpoint_row() -> StoredDesiredResource {
+            endpoint_row_with_spec(&endpoint_spec_naming("Process/other"))
+        }
+
+        /// ABSENCE is a statement. The endpoint's own publication intent
+        /// names a relationship and the manager has answered, from the one
+        /// committed-row set it serves everything else from, that it holds no
+        /// row for that key. The delivery provably does not exist, so a live
+        /// helper stops on exactly the terms a withdrawn delivery stops it:
+        /// access whose delivery row is not there is not access (R21, R22).
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn a_positively_absent_relationship_stops_the_running_process() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![endpoint_view(), binding_view(true)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            expect_in_progress(d.reconcile(&mut f.ctx).await);
+            yield_until_effects_settled().await;
+            fake.push_adoption(ProviderAdoption::Adopted(adopted_report()));
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the adopted pass"),
+                ReconcileOutcome::Satisfied
+            );
+
+            // The committed relationship is gone. The endpoint still names it,
+            // and the plane now answers `Ok(None)` for that key - which is a
+            // fact about the committed set, not a plane that is busy.
+            manager.retire(&binding_key());
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the absent pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            assert_eq!(
+                fake.stop_calls().len(),
+                1,
+                "a delivery row that provably does not exist stops the verified live \
+                 incarnation, on the same terms a withdrawn one does"
+            );
+            assert_eq!(
+                f.ctx.status::<ProcessDriverStatus>().copied(),
+                Some(ProcessDriverStatus::Succeeded {
+                    code: "binding-delivery-withdrawn"
+                }),
+                "and the row stops reading ready over access that does not exist"
+            );
+            assert_eq!(
+                fake.launch_calls().len(),
+                1,
+                "no relaunch over a relationship the plane positively does not hold"
+            );
+        }
+
+        /// SILENCE is the other answer, and it stops nothing. A plane that
+        /// REFUSES the relationship read has said nothing about whether the row
+        /// is there, and the same is true of a read that landed inside the
+        /// relationship's own pass - the row is held, it is merely unreadable
+        /// right now. Stopping on either is what turns one unlucky read into a
+        /// stop that un-realizes the endpoint behind it, which wakes this row
+        /// again: the livelock R21 closes.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn a_relationship_the_plane_cannot_answer_defers_instead_of_stopping() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![endpoint_view(), binding_view(true)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            expect_in_progress(d.reconcile(&mut f.ctx).await);
+            yield_until_effects_settled().await;
+            fake.push_adoption(ProviderAdoption::Adopted(adopted_report()));
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the adopted pass"),
+                ReconcileOutcome::Satisfied
+            );
+
+            // The very same read, refused rather than answered.
+            manager.withhold(&binding_key());
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the unanswerable pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            assert!(
+                fake.stop_calls().is_empty(),
+                "a plane that cannot answer proves no withdrawal, so the verified live \
+                 incarnation keeps running: {:?}",
+                fake.stop_calls()
+            );
+            assert_eq!(
+                f.ctx.status::<ProcessDriverStatus>().copied(),
+                Some(ProcessDriverStatus::Ready { adopted: true }),
+                "and the row keeps reading ready, because nothing said otherwise"
+            );
+        }
+
+        /// FAILURE is a statement too, and a terminal one. A `Failed`
+        /// `Endpoint` published a status for its CURRENT generation and no
+        /// projection with it, because refusing a lookalike shape is a
+        /// designed terminal state rather than an unfinished pass (R14). It
+        /// therefore grants NOTHING for this consumer - which is an answer -
+        /// and reading its missing projection as an unfinished pass would let
+        /// ONE refused `Endpoint` committed anywhere in a Zone defer EVERY
+        /// root `Process` row in that Zone forever.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn a_failed_endpoint_anywhere_in_the_zone_grants_nothing_and_stalls_nobody() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
+            let manager = binding_manager(
+                vec![failed_endpoint_row()],
+                vec![failed_endpoint_view()],
+            );
+            let mut f = fixture_with(test_row(), Arc::clone(&manager) as Arc<dyn ManagerEndpoint>);
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            expect_in_progress(d.reconcile(&mut f.ctx).await);
+            yield_until_effects_settled().await;
+            assert_eq!(
+                fake.launch_calls().len(),
+                1,
+                "a terminally failed endpoint names no relationship for this consumer, so \
+                 the Zone answer is the empty one and this root row launches"
+            );
+        }
+
+        /// The same fact on the other side of the lifecycle: a terminal row is
+        /// not an unsettled one, so it does not hold a root `Process` row from
+        /// retiring either. The Zone scan reads its publication, finds no
+        /// relationship naming this consumer, and its committed bytes name a
+        /// producer that is not this row - nothing to be retained over.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn a_failed_endpoint_in_the_zone_does_not_hold_a_root_row_from_retiring() {
+            let manager = binding_manager(
+                vec![failed_endpoint_row()],
+                vec![failed_endpoint_view()],
+            );
+            let mut f = fixture_with(test_row(), Arc::clone(&manager) as Arc<dyn ManagerEndpoint>);
+            let mut d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
+
+            let outcome = d.delete(&mut f.ctx).await;
+            assert!(
+                outcome.is_ok(),
+                "with a terminal endpoint in its scope and no relationship naming it, the row \
+                 retires: {outcome:?}"
+            );
+        }
+
+        /// A release the manager did not accept leaves the registration
+        /// standing in its target's mailbox, so the driver must keep NAMING
+        /// it. Dropping the entry on a refused release is how a live
+        /// registration leaks: this actor would go on believing that target is
+        /// subscribed when nothing is holding the id that could release it.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        #[tokio::test]
+        async fn a_release_the_manager_refused_keeps_the_registration_named() {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
+            let manager = binding_manager(
+                vec![endpoint_row(), binding_row()],
+                vec![endpoint_view(), binding_view(true)],
+            );
+            let mut f = fixture_with(
+                owned_host_row(),
+                Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
+            );
+            let mut d = driver(Arc::clone(&fake)).await;
+
+            expect_in_progress(d.reconcile(&mut f.ctx).await);
+
+            // The plane starts refusing releases just before the relationship's
+            // evidence moves, so the re-arm's own release is the one refused.
+            manager.set_refusing_cancels(true);
+            publish(&manager, binding_view(false));
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the withdrawn pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            assert_eq!(
+                manager.watch_cycle(),
+                (3, 0),
+                "the refused release did not happen, and the registration it would have \
+                 dropped is still standing in its target's mailbox"
+            );
+
+            // Once the plane accepts releases again, the next pass releases
+            // BOTH the registration it could not release last time and the one
+            // it armed alongside it - proof the first was never dropped.
+            manager.set_refusing_cancels(false);
+            assert_eq!(
+                d.reconcile(&mut f.ctx).await.expect("the recovered pass"),
+                ReconcileOutcome::RetryScheduled
+            );
+            assert_eq!(
+                manager.watch_cycle(),
+                (4, 2),
+                "the refused registration was still NAMED, so this pass released it and the \
+                 one armed beside it, then armed the target again"
             );
         }
 

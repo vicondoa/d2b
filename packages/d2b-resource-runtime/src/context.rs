@@ -4,6 +4,7 @@
 pub const MODULE_NAME: &str = "context";
 use std::any::Any;
 use std::cell::OnceCell;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -419,6 +420,14 @@ pub struct ResourceContext {
     /// reaches the authenticated target session through the binding instead
     /// of through a coarse handle that said nothing about authority.
     target: Option<crate::target::TargetBinding>,
+    /// The internal-watch registrations this row holds that the target has
+    /// not notified on yet (AE2: a registration is satisfied exactly once
+    /// and then removed from the target's mailbox). This is what tells a
+    /// driver "the target spoke" apart from "the evidence stands still" -
+    /// a fingerprint comparison cannot, because a target pass satisfies
+    /// both registrations and republishes the very pair it published
+    /// before.
+    live_watches: HashSet<WatchId>,
 }
 
 impl ResourceContext {
@@ -445,7 +454,26 @@ impl ResourceContext {
             status_projection: None,
             owner_key: None,
             target: None,
+            live_watches: HashSet::new(),
         }
+    }
+
+    /// Carry this row's outstanding internal-watch registrations onto a
+    /// rebuilt context (spec change, generation move).
+    ///
+    /// The registrations live in the target actors' mailboxes, not in this
+    /// context, so a rebuild that forgot them would make every id this row
+    /// remembers read as spent and re-arm duplicates on top of registrations
+    /// that are still standing.
+    pub(crate) fn take_live_watches(&mut self) -> HashSet<WatchId> {
+        std::mem::take(&mut self.live_watches)
+    }
+
+    /// Adopt the registrations carried onto a rebuilt context (the actor's
+    /// spec-change path).
+    pub(crate) fn with_live_watches(mut self, live: HashSet<WatchId>) -> Self {
+        self.live_watches = live;
+        self
     }
 
     /// Attach the owning resource's key (manager-resolved).
@@ -747,7 +775,8 @@ impl ResourceContext {
         target: ResourceKey,
         condition: WatchCondition,
     ) -> Result<WatchId, ResourceError> {
-        self.manager
+        let watch = self
+            .manager
             .register_watch(
                 &self.row.key,
                 WatchRegistration {
@@ -756,7 +785,12 @@ impl ResourceContext {
                     notify: self.watch_notify.clone(),
                 },
             )
-            .await
+            .await?;
+        // The registration exists in the target actor's mailbox from here on,
+        // so this row records it as live until the target notifies on it (or
+        // this row releases it). See [`Self::watch_is_live`].
+        self.live_watches.insert(watch);
+        Ok(watch)
     }
 
     /// Release one internal watch this row registered ([`Self::watch`]).
@@ -767,7 +801,37 @@ impl ResourceContext {
     /// grows by one registration per pass and every later change on that
     /// target is delivered once per spent registration.
     pub async fn cancel_watch(&mut self, watch: WatchId) -> Result<(), ResourceError> {
-        self.manager.cancel_watch(watch).await
+        self.manager.cancel_watch(watch).await?;
+        // Only a release that took is a release: the registration is gone from
+        // the target's mailbox, so it is no longer standing. A refused release
+        // leaves the id live and the caller its reason to retry.
+        self.live_watches.remove(&watch);
+        Ok(())
+    }
+
+    /// Whether `watch` is still standing in the target actor's mailbox.
+    ///
+    /// A registration is one-shot (AE2): the target actor satisfies it exactly
+    /// once, removes it, and notifies this row, which reaches the actor as
+    /// [`crate::ResourceMsg::DependencySatisfied`] and is recorded here by
+    /// [`Self::mark_watch_spent`]. So this answers "has the target notified
+    /// this row since the registration went out", which is the question a
+    /// re-arm has to ask: evidence that reads back unchanged cannot tell a
+    /// spent registration from a live one, because a target pass satisfies the
+    /// registration and republishes the very projection it published before.
+    pub fn watch_is_live(&self, watch: WatchId) -> bool {
+        self.live_watches.contains(&watch)
+    }
+
+    /// Record that the target satisfied one of this row's registrations.
+    ///
+    /// Called by the actor as it handles
+    /// [`crate::ResourceMsg::DependencySatisfied`], which is where the target
+    /// actor's notification enters this row's mailbox. The id stops being live
+    /// at exactly the moment the target removed it, so the driver's next pass
+    /// sees a spent registration and re-arms it (see [`Self::watch_is_live`]).
+    pub fn mark_watch_spent(&mut self, watch: WatchId) {
+        self.live_watches.remove(&watch);
     }
 
     /// Schedule exactly one reconcile after `after` (R13; spec section 32).
@@ -1211,6 +1275,10 @@ mod tests {
             subscriber: ResourceKey,
             reply: oneshot::Sender<Result<WatchId, ResourceError>>,
         },
+        CancelWatch {
+            watch: WatchId,
+            reply: oneshot::Sender<Result<(), ResourceError>>,
+        },
     }
 
     /// Channel endpoint stub implementing [`ManagerEndpoint`] over
@@ -1281,8 +1349,13 @@ mod tests {
             rx.await.map_err(|_| ResourceError::ManagerUnavailable("manager dropped the request".into()))?
         }
 
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerRejected { reason: "cancel_watch not exercised in-module".into() })
+        async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError> {
+            let (reply, rx) = oneshot::channel();
+            self.tx
+                .send(StubCall::CancelWatch { watch, reply })
+                .await
+                .map_err(|_| ResourceError::ManagerUnavailable("manager channel closed".into()))?;
+            rx.await.map_err(|_| ResourceError::ManagerUnavailable("manager dropped the request".into()))?
         }
     }
 
@@ -1755,6 +1828,80 @@ mod tests {
         assert_eq!(satisfied.watch, WatchId(5));
         assert_eq!(satisfied.target, ResourceKey::new("z", "Process", "worker-0"));
         stub.await.unwrap();
+    }
+
+    /// The registration is live from the moment it is placed until the target
+    /// speaks on it or this row releases it, and nothing else moves it.
+    ///
+    /// This is the seam a re-arm reads: evidence that reads back identical
+    /// cannot tell a spent registration from a standing one, because a target
+    /// pass satisfies the registration and republishes the very projection it
+    /// published before. A release the manager REFUSES leaves the id live,
+    /// because the registration is still in the target's mailbox.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_registration_is_live_until_the_target_notifies_or_this_row_releases_it() {
+        let (tx, mut rx) = mpsc::channel::<StubCall>(4);
+        let mut fixture = fixture(
+            test_row("z", "Volume", "data"),
+            ChannelEndpointStub::new(tx),
+            NullRequeue,
+            Arc::new(FailingDecoder),
+        );
+        let watched = ResourceKey::new("z", "Process", "worker-0");
+        let refused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let refused_stub = refused.clone();
+        let stub = tokio::spawn(async move {
+            while let Some(call) = rx.recv().await {
+                match call {
+                    StubCall::RegisterWatch { reply, .. } => {
+                        let _ = reply.send(Ok(WatchId(7)));
+                    }
+                    StubCall::CancelWatch { watch, reply } => {
+                        if refused_stub.load(Ordering::SeqCst) {
+                            let _ = reply.send(Err(ResourceError::ManagerRejected {
+                                reason: "release refused".into(),
+                            }));
+                        } else {
+                            let _ = reply.send(Ok(()));
+                            assert_eq!(watch, WatchId(7));
+                        }
+                    }
+                    other => panic!("unexpected call: {other:?}"),
+                }
+            }
+        });
+
+        let armed = fixture
+            .ctx
+            .watch(watched.clone(), WatchCondition::ProjectionChanged)
+            .await
+            .expect("the registration lands in the target's mailbox");
+        assert!(fixture.ctx.watch_is_live(armed), "a placed registration is standing");
+
+        fixture.ctx.mark_watch_spent(armed);
+        assert!(
+            !fixture.ctx.watch_is_live(armed),
+            "the target spoke: the registration is spent and the driver re-arms it"
+        );
+
+        let rearmed = fixture
+            .ctx
+            .watch(watched.clone(), WatchCondition::ProjectionChanged)
+            .await
+            .expect("the spent registration is replaced");
+        assert!(fixture.ctx.watch_is_live(rearmed));
+
+        refused.store(true, Ordering::SeqCst);
+        assert!(
+            fixture.ctx.cancel_watch(rearmed).await.is_err(),
+            "a refused release is reported as such"
+        );
+        assert!(
+            fixture.ctx.watch_is_live(rearmed),
+            "a refused release leaves the registration standing in the target"
+        );
+        stub.abort();
     }
 
     // -- Service driver context (U3, R7) --------------------------------------
