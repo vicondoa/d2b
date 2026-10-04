@@ -568,87 +568,97 @@
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 4062,
+      "line": 4286,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 4073,
+      "line": 4297,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 4074,
+      "line": 4298,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 4843,
+      "line": 4314,
+      "reason": "fixture clones under a short guard and holds no await"
+    },
+    {
+      "file": "packages/d2b-provider-process/src/driver.rs",
+      "line": 4315,
+      "reason": "fixture clones under a short guard and holds no await"
+    },
+    {
+      "file": "packages/d2b-provider-process/src/driver.rs",
+      "line": 5081,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 4855,
+      "line": 5093,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 4962,
+      "line": 5200,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 5324,
+      "line": 5562,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 6102,
+      "line": 6338,
       "reason": "fixture records the frame under a short guard and holds no await"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 6126,
+      "line": 6362,
       "reason": "fixture pops under a short guard and holds no await"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 6137,
+      "line": 6373,
       "reason": "fixture records the delete under a short guard and holds no await"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 6145,
+      "line": 6381,
       "reason": "fixture pops under a short guard and holds no await"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 6493,
+      "line": 6729,
       "reason": "fixture records under a short guard and holds no await"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 6494,
+      "line": 6730,
       "reason": "fixture reads under a short guard and holds no await"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 6520,
+      "line": 6769,
       "reason": "fixture counts under a short guard and holds no await"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 6526,
+      "line": 6775,
       "reason": "fixture counts under a short guard and holds no await"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 6865,
+      "line": 7114,
       "reason": "fixture rewrites under a short guard and holds no await"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 6866,
+      "line": 7115,
       "reason": "fixture rewrites under a short guard and holds no await"
     },
     {
@@ -823,22 +833,22 @@
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1004,
+      "line": 1044,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1273,
+      "line": 1313,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1301,
+      "line": 1341,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1310,
+      "line": 1350,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {

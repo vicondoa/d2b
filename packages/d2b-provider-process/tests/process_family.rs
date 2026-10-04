@@ -1252,6 +1252,21 @@ mod gated_launch {
                 .collect())
         }
 
+        async fn list_zone_type(
+            &self,
+            zone: &str,
+            type_name: &str,
+        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            Ok(self
+                .rows
+                .lock()
+                .await
+                .iter()
+                .filter(|row| row.key.zone == zone && row.key.type_name == type_name)
+                .cloned()
+                .collect())
+        }
+
         async fn register_watch(
             &self,
             _subscriber: &ResourceKey,

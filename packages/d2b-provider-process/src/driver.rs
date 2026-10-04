@@ -1157,6 +1157,128 @@ async fn observe_endpoint_bindings(
     Ok(named)
 }
 
+/// Read one committed `Endpoint` row's own view and derive what it publishes
+/// for `process_ref` (R18).
+///
+/// Every `Endpoint` row the completeness scope covers reaches this one call,
+/// whether it was named by the owner-scoped sibling listing or by the
+/// Zone-scoped listing a root row has to read instead, so both scopes derive
+/// expectations - and read the evidence behind them - identically.
+async fn observe_one_endpoint(
+    ctx: &mut ResourceContext,
+    key: &ResourceKey,
+    process_ref: &ResourceRef,
+    observation: &mut BindingObservation,
+) -> Result<(), BindingObservationFault> {
+    let read = observation.dependencies.len();
+    observation.dependencies.push(DependencyRow { key: key.clone(), evidence: None });
+    let view = match ctx.lookup_view(key).await {
+        RowLookup::Present { row, .. } => row,
+        // The scope named this endpoint, and the manager then answered that it
+        // holds no view for it. Both answers come from the one committed-row
+        // set, so this is one pass learning that the row it must reason about
+        // is not there to be reasoned about - deleted between the two reads, or
+        // a listing this pass could not catch up with. Skipping it would drop
+        // an expectation this launch may owe and start the row carrying no
+        // delivery at all. Deferring is not a stall: the next pass re-derives
+        // the scope from the manager, so an endpoint that really is gone is
+        // simply absent from that listing.
+        RowLookup::Absent { .. } | RowLookup::Unavailable { .. } => {
+            return Err(observation.unproven());
+        }
+        // A read that ANSWERED with a payload this pass cannot interpret is
+        // terminal evidence, not an ordinary not-yet: retrying the same row
+        // cannot change what it says, and the relationship-row read maps its
+        // own failed read to the same terminal slug.
+        RowLookup::Error { .. } => {
+            return Err(BindingObservationFault::Refused(
+                BindingGateError::EvidenceUnreadable,
+            ));
+        }
+    };
+    // The endpoint row itself was READ, so what this pass knows about it is
+    // the evidence its watch is armed against - even when what it reads is
+    // that the row has published nothing yet. Capturing it only on the far
+    // side of the call below would drop exactly the source a deferred gate
+    // most needs to hear from again.
+    observation.dependencies[read].evidence = Some(WatchEvidence::of(&view));
+    if !observe_endpoint_bindings(ctx, &view, process_ref, observation).await? {
+        // This source has published, and it publishes nothing for this
+        // consumer: it is not this row's evidence, so this row neither keeps
+        // it as a dependency nor subscribes to it.
+        observation.dependencies.truncate(read);
+    }
+    Ok(())
+}
+
+/// The scope one `Process` row proves its expected binding set over, and the
+/// settlement that scope requires (R18, R22).
+///
+/// An empty set is an answer about a SCOPE, so the scope is the whole finding:
+/// read outside the scope that can name this consumer's endpoints, an empty
+/// expected set says nothing at all, and `NotRequired` from it starts the row
+/// over an endpoint access nobody had granted.
+enum CompletenessScope {
+    /// The committed child set of the owner that owns this row.
+    Owner(ResourceKey),
+    /// Every `Endpoint` row in this row's Zone.
+    Zone,
+}
+
+impl CompletenessScope {
+    /// The scope this row proves over, or the fault that says it cannot be
+    /// proven yet.
+    ///
+    /// An OWNED row's scope is its owner's committed child set: a session owns
+    /// the `Process` rows and the `Endpoint` rows together. That set is
+    /// SETTLED only once the owner has published for its CURRENT generation -
+    /// a session materializes its children and then publishes - so a child
+    /// actor that reconciles inside that window reads a child set that is still
+    /// growing, and an empty read there states only "this pass has not reached
+    /// the endpoints yet". An owner that is deleting settles the set too: it
+    /// commits no further children.
+    ///
+    /// A ROOT row has no owner at all, so the owner-scoped listing answers an
+    /// empty set without asking anyone. Nothing about it needs settling - the
+    /// Zone is the scope, and it is read in full.
+    async fn of(ctx: &mut ResourceContext) -> Result<Self, BindingObservationFault> {
+        let Some(owner) = ctx.owner_key().cloned() else {
+            return Ok(Self::Zone);
+        };
+        match ctx.lookup_view(&owner).await {
+            RowLookup::Present { row, .. } if row.deleting || row.observed_status().is_some() => {
+                Ok(Self::Owner(owner))
+            }
+            // The owner row is not there, the plane cannot answer, or the
+            // owner has published nothing for its current generation - it is
+            // still materializing the children this pass would have to see.
+            // None of those is a settled child set, and an unsettled one is
+            // not a statement.
+            _ => Err(BindingObservationFault::Unproven(Vec::new())),
+        }
+    }
+
+    /// The `Endpoint` rows this row's scope covers, read in full.
+    ///
+    /// The retention barrier reads the same scope the launch gate proves
+    /// over, so a relationship committed anywhere the gate would have read is
+    /// also a relationship that holds this row.
+    async fn endpoints(
+        ctx: &mut ResourceContext,
+    ) -> Result<Vec<StoredDesiredResource>, BindingObservationFault> {
+        let rows = match Self::of(ctx).await? {
+            Self::Zone => ctx.zone_rows(ENDPOINT_ROW_TYPE).await,
+            Self::Owner(_) => ctx.owner_siblings().await.map(|siblings| {
+                siblings
+                    .into_iter()
+                    .filter(|row| row.key.type_name == ENDPOINT_ROW_TYPE)
+                    .collect()
+            }),
+        };
+        rows.map_err(|_| BindingObservationFault::Unproven(Vec::new()))
+    }
+}
+
 /// The manager key of the canonical relationship row one published
 /// relationship names.
 fn binding_key(ctx: &ResourceContext, name: &str) -> ResourceKey {
@@ -2330,11 +2452,18 @@ impl ProcessDriver {
     /// Read what the manager currently proves about the canonical
     /// `EndpointBinding` rows this exact Process requires (R18).
     ///
-    /// The endpoints a Process may consume are the endpoints its OWNER owns: a
-    /// session owns the `Process` rows and the `Endpoint` rows together, so
-    /// this is the existing owner-scoped sibling listing and no new manager
-    /// surface is added for it. A root Process has no siblings, which is the
-    /// honest answer - and the one every existing non-display Process gets.
+    /// The endpoints an owned Process may consume are the endpoints its OWNER
+    /// owns: a session owns the `Process` rows and the `Endpoint` rows
+    /// together, so this is the existing owner-scoped sibling listing and no
+    /// new manager surface is added for it.
+    ///
+    /// An EMPTY expected set is not yet an answer, and this is where it stops
+    /// being one. A set that came back empty has been read over SOME scope,
+    /// and two scopes reach a `Process` row that this one does not cover: a
+    /// root row has no owner-scoped neighbourhood at all, and an owned row's
+    /// owner may be mid-pass with children it has not committed yet.
+    /// [`Self::prove_scope`] closes both before an empty set may answer
+    /// `NotRequired`.
     async fn observe_bindings(
         &self,
         ctx: &mut ResourceContext,
@@ -2349,49 +2478,48 @@ impl ProcessDriver {
             .iter()
             .filter(|row| row.key.type_name == ENDPOINT_ROW_TYPE)
         {
-            let read = observation.dependencies.len();
-            observation.dependencies.push(DependencyRow { key: row.key.clone(), evidence: None });
-            let view = match ctx.lookup_view(&row.key).await {
-                RowLookup::Present { row, .. } => row,
-                // The owner-scoped listing named this endpoint, and the
-                // manager then answered that it holds no view for it. Both
-                // answers come from the one committed-row set, so this is one
-                // pass learning that the row it must reason about is not there
-                // to be reasoned about - deleted between the two reads, or a
-                // listing this pass could not catch up with. Skipping it
-                // would drop an expectation this launch may owe and start the
-                // row carrying no delivery at all. Deferring is not a stall:
-                // the next pass re-derives the sibling set from the manager,
-                // so an endpoint that really is gone is simply absent from
-                // that listing.
-                RowLookup::Absent { .. } | RowLookup::Unavailable { .. } => {
-                    return Err(observation.unproven());
-                }
-                // A read that ANSWERED with a payload this pass cannot
-                // interpret is terminal evidence, not an ordinary not-yet:
-                // retrying the same row cannot change what it says, and the
-                // relationship-row read below maps its own failed read to the
-                // same terminal slug.
-                RowLookup::Error { .. } => {
-                    return Err(BindingObservationFault::Refused(
-                        BindingGateError::EvidenceUnreadable,
-                    ));
-                }
-            };
-            // The endpoint row itself was READ, so what this pass knows about
-            // it is the evidence its watch is armed against - even when what
-            // it reads is that the row has published nothing yet. Capturing
-            // it only on the far side of the call below would drop exactly
-            // the source a deferred gate most needs to hear from again.
-            observation.dependencies[read].evidence = Some(WatchEvidence::of(&view));
-            if !observe_endpoint_bindings(ctx, &view, process_ref, &mut observation).await? {
-                // This source has published, and it publishes nothing for
-                // this consumer: it is not this row's evidence, so this row
-                // neither keeps it as a dependency nor subscribes to it.
-                observation.dependencies.truncate(read);
-            }
+            observe_one_endpoint(ctx, &row.key, process_ref, &mut observation).await?;
+        }
+        if observation.expected.is_empty() {
+            self.prove_scope(ctx, process_ref, &mut observation).await?;
         }
         Ok(observation)
+    }
+
+    /// Prove the expected set is COMPLETE over this row's scope, or defer
+    /// (R18).
+    ///
+    /// Nothing here runs for a row whose owner publishes an `Endpoint` naming
+    /// it: that set is already non-empty, and a non-empty set is compared
+    /// against the evidence that produced it. This is the display hot path, and
+    /// it pays nothing here.
+    async fn prove_scope(
+        &self,
+        ctx: &mut ResourceContext,
+        process_ref: &ResourceRef,
+        observation: &mut BindingObservation,
+    ) -> Result<(), BindingObservationFault> {
+        match CompletenessScope::of(ctx).await? {
+            // The owner's settled child set is the scope, and the sibling
+            // listing already read every `Endpoint` row in it. Settled is the
+            // whole condition: an unsettled owner was still committing the
+            // endpoints this set would have to name.
+            CompletenessScope::Owner(_) => Ok(()),
+            // A root row's scope is the Zone, which the owner-scoped listing
+            // never covered - it answered an empty set without asking anyone.
+            // Reading it is what turns that empty set into a statement about
+            // the Zone instead of a statement about this row's neighbourhood.
+            CompletenessScope::Zone => {
+                let rows = ctx
+                    .zone_rows(ENDPOINT_ROW_TYPE)
+                    .await
+                    .map_err(|_| observation.unproven())?;
+                for row in &rows {
+                    observe_one_endpoint(ctx, &row.key, process_ref, observation).await?;
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Refuse to retire this row while a relationship it consumes, or an
@@ -2406,11 +2534,15 @@ impl ProcessDriver {
     /// every `Endpoint` it produces is gone.
     ///
     /// The two blockers are found the way each is actually written down, out
-    /// of one owner-scoped sibling listing: a session owns its `Process` rows
-    /// and its `Endpoint` rows together.
+    /// of the SAME scope the launch gate proves over ([`CompletenessScope`]):
+    /// an owned row reads its owner's committed child set, and a root row -
+    /// which has no owner-scoped neighbourhood at all - reads every `Endpoint`
+    /// row in its Zone. Reading a narrower scope than the gate does would let
+    /// exactly the rows the gate had to defer on retire the row they were
+    /// holding.
     ///
     /// A CONSUMED relationship is named by the publication intent of the
-    /// endpoints in that listing - the same `/endpoint/bindings` layer the
+    /// endpoints in that scope - the same `/endpoint/bindings` layer the
     /// launch gate reads, and the only place a relationship is named that
     /// outlives the relationship row itself. It is read here rather than
     /// through the launch observation because the two ask different
@@ -2421,10 +2553,11 @@ impl ProcessDriver {
     /// because a producer is a fact the endpoint carries, not something a key
     /// carries.
     ///
-    /// Idempotent under retry. A manager that cannot answer, a view it cannot
-    /// read, and a sibling whose committed bytes cannot be decoded all retain
-    /// the row rather than guessing at it: a barrier that failed open would
-    /// retire the very identity the release needs.
+    /// Idempotent under retry. A manager that cannot answer, an unsettled
+    /// scope, a view it cannot read, and an `Endpoint` whose committed bytes
+    /// cannot be decoded all retain the row rather than guessing at it: a
+    /// barrier that failed open would retire the very identity the release
+    /// needs.
     async fn retain_until_dependencies_retired(
         &self,
         ctx: &mut ResourceContext,
@@ -2438,15 +2571,11 @@ impl ProcessDriver {
                     .with_note(slug),
             )
         };
-        let siblings = ctx
-            .owner_siblings()
+        let endpoints = CompletenessScope::endpoints(ctx)
             .await
-            .map_err(|_| retained(RetirementBlocker::Unreadable.code(), "unavailable"))?;
+            .map_err(|_| retained(RetirementBlocker::Unreadable.code(), "unproven"))?;
         let consumer_ref = identity.resource_ref.to_canonical_string();
-        for endpoint in siblings
-            .iter()
-            .filter(|row| row.key.type_name == ENDPOINT_ROW_TYPE)
-        {
+        for endpoint in &endpoints {
             let view = match ctx.lookup_view(&endpoint.key).await {
                 RowLookup::Present { row, .. } => row,
                 // A view the manager cannot answer is not evidence that
@@ -2480,9 +2609,8 @@ impl ProcessDriver {
                 }
             }
         }
-        if let Some(blocker) = siblings
-            .iter()
-            .find_map(|row| produced_endpoint_blocker(row, &identity.resource_ref))
+        if let Some(blocker) =
+            endpoints.iter().find_map(|row| produced_endpoint_blocker(row, &identity.resource_ref))
         {
             return Err(retained(blocker.code(), "committed"));
         }
@@ -3954,7 +4082,15 @@ mod tests {
         }
     }
 
-    /// Dead manager: these Process flows make no manager calls.
+    /// Dead manager: these Process flows mutate no child and read no single row.
+    ///
+    /// The double holds no committed row at all, so both listings answer
+    /// truthfully - the owner-scoped one and the Zone-scoped one are empty -
+    /// and that is what states a `Process` launched over it requires no
+    /// `EndpointBinding`. Refusing them instead would leave every flow that
+    /// consumes no endpoint unprovable rather than exercised. The single-row
+    /// reads still refuse, which is what keeps "this plane cannot answer"
+    /// distinct from "this plane holds no such row".
     struct DeadManager;
 
     #[async_trait::async_trait]
@@ -3978,7 +4114,7 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            Err(ResourceError::ManagerUnavailable("dead".into()))
+            Ok(None)
         }
 
         async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
@@ -3989,7 +4125,95 @@ mod tests {
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            Ok(Vec::new())
+        }
+
+        async fn list_zone_type(
+            &self,
+            _zone: &str,
+            _type_name: &str,
+        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            Ok(Vec::new())
+        }
+
+        async fn register_watch(
+            &self,
+            _subscriber: &ResourceKey,
+            _registration: WatchRegistration,
+        ) -> Result<d2b_resource_runtime::context::WatchId, ResourceError> {
             Err(ResourceError::ManagerUnavailable("dead".into()))
+        }
+
+        async fn cancel_watch(
+            &self,
+            _watch: d2b_resource_runtime::context::WatchId,
+        ) -> Result<(), ResourceError> {
+            Err(ResourceError::ManagerUnavailable("dead".into()))
+        }
+    }
+
+    /// Dead manager plus the one row an OWNED worker's scope cannot be settled
+    /// without: its owner, committed and published for its own generation.
+    ///
+    /// A Device-owned worker deletes through its exact live identity, and the
+    /// retention barrier may only retire it once the committed child set it
+    /// proves over is settled - which is what this row states.
+    struct SettledOwnerManager(ResourceKey);
+
+    #[async_trait::async_trait]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    impl ManagerEndpoint for SettledOwnerManager {
+        async fn ensure_child(
+            &self,
+            _parent: &ResourceKey,
+            _child: ChildEnsure,
+        ) -> Result<EnsureOutcome, ResourceError> {
+            Err(ResourceError::ManagerUnavailable("dead".into()))
+        }
+
+        async fn get(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
+            Err(ResourceError::ManagerUnavailable("dead".into()))
+        }
+
+        async fn view(
+            &self,
+            key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
+            Ok((key == &self.0).then(|| d2b_resource_runtime::manager::ResourceView {
+                key: key.clone(),
+                uid: [0x55; 16],
+                generation: 1,
+                deleting: false,
+                provenance: ResourceProvenance::Resource,
+                spec: Vec::new(),
+                metadata: Vec::new(),
+                owner_key: None,
+                status: Some(d2b_resource_runtime::resource::ResourceStatus::Ready),
+                status_generation: Some(1),
+                status_projection: None,
+            }))
+        }
+
+        async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
+            Err(ResourceError::ManagerUnavailable("dead".into()))
+        }
+
+        async fn list_owned(
+            &self,
+            _owner_uid: [u8; 16],
+        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            Ok(Vec::new())
+        }
+
+        async fn list_zone_type(
+            &self,
+            _zone: &str,
+            _type_name: &str,
+        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            Ok(Vec::new())
         }
 
         async fn register_watch(
@@ -4080,6 +4304,20 @@ mod tests {
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
             Ok(self.owned.lock().clone())
+        }
+
+        async fn list_zone_type(
+            &self,
+            zone: &str,
+            type_name: &str,
+        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            let owned = self.owned.lock().clone(); // async-gate-allow: fixture clones under a short guard and holds no await
+            let rows = self.rows.lock().clone(); // async-gate-allow: fixture clones under a short guard and holds no await
+            Ok(owned
+                .into_iter()
+                .chain(rows)
+                .filter(|row| row.key.zone == zone && row.key.type_name == type_name)
+                .collect())
         }
 
         async fn register_watch(
@@ -5424,11 +5662,9 @@ mod tests {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
             ..FakeFacetsConfig::default()
         }));
-        let mut f = fixture_owned_by(
-            row,
-            Arc::new(DeadManager),
-            Some(ResourceKey::new("work", "Device", "corp-gpu")),
-        );
+        let owner = ResourceKey::new("work", "Device", "corp-gpu");
+        let mut f =
+            fixture_owned_by(row, Arc::new(SettledOwnerManager(owner.clone())), Some(owner));
         let mut driver = driver(fake.clone()).await;
 
         driver.delete(&mut f.ctx).await.expect("delete converges");
@@ -6512,6 +6748,19 @@ mod tests {
                     .collect())
             }
 
+            async fn list_zone_type(
+                &self,
+                zone: &str,
+                type_name: &str,
+            ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+                Ok(self
+                    .rows
+                    .iter()
+                    .filter(|row| row.key.zone == zone && row.key.type_name == type_name)
+                    .cloned()
+                    .collect())
+            }
+
             async fn register_watch(
                 &self,
                 _subscriber: &ResourceKey,
@@ -7268,7 +7517,6 @@ mod tests {
         /// endpoint access its owner was about to publish.
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         #[tokio::test]
-        #[ignore = "open finding H3: the gate still answers NotRequired from an unproven empty set"]
         async fn a_process_waits_for_its_owners_child_set_to_settle() {
             let manager = mid_pass_manager(false);
             let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
@@ -7331,7 +7579,6 @@ mod tests {
         /// not the empty set an owner-scoped read reports for a root row.
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         #[tokio::test]
-        #[ignore = "open finding H3: the gate still answers NotRequired from an unproven empty set"]
         async fn a_root_row_reads_the_whole_zone_before_it_mints_no_expectation() {
             let manager = binding_manager(
                 vec![endpoint_row(), binding_row()],
@@ -7369,7 +7616,6 @@ mod tests {
         /// Zone is not the Zone saying it publishes nothing.
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         #[tokio::test]
-        #[ignore = "open finding H3: the gate still answers NotRequired from an unproven empty set"]
         async fn a_zone_publication_this_row_cannot_prove_blocks_the_launch() {
             let manager = binding_manager(vec![endpoint_row()], Vec::new());
             let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
@@ -7521,7 +7767,6 @@ mod tests {
         /// row is retained until that relationship is gone (R22, AE15).
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         #[tokio::test]
-        #[ignore = "open finding H3: the retention barrier still reads an owner-scoped listing"]
         async fn a_process_row_does_not_retire_while_the_zone_still_publishes_it() {
             let manager = binding_manager(
                 vec![endpoint_row_with_spec(&endpoint_spec_naming("Process/other")), binding_row()],

@@ -166,6 +166,29 @@ pub trait ManagerEndpoint: Send + Sync + 'static {
     ) -> Result<WatchId, ResourceError>;
     async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError>;
 
+    /// Every committed row of `type_name` in `zone` (R18, R22).
+    ///
+    /// The completeness scope of a row with NO owner: an owner-scoped listing
+    /// answers an empty set for it without asking anyone, so the only scope
+    /// that can say what the Zone publishes for this consumer is the Zone
+    /// itself. Committed rows and not views: a reader names the rows it must
+    /// observe and reads each one through [`Self::view`] itself.
+    ///
+    /// The default refuses rather than answering an empty set. An empty set is
+    /// a STATEMENT - "the Zone holds no such row" - and a default that
+    /// returned one would let every endpoint that cannot carry the read mint a
+    /// launch with no delivery at all. Refusing leaves the read unproven, which
+    /// is what a plane that cannot answer it honestly is.
+    async fn list_zone_type(
+        &self,
+        _zone: &str,
+        _type_name: &str,
+    ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+        Err(ResourceError::ManagerRejected {
+            reason: "endpoint carries no zone-scoped row listing".to_owned(),
+        })
+    }
+
     /// Create a source-owned binding under the source controller's
     /// authenticated authority (U6, KTD2).
     ///
@@ -655,13 +678,30 @@ impl ResourceContext {
     /// children. The read is the existing owner-scoped listing applied to the
     /// owner uid this row already carries, so it adds no new manager surface.
     ///
-    /// `Vec::new()` for a row with no owner: a root row has no siblings, which
-    /// is the honest answer rather than an error.
+    /// `Vec::new()` for a row with no owner: a root row has no siblings. That
+    /// is what the listing can answer, and it is NOT a statement that nothing
+    /// publishes for this row - the Zone is, and [`Self::zone_rows`] is how a
+    /// reader asks it.
     pub async fn owner_siblings(&mut self) -> Result<Vec<StoredDesiredResource>, ResourceError> {
         match self.row.owner_uid {
             Some(owner) => self.manager.list_owned(owner).await,
             None => Ok(Vec::new()),
         }
+    }
+
+    /// Committed rows of `type_name` in this row's own Zone (R18, R22).
+    ///
+    /// The completeness scope for a row with no owner: a root Process is
+    /// admitted through the API or a Nix ingest rather than as a session child,
+    /// so its owner-scoped listing answers an empty set without asking anyone,
+    /// and only a Zone-scoped listing can say what the Zone publishes for it.
+    /// It is deliberately NOT the scope for an owned row, whose committed child
+    /// set is settled by its owner's own publication.
+    pub async fn zone_rows(
+        &mut self,
+        type_name: &str,
+    ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+        self.manager.list_zone_type(&self.row.key.zone, type_name).await
     }
 
     /// Finalize every resource this one owns, children first (F3; owner

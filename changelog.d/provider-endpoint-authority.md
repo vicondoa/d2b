@@ -99,3 +99,14 @@
   has moved rather than when a pass runs, and a source that has published and
   named no relationship for this consumer is not evidence this row reads or
   subscribes to (R12, R21).
+- The `Process` launch gate read an empty expected `EndpointBinding` set as
+  "this row requires no relationship" without ever proving the scope it read
+  it over, so a row whose owner was still committing its children - and every
+  root row, whose owner-scoped listing answers an empty set without asking
+  anyone - could launch carrying no endpoint access at all. An empty set is
+  now a statement about a proven scope: an owned row waits for its owner to
+  publish for its own generation, and a root row reads the `Endpoint` rows its
+  whole Zone publishes (R18, R22). The retention barrier reads the same scope,
+  so a relationship committed anywhere the gate could not see no longer
+  retires the row it was holding. An endpoint that cannot answer the
+  Zone-scoped listing refuses rather than reporting no rows.

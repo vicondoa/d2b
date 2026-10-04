@@ -587,6 +587,12 @@ pub enum ResourceManagerMsg {
         owner_uid: [u8; 16],
         reply: oneshot::Sender<Result<Vec<StoredDesiredResource>, ResourceError>>,
     },
+    /// Committed rows of one type in one Zone (`ResourceContext::zone_rows`).
+    ListZoneType {
+        zone: String,
+        type_name: String,
+        reply: oneshot::Sender<Result<Vec<StoredDesiredResource>, ResourceError>>,
+    },
     /// Internal watch registration routed to the target actor (R12, spec
     /// section 15); the manager records the dependency edge (spec 16).
     RegisterWatch {
@@ -1719,6 +1725,15 @@ impl Actor for ResourceManager {
                     .collect();
                 reply.send(Ok(rows)).ok();
             }
+            ResourceManagerMsg::ListZoneType { zone, type_name, reply } => {
+                let rows = state
+                    .rows
+                    .values()
+                    .filter(|row| row.key.zone == zone && row.key.type_name == type_name)
+                    .cloned()
+                    .collect();
+                reply.send(Ok(rows)).ok();
+            }
             ResourceManagerMsg::RegisterWatch { registration, subscriber, reply } => {
                 let result = register_watch(state, registration, subscriber);
                 reply.send(result).ok();
@@ -2081,6 +2096,19 @@ impl ManagerEndpoint for ManagerActorEndpoint {
         owner_uid: [u8; 16],
     ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
         self.rpc(|reply| ResourceManagerMsg::ListOwned { owner_uid, reply }).await
+    }
+
+    async fn list_zone_type(
+        &self,
+        zone: &str,
+        type_name: &str,
+    ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+        self.rpc(|reply| ResourceManagerMsg::ListZoneType {
+            zone: zone.to_owned(),
+            type_name: type_name.to_owned(),
+            reply,
+        })
+        .await
     }
 
     async fn register_watch(
