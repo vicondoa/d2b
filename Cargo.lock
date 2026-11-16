@@ -1334,6 +1334,7 @@ dependencies = [
  "d2b-core-controller",
  "d2b-provider-endpoint",
  "d2b-provider-toolkit",
+ "d2b-session",
  "env_logger",
  "libc",
  "log",
